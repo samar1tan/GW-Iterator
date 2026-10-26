@@ -1,0 +1,18 @@
+{
+  "name": "gw-iterator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {"node": ">=24 <27"},
+  "scripts": {
+    "dev": "node src/server.ts --dev",
+    "start": "node src/server.ts",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "gwi": "node scripts/gwi.mjs"
+  },
+  "dependencies": {"react": "19.3.1", "react-dom": "19.3.1"},
+  "devDependencies": {"@types/node": "24.19.2", "@types/react": "19.3.0", "@types/react-dom": "19.3.0", "typescript": "7.0.2", "vite": "8.3.5"}
+}
