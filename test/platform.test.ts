@@ -38,7 +38,7 @@ async function fixture(t: TestContext) {
   await execute('git', ['-C', workspace, '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Synthetic Test', '-c', 'user.email=synthetic@example.invalid', 'commit', '-m', 'Create synthetic execution input']);
   const state = {
     agents: new Map<string, MulticaAgent>(), projects: new Map<string, MulticaProject>(), issues: new Map<string, MulticaIssue>(), tasks: new Map<string, MulticaTask[]>(),
-    requests: [] as {method: string; path: string; body: Record<string, unknown>}[], issuePosts: 0, loseIssueResponse: false, taskListGate: undefined as Promise<void> | undefined,
+    requests: [] as {method: string; path: string; body: Record<string, unknown>}[], issuePosts: 0, loseIssueResponse: false, failAgentCreation: false, taskListGate: undefined as Promise<void> | undefined,
     taskResult: (_issue: string): unknown => JSON.stringify(OUTPUT), taskMessageError: false, taskListError: false,
   };
   const taskGate = deferred<void>();
@@ -60,13 +60,13 @@ async function fixture(t: TestContext) {
     if (route === '/api/projects' && method === 'POST') {const value = {id: 'synthetic-project-' + (state.projects.size + 1), workspace_id: WORKSPACE, status: 'planned', ...body} as MulticaProject; state.projects.set(value.id, value); json(value); return;}
     if (route.startsWith('/api/projects/') && method === 'GET') {json(state.projects.get(route.split('/').at(-1)!)); return;}
     if (route === '/api/agents' && method === 'GET') {json([...state.agents.values()]); return;}
-    if (route === '/api/agents' && method === 'POST') {const value = {id: 'synthetic-agent-' + (state.agents.size + 1), workspace_id: WORKSPACE, status: 'active', updated_at: String(state.requests.length), ...body} as MulticaAgent; state.agents.set(value.id, value); json(value); return;}
+    if (route === '/api/agents' && method === 'POST') {if (state.failAgentCreation || [...state.agents.values()].some(agent => agent.name === body.name)) {json({code: 'AGENT_NAME_CONFLICT', error: 'An agent with this name already exists in the workspace.'}, 409); return;} const value = {id: 'synthetic-agent-' + (state.agents.size + 1), workspace_id: WORKSPACE, status: 'active', updated_at: String(state.requests.length), ...body} as MulticaAgent; state.agents.set(value.id, value); json(value); return;}
     const agentResource = route.match(/^\/api\/agents\/([^/]+)(?:\/(skills|mcp-servers))?$/);
     if (agentResource) {
       const agent = state.agents.get(agentResource[1])!;
       if (agentResource[2] === 'mcp-servers') {json([]); return;}
       if (agentResource[2] === 'skills') {if (method === 'PUT') agent.skills = (body.skill_ids as string[]).map(id => ({id, name: id})); json(agent.skills ?? []); return;}
-      if (method === 'PUT') {Object.assign(agent, body, {updated_at: String(state.requests.length)});} json(agent); return;
+      if (method === 'PUT') {if (body.name && [...state.agents.values()].some(other => other.id !== agent.id && other.name === body.name)) {json({code: 'AGENT_NAME_CONFLICT', error: 'An agent with this name already exists in the workspace.'}, 409); return;} Object.assign(agent, body, {updated_at: String(state.requests.length)});} json(agent); return;
     }
     if (route === '/api/issues' && method === 'POST') {
       state.issuePosts++; const issue = {id: 'synthetic-issue-' + state.issuePosts, workspace_id: WORKSPACE, ...body} as MulticaIssue; state.issues.set(issue.id, issue);
@@ -122,7 +122,45 @@ test('role revisions preserve the remote agent used by an earlier frozen project
   assert.equal(frozen.instructions, original.instructions, 'An existing role hash must not execute a mutable edited agent configuration.');
   const updated = await h.platform.saveRole(h.project.id, h.project.revision, {...role, instructions: 'A deliberately revised project responsibility.'}, OWNER, role.id);
   const revisedRole = updated.roles.find(value => value.id === role.id)!, revised = await h.platform.agent(updated, revisedRole, false);
-  assert.notEqual(revised.id, frozen.id); assert.match(revised.instructions!, /deliberately revised/); assert.equal((await h.platform.agent(h.project, role, false)).instructions, original.instructions);
+  assert.notEqual(revised.id, frozen.id); assert.notEqual(revised.name, frozen.name); assert.equal(new Set([...h.state.agents.values()].map(agent => agent.name)).size, h.state.agents.size); assert.match(revised.instructions!, /deliberately revised/); assert.equal((await h.platform.agent(h.project, role, false)).instructions, original.instructions);
+});
+
+test('pre-assignment metadata failures recover without invented output, usage or execution references', async t => {
+  for (const history of ['recorded', 'legacy-without-record'] as const) await t.test(history, async sub => {
+    const h = await fixture(sub); h.state.failAgentCreation = true;
+    h.state.taskResult = () => JSON.stringify({action: 'stop', rationale: 'The synthetic preparation recovery is verified.', expectedGain: 'No additional work.', tasks: []});
+    h.engine.goalPlanner = h.execution.planner; h.engine.agentExecutor = h.execution.agent;
+    const intake = new IntakeService(h.engine), item = intake.create(h.project.id, {request: 'Verify synthetic startup recovery.', idempotencyKey: 'synthetic-startup-recovery'}, OWNER), current = () => intake.list(h.project.id).find(value => value.id === item.id)!;
+    await eventually(() => current().status === 'failed', 'the metadata preparation failure');
+    const before = structuredClone(h.engine.run(item.routerRunId)), attempt = before.stages[0].attempts[0];
+    assert.match(attempt.error!, /name already exists/); assert.equal(attempt.ref, undefined); assert.equal(attempt.output, undefined); assert.equal(attempt.usage, undefined); assert.equal(h.state.issuePosts, 0);
+    if (history === 'legacy-without-record') {
+      for (const record of h.execution.records(item.routerRunId)) h.engine.store.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run('multica-execution', record.id);
+      assert.equal(h.execution.records(item.routerRunId).length, 0); assert.equal(current().canRetry, false);
+      const reconciled = await h.execution.reconcile(item.routerRunId, 'supervise'); assert.equal(reconciled.status, 'not_dispatched'); assert.equal(reconciled.cleanupConfirmed, true);
+    }
+    const records = h.execution.records(item.routerRunId); assert.equal(records.length, 1); assert.equal(records[0].status, 'not_dispatched'); assert.equal(records[0].cleanupConfirmed, true); assert.equal(records[0].stageId, 'decision-1'); assert.equal(records[0].issueId, undefined); assert.equal(records[0].taskId, undefined);
+    if (history === 'recorded') {
+      for (const patch of [{projectId: 'another-synthetic-project'}, {runId: 'another-synthetic-run'}, {stageId: 'decision-2'}, {issueId: 'unconfirmed-synthetic-issue'}, {taskId: 'unconfirmed-synthetic-task'}, {status: 'unknown'}, {cleanupConfirmed: false}]) {h.engine.store.put('multica-execution', {...records[0], ...patch}); assert.equal(current().canRetry, false, 'Preparation recovery requires one exact owned decision without an assignment reference.');}
+      h.engine.store.put('multica-execution', records[0]);
+      const referenced = structuredClone(before); referenced.stages[0].attempts[0].ref = {provider: 'multica', issueId: 'unconfirmed-synthetic-issue'}; h.engine.store.put('run', referenced); assert.equal(current().canRetry, false); h.engine.store.put('run', before);
+    }
+    assert.equal(current().canRetry, true); h.state.failAgentCreation = false;
+    await intake.retry(item.id, {model: 'synthetic-model', note: 'The metadata preparation problem is repaired; no assignment had been posted.'}, OWNER);
+    await eventually(() => current().status === 'stopped', 'the safely recovered startup');
+    assert.equal(h.state.issuePosts, 1); assert.deepEqual(h.engine.run(item.routerRunId), before);
+  });
+});
+
+test('an unknown issue POST never becomes safe preparation failure or permits a new coordinator', async t => {
+  const h = await fixture(t); h.state.loseIssueResponse = true;
+  h.engine.goalPlanner = h.execution.planner; h.engine.agentExecutor = h.execution.agent;
+  const intake = new IntakeService(h.engine), item = intake.create(h.project.id, {request: 'Preserve the uncertain synthetic assignment.', idempotencyKey: 'synthetic-unknown-assignment'}, OWNER), current = () => intake.list(h.project.id).find(value => value.id === item.id)!;
+  await eventually(() => current().status === 'failed', 'the lost assignment response');
+  const record = h.execution.records(item.routerRunId)[0]; assert.equal(record.status, 'unknown'); assert.equal(record.cleanupConfirmed, false); assert.equal(record.issueId, undefined); assert.equal(record.taskId, undefined); assert.equal(h.state.issuePosts, 1); assert.equal(current().canRetry, false);
+  await assert.rejects(h.execution.reconcile(item.routerRunId, 'supervise'), code('EXTERNAL_CREATION_UNCERTAIN'));
+  await assert.rejects(intake.retry(item.id, {model: 'synthetic-model', note: 'A missing response is not evidence that assignment was never posted.'}, OWNER), code('RECOVERY_NOT_READY'));
+  assert.equal(h.execution.records(item.routerRunId)[0].status, 'unknown'); assert.equal(current().supervisorRunIds?.length, 1); assert.equal(h.state.issuePosts, 1);
 });
 
 test('an unknown assignment response is durable and cannot trigger a second issue POST for the same owned stage', async t => {
@@ -135,17 +173,19 @@ test('an unknown assignment response is durable and cannot trigger a second issu
 
 test('read-only reconciliation rejects mismatched task identity and never dispatches a replacement operation', async t => {
   const h = await fixture(t); h.state.taskMessageError = true;
-  const reported: unknown[] = [];
-  const started = await h.execution.agent.start(h.input({onEvent: event => {if (event.usage) reported.push(event.usage);}})); await assert.rejects(started.completion, /Synthetic task observation unavailable/);
-  assert.deepEqual(reported, [{input: 420, output: 20, cachedInput: 300, total: 440}], 'Known task usage survives failure to read optional message details.');
-  const before = h.execution.records('synthetic-run')[0], original = structuredClone(h.state.tasks.get(before.issueId!)![0]);
+  h.engine.agentExecutor = h.execution.agent;
+  const initial = h.engine.createPipeline({projectId: h.project.id, roleId: 'development', name: 'Synthetic scoped observation'}, OWNER), flow = h.engine.updatePipeline(initial.id, initial.revision, {...initial, stages: [{id: 'work', name: 'Observe a synthetic provider result', executor: 'codex', roleId: 'development', prompt: 'Perform only the synthetic check.', review: false, dependsOn: []}]}, OWNER);
+  const run = h.engine.startRun({projectId: h.project.id, pipelineId: flow.id, goal: 'Preserve scoped synthetic execution facts.', baseline: 'Synthetic committed input.', idempotencyKey: 'synthetic-scoped-observation'}, OWNER);
+  await eventually(() => h.engine.run(run.id).status === 'failed', 'the scoped task observation failure');
+  assert.deepEqual(h.engine.run(run.id).stages[0].attempts[0].usage, {input: 420, output: 20, cachedInput: 300, total: 440}, 'Known task usage survives failure to read optional message details.');
+  const before = h.execution.records(run.id)[0], original = structuredClone(h.state.tasks.get(before.issueId!)![0]);
   assert.equal(before.cleanupConfirmed, false); assert.equal(before.taskId, original.id);
   for (const mismatch of [{issue_id: 'another-synthetic-issue'}, {agent_id: 'another-synthetic-agent'}, {runtime_id: 'another-synthetic-runtime'}]) {
     h.state.tasks.set(before.issueId!, [{...original, ...mismatch}]);
-    await assert.rejects(h.execution.reconcile('synthetic-run', 'work'), error => error instanceof AppError);
-    assert.equal(h.execution.records('synthetic-run')[0].cleanupConfirmed, false);
+    await assert.rejects(h.execution.reconcile(run.id, 'work'), error => error instanceof AppError);
+    assert.equal(h.execution.records(run.id)[0].cleanupConfirmed, false);
   }
-  h.state.tasks.set(before.issueId!, [original]); const reconciled = await h.execution.reconcile('synthetic-run', 'work');
+  h.state.tasks.set(before.issueId!, [original]); const reconciled = await h.execution.reconcile(run.id, 'work');
   assert.equal(reconciled.cleanupConfirmed, true); assert.equal(reconciled.taskId, original.id); assert.equal(h.state.issuePosts, 1);
 });
 

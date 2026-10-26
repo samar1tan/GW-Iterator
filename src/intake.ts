@@ -67,10 +67,12 @@ export class IntakeService {
   }
   private plannerCleanupConfirmed(run:Run,attempt?:Attempt):boolean{
     const ref=attempt?.ref;
-    if(attempt?.provider!=='multica'||ref?.provider!=='multica'||!ref.issueId)return false;
+    if(attempt?.provider!=='multica')return false;
     const item=this.engine.store.list<Intake>('intake').find(value=>value.projectId===run.projectId&&(value.routerRunId===run.id||value.supervisorRunIds?.includes(run.id)));
     if(!item||run.stages[0]?.stageId!=='supervise')return false;
     const decision=item.rounds.find(round=>round.routerRunId===run.id)?.number??item.rounds.length+1;
+    if(!ref?.issueId&&!ref?.externalId&&!ref?.threadId){const records=this.engine.store.list<PlannerExecutionRecord>('multica-execution').filter(record=>record.projectId===run.projectId&&record.runId===run.id&&record.stageId===`decision-${decision}`);return records.length===1&&records[0].status==='not_dispatched'&&records[0].cleanupConfirmed===true&&!records[0].issueId&&!records[0].taskId;}
+    if(ref.provider!=='multica'||!ref.issueId)return false;
     const records=this.engine.store.list<PlannerExecutionRecord>('multica-execution').filter(record=>record.projectId===run.projectId&&record.runId===run.id&&record.stageId===`decision-${decision}`&&record.issueId===ref.issueId);
     return records.length===1&&records.every(record=>text(record.taskId,4096)&&(!ref.externalId||record.taskId===ref.externalId)&&record.cleanupConfirmed===true&&['completed','failed','cancelled','aborted','timeout'].includes(record.status));
   }

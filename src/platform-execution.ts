@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import type {ExecutionRef,Project,RoleProfile,TaskOutput,Usage,Run} from './contracts.ts';
+import type {ExecutionRef,Project,RoleProfile,TaskOutput,Usage,Run,Intake} from './contracts.ts';
 import {budgetTokens} from './contracts.ts';
 import type {AgentExecutionInput,AgentExecutor,CodexExecution,AdapterEvent} from './adapters/types.ts';
 import type {GoalPlanner,GoalPlannerInput} from './goal-planner.ts';
@@ -54,6 +54,14 @@ export class PlatformExecution {
     })().finally(()=>this.projects.delete(request.runId));this.projects.set(request.runId,result);return result;
   }
   private async launch(request:Request):Promise<{ref:ExecutionRef;completion:Promise<{text:string;usage?:Usage}>}>{
+    try{return await this.dispatch(request);}catch(error){
+      // An assignment intent is durable before POST /issues. Earlier preparation cannot start a worker.
+      const pending=this.records(request.runId).some(record=>record.stageId===request.stageId&&!record.cleanupConfirmed);
+      if(!this.platform.engine.store.get('multica-execution',request.attemptId)&&!pending)this.platform.engine.store.put('multica-execution',{id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:at(),updatedAt:at(),error:error instanceof Error?error.message:'Preparation failed before assignment.'} satisfies ExecutionRecord);
+      throw error;
+    }
+  }
+  private async dispatch(request:Request):Promise<{ref:ExecutionRef;completion:Promise<{text:string;usage?:Usage}>}>{
     demand(!request.signal.aborted,'EXECUTION_CANCELLED','Execution was cancelled before dispatch.',409);
     demand(!this.closing,'EXECUTION_CLOSING','The execution service is stopping.',409);
     await this.platform.runtime(request.role,true);
@@ -136,7 +144,17 @@ export class PlatformExecution {
   }
   private taskScope(record:ExecutionRecord,task:MulticaTask){demand(task.issue_id===record.issueId&&task.agent_id===record.agentId&&(!record.runtimeId||task.runtime_id===record.runtimeId),'EXTERNAL_TASK_SCOPE','The observed task does not belong to this recorded assignment and runtime.',409);}
   async reconcile(runId:string,stageId:string){
+    const run=this.platform.engine.run(runId),attempt=run.stages[0]?.attempts.at(-1);
+    if(stageId==='supervise'&&run.executionKind==='agent-goal'){
+      const item=this.platform.engine.store.list<Intake>('intake').find(item=>item.projectId===run.projectId&&(item.routerRunId===runId||item.supervisorRunIds?.includes(runId)));demand(item,'EXECUTION_NOT_FOUND','This coordinator has no owning outcome.',404);
+      stageId='decision-'+(item.rounds.find(round=>round.routerRunId===runId)?.number??item.rounds.length+1);
+      if(!this.records(runId).length&&run.status==='failed'&&attempt?.status==='failed'&&attempt.provider==='multica'&&attempt.error&&!attempt.ref?.issueId&&!attempt.ref?.externalId&&!attempt.ref?.threadId){
+        const record:ExecutionRecord={id:'preparation-'+runId,projectId:run.projectId,runId,stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:attempt.startedAt,updatedAt:at(),error:attempt.error};this.platform.engine.store.put('multica-execution',record);
+        this.platform.engine.store.event({projectId:run.projectId,runId,stageId,type:'multica.preparation_reconciled',actor:'local-owner',message:'Local preparation ended before any external assignment intent. No worker was dispatched.'});
+      }
+    }
     const record=this.records(runId).filter(row=>row.stageId===stageId).at(-1);demand(record,'EXECUTION_NOT_FOUND','This stage has no recorded external execution.',404);
+    if(record.status==='not_dispatched'&&record.cleanupConfirmed&&!record.issueId&&!record.taskId)return{...record,canRetry:true};
     demand(record.issueId,'EXTERNAL_CREATION_UNCERTAIN','The assignment response was lost. Inspect the recorded execution identity in Multica before another dispatch.',409);
     const tasks=await this.platform.client.listTaskRuns(record.issueId);const task=record.taskId?tasks.find(task=>task.id===record.taskId):tasks.length===1?tasks[0]:undefined;
     demand(task,'EXTERNAL_TASK_UNCONFIRMED','The provider has not confirmed an unambiguous task for this assignment.',409);
