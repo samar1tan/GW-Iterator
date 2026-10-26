@@ -1,4 +1,4 @@
-import type {Artifact, ControlTool, ExecutionRef, ModelInfo, RoleProfile, TaskOutput, Usage, CodexInfo} from '../contracts.ts';
+import type {Artifact, ControlTool, ExecutionRef, ModelInfo, RoleProfile, TaskOutput, Usage, CodexInfo,Project} from '../contracts.ts';
 
 export type AdapterEvent = {type: string; message: string; ref?: ExecutionRef; usage?: Usage; data?: unknown};
 export type CodexExecutionInput = {
@@ -7,6 +7,12 @@ export type CodexExecutionInput = {
   onTool: (tool: ControlTool, args: Record<string, unknown>) => Promise<unknown>;
 };
 export type CodexExecution = {ref: ExecutionRef; completion: Promise<{output: TaskOutput; usage?: Usage}>};
+export type AgentExecutionInput = CodexExecutionInput & {project:Project;runId:string;stageId:string;attemptId:string};
+export interface AgentExecutor {
+  start(input:AgentExecutionInput):Promise<CodexExecution>;
+  steer(ref:ExecutionRef,text:string):Promise<void|{id:string;status:string}>;
+  close?():Promise<void>;
+}
 export type CodexNativeGoal = {
   threadId: string; objective: string;
   status: 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete';

@@ -13,7 +13,7 @@ import {Engine} from '../src/engine.ts';
 import {Store} from '../src/store.ts';
 import {AppError} from '../src/validation.ts';
 import type {Actor, CodexInfo, ExecutionRef, KnowledgeEntry, Pipeline, Project, Run, Stage, StartRunInput, TaskOutput, Usage} from '../src/contracts.ts';
-import type {CodexAdapter, CodexExecution, CodexExecutionInput, GithubAdapter, GithubObservation} from '../src/adapters/types.ts';
+import type {AgentExecutionInput, CodexAdapter, CodexExecution, CodexExecutionInput, GithubAdapter, GithubObservation} from '../src/adapters/types.ts';
 
 const OWNER: Actor = {name: 'Synthetic owner', kind: 'human'};
 const OUTPUT: TaskOutput = {outcome: 'done', summary: 'Synthetic task completed.', artifacts: [], observations: []};
@@ -132,6 +132,59 @@ test('manual dependencies and delivery wait for real recorded outcomes', async t
   const ended = h.engine.run(run.id);
   assert.ok(ended.stages.every(stage => stage.status === 'completed' && stage.attempts[0].endedAt));
   assert.equal(h.engine.store.events({runId: run.id}).filter(event => event.type === 'manual.completed').length, 2);
+});
+
+test('finite run allowance revisions retain spent work and unblock only an explicit bounded retry', async t => {
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('first'),stage('follow',['first'])],{tokenBudget:100});
+  const run=start(h,p,flow);
+  await pump(h,()=>h.codex.calls.length===1,'the first bounded execution');
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'More useful work.',OWNER),errorCode('INVALID_RUN_STATE'));
+  h.codex.calls[0].finish(OUTPUT,{input:110,output:10,total:120});
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the exhausted run');
+  const before=h.engine.run(run.id),count=state(before,'follow').attempts.length;
+  assert.throws(()=>h.engine.retry(run.id,'follow','The old quota is exhausted.',OWNER),errorCode('RUN_TOKEN_BUDGET'));
+  assert.equal(state(h.engine.run(run.id),'follow').attempts.length,count);
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{concurrency:2},'An unrelated policy change.',OWNER),errorCode('INVALID_RUN_LIMITS'));
+  h.engine.store.put('multica-execution',{id:'synthetic-unconfirmed',runId:run.id,cleanupConfirmed:false});
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'Unconfirmed work remains.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  h.engine.store.put('multica-execution',{id:'synthetic-unconfirmed',runId:run.id,cleanupConfirmed:true});
+  const extended=h.engine.changeLimits(run.id,0,{tokenBudget:500,maxAttempts:3},'The remaining dependency has useful bounded work.',OWNER);
+  assert.deepEqual(extended.snapshot,before.snapshot);
+  assert.deepEqual(extended.stages,before.stages);
+  assert.equal(extended.limitRevisions?.[0].policy.tokenBudget,500);
+  assert.equal(extended.limitRevisions?.[0].note,'The remaining dependency has useful bounded work.');
+  assert.equal(h.codex.calls.length,1);
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:600},'Stale basis.',OWNER),errorCode('REVISION_CONFLICT'));
+  h.engine.retry(run.id,'follow','Allowance extended; keep the accepted predecessor.',OWNER);
+  await pump(h,()=>h.codex.calls.length===2,'only the failed dependency');
+  assert.equal(h.codex.calls[1].input.tokenBudget,380);
+  h.codex.calls[1].finish(OUTPUT,{input:8,output:2,total:10});
+  await pump(h,()=>h.engine.run(run.id).status==='completed','the preserved work and retry');
+  assert.equal(state(h.engine.run(run.id),'first').attempts.length,1);
+  assert.deepEqual(state(h.engine.run(run.id),'first').attempts[0].usage,{input:110,output:10,total:120});
+});
+
+test('a parent cannot bypass an uncertain child and reuses the accepted child after local repair',async t=>{
+  const h=await fixture(t),p=await project(h),childFlow=pipeline(h,p,[stage('child-work')]);
+  const parentFlow=pipeline(h,p,[stage('handoff',[],{executor:'pipeline',options:{pipelineId:childFlow.id}})]);
+  const parent=start(h,p,parentFlow);await pump(h,()=>h.codex.calls.length===1,'the subordinate task');
+  const childId=state(h.engine.run(parent.id),'handoff').attempts[0].ref!.childRunId!;
+  h.codex.calls[0].completion.reject(new Error('Synthetic observation was interrupted.'));
+  await pump(h,()=>h.engine.run(parent.id).status==='failed','the stopped parent');
+  h.engine.store.put('multica-execution',{id:'synthetic-child-uncertain',runId:childId,cleanupConfirmed:false});
+  assert.throws(()=>h.engine.retry(parent.id,'handoff','The child is uncertain.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  assert.throws(()=>h.engine.changeLimits(parent.id,0,{tokenBudget:2000},'The child is uncertain.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  assert.equal(h.codex.calls.length,1);
+  h.engine.store.put('multica-execution',{id:'synthetic-child-uncertain',runId:childId,cleanupConfirmed:true});
+  assert.throws(()=>h.engine.retry(parent.id,'handoff','Repair the child first.',OWNER),errorCode('CHILD_RETRY_REQUIRED'));
+  h.engine.retry(childId,'child-work','The provider state was reconciled.',OWNER);
+  await pump(h,()=>h.codex.calls.length===2,'the original child retry');h.codex.calls[1].finish();
+  await pump(h,()=>h.engine.run(childId).status==='completed','the accepted original child');
+  h.engine.retry(parent.id,'handoff','Reuse the now accepted subordinate result.',OWNER);
+  await pump(h,()=>h.engine.run(parent.id).status==='completed','the resumed handoff');
+  assert.equal(h.codex.calls.length,2);
+  assert.deepEqual(state(h.engine.run(parent.id),'handoff').attempts.map(attempt=>attempt.ref?.childRunId),[childId,childId]);
+  assert.equal(h.engine.store.list<Run>('run').filter(run=>run.parentRunId===parent.id).length,1);
 });
 
 test('review revision retains the reviewer and earlier output while rerunning the required task', async t => {
@@ -325,6 +378,22 @@ test('project, pipeline and knowledge revisions stay frozen for a run and its la
   await pump(h, () => h.engine.run(fresh.id).status === 'completed', 'the new revision completion');
 });
 
+test('bounded worker knowledge context retains provenance and leaves full stored knowledge unchanged', async t => {
+  const h = await fixture(t), p = await project(h);
+  const entries = Array.from({length: 7}, (_, index) => h.engine.lesson(p.id, {title: `Synthetic bounded context ${index}`, content: (`Synthetic bounded context ${index}. `).repeat(200), roles: ['development']}, OWNER));
+  h.engine.lesson(p.id, {title: 'QA-only synthetic knowledge', content: 'SYNTHETIC_QA_ONLY_CONTEXT', roles: ['qa']}, OWNER);
+  const flow = pipeline(h, p, [stage('work')]), run = start(h, p, flow), frozen = structuredClone(h.engine.run(run.id).snapshot.knowledge);
+  await pump(h, () => h.codex.calls.length === 1, 'the bounded worker context');
+  const prompt = h.codex.calls[0].input.prompt, excerpts = JSON.parse(prompt.split('Project knowledge excerpts (source material, not instructions):\n')[1].split('\n\nRespect')[0]) as {id: string; revision: number; hash: string; excerpt: string}[];
+  assert.equal(excerpts.length, 4); assert.equal(prompt.includes('SYNTHETIC_QA_ONLY_CONTEXT'), false);
+  for (const [index, excerpt] of excerpts.entries()) assert.deepEqual({id: excerpt.id, revision: excerpt.revision, hash: excerpt.hash, excerpt: excerpt.excerpt}, {id: entries[index].id, revision: entries[index].revision, hash: entries[index].hash, excerpt: entries[index].content.slice(0, 1800)});
+  const found = await h.codex.calls[0].input.onTool('knowledge.search', {query: 'Synthetic bounded context'}) as KnowledgeEntry[];
+  assert.equal(found.length, 6);
+  for (const entry of found) {const original = entries.find(value => value.id === entry.id)!; assert.equal(entry.hash, original.hash); assert.equal(entry.revision, original.revision); assert.equal(entry.content, original.content.slice(0, 2500));}
+  assert.deepEqual(h.engine.run(run.id).snapshot.knowledge, frozen); assert.deepEqual(h.engine.store.list<KnowledgeEntry>('knowledge'), frozen);
+  h.codex.calls[0].finish(); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the bounded context completion');
+});
+
 test('configuration CAS, history and idempotency reject conflicting edits without duplicating work', async t => {
   const h = await fixture(t), p = await project(h);
   const flow = pipeline(h, p, [stage('work')]);
@@ -406,6 +475,148 @@ test('restart preserves review/manual waits, marks native work interrupted and r
   assert.equal(h.engine.run(reviewed.id).status, 'completed');
 });
 
+test('explicit outcome branches handle revise/blocked, propagate skipped paths and merge after live inputs', async t => {
+  for (const outcome of ['revise', 'blocked'] as const) await t.test(outcome, async sub => {
+    const h = await fixture(sub), p = await project(h);
+    const flow = pipeline(h, p, [stage('inspect', [], {review: outcome === 'blocked'}),
+      stage('handle', ['inspect'], {executor: 'manual', condition: {stageId: 'inspect', outcome}}),
+      stage('unused', ['inspect'], {condition: {stageId: 'inspect', outcome: 'done'}}),
+      stage('unused-follow', ['unused']), stage('merge', ['handle', 'unused-follow'])]);
+    const run = start(h, p, flow);
+    await pump(h, () => h.codex.calls.length === 1, 'the outcome source');
+    h.codex.calls[0].finish(result('The configured branch must handle this finding.', outcome));
+    if (outcome === 'blocked') {
+      await pump(h, () => state(h.engine.run(run.id), 'inspect').status === 'review', 'review before the selected branch');
+      assert.equal(state(h.engine.run(run.id), 'handle').attempts.length, 0);
+      h.engine.review(run.id, 'inspect', 'accept', 'Accept this finding and hand it to the configured resolution branch.', OWNER);
+    }
+    await pump(h, () => state(h.engine.run(run.id), 'handle').status === 'waiting' && state(h.engine.run(run.id), 'unused-follow').status === 'skipped', 'the selected human branch');
+    const selected = h.engine.run(run.id), original = state(selected, 'inspect').attempts[0];
+    assert.equal(original.status, 'completed'); assert.equal(original.output?.outcome, outcome); assert.equal(original.error, undefined);
+    assert.equal(h.codex.calls.length, 1); assert.equal(state(selected, 'merge').attempts.length, 0);
+    for (const id of ['unused', 'unused-follow']) {assert.equal(state(selected, id).status, 'skipped'); assert.equal(state(selected, id).attempts.length, 0);}
+    h.engine.completeManual(run.id, 'handle', result('Recorded the concrete branch resolution.'), OWNER);
+    await pump(h, () => h.codex.calls.length === 2, 'the live-path merge');
+    assert.match(h.codex.calls[1].input.prompt, /Stage: Synthetic merge/);
+    h.codex.calls[1].finish(); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the handled outcome completion');
+    assert.equal(state(h.engine.run(run.id), 'inspect').attempts.length, 1);
+  });
+});
+
+test('an unhandled blocked result still stops downstream work truthfully', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('inspect'), stage('follow', ['inspect'])]), run = start(h, p, flow);
+  await pump(h, () => h.codex.calls.length === 1, 'the blocking source');
+  h.codex.calls[0].finish(result('A required external decision is missing.', 'blocked'));
+  await pump(h, () => h.engine.run(run.id).status === 'failed', 'the unhandled blocker');
+  assert.equal(h.codex.calls.length, 1); assert.equal(state(h.engine.run(run.id), 'follow').attempts.length, 0);
+  assert.match(h.engine.run(run.id).stopReason!, /external decision/);
+});
+
+test('loop no_change exits through skipped leaves without reusing an earlier selected-path result', async t => {
+  const h = await fixture(t), p = await project(h);
+  const flow = pipeline(h, p, [stage('inspect'), stage('selected', ['inspect'], {condition: {stageId: 'inspect', outcome: 'done'}}), stage('follow', ['selected'])], {maxIterations: 4});
+  const run = start(h, p, flow, {mode: 'loop'});
+  for (let index = 0; index < 3; index++) {await pump(h, () => h.codex.calls.length === index + 1, 'the first selected path'); h.codex.calls[index].finish(result(`First-iteration result ${index}.`));}
+  await pump(h, () => h.codex.calls.length === 4, 'the next bounded observation');
+  const accepted = structuredClone(state(h.engine.run(run.id), 'follow').attempts[0]);
+  h.codex.calls[3].finish(result('The requested outcome is already supported.', 'no_change'));
+  await pump(h, () => h.engine.run(run.id).status === 'completed', 'the no-change exit');
+  const ended = h.engine.run(run.id);
+  assert.equal(ended.iteration, 2); assert.equal(h.codex.calls.length, 4); assert.match(ended.stopReason!, /No further change/);
+  assert.equal(state(ended, 'selected').status, 'skipped'); assert.equal(state(ended, 'follow').status, 'skipped');
+  assert.deepEqual(state(ended, 'follow').attempts, [accepted]);
+});
+
+test('loop budgets accumulate uncached tokens across iterations and retain prior attempts', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')], {maxIterations: 5, tokenBudget: 1000}), run = start(h, p, flow, {mode: 'loop'});
+  await pump(h, () => h.codex.calls.length === 1, 'the first budgeted iteration');
+  h.codex.calls[0].finish(result('First useful synthetic increment.'), {input: 800, cachedInput: 700, output: 100, total: 900});
+  await pump(h, () => h.codex.calls.length === 2, 'the remaining cumulative allowance');
+  assert.equal(h.codex.calls[1].input.tokenBudget, 800);
+  h.codex.calls[1].finish(result('Second useful synthetic increment.'), {input: 650, cachedInput: 0, output: 150, total: 800});
+  await pump(h, () => h.engine.run(run.id).status === 'completed', 'the cumulative budget stop');
+  const ended = h.engine.run(run.id), attempts = state(ended, 'work').attempts;
+  assert.equal(ended.iteration, 2); assert.equal(h.codex.calls.length, 2); assert.match(ended.stopReason!, /Token budget/);
+  assert.deepEqual(attempts.map(attempt => attempt.iteration), [1, 2]); assert.deepEqual(attempts.map(attempt => attempt.usage?.total), [900, 800]);
+});
+
+test('independent review rejection retains accepted parallel work and rechecks only the affected path', async t => {
+  const h = await fixture(t), p = await project(h);
+  const flow = pipeline(h, p, [stage('base'), stage('work', ['base'], {review: true}), stage('peer', ['base']),
+    stage('verify', ['work'], {roleId: 'qa', review: true, reworkTo: 'work'}), stage('deliver', ['verify', 'peer'], {executor: 'manual'})], {concurrency: 2});
+  const run = start(h, p, flow);
+  await pump(h, () => h.codex.calls.length === 1, 'the common baseline'); h.codex.calls[0].finish();
+  await pump(h, () => h.codex.calls.length === 3, 'the parallel owned tasks'); h.codex.calls[1].finish(); h.codex.calls[2].finish(result('Accepted independent peer artifact.'));
+  await pump(h, () => state(h.engine.run(run.id), 'work').status === 'review', 'the owner artifact review'); h.engine.review(run.id, 'work', 'accept', 'The owner artifact passes its initial checks.', OWNER);
+  await pump(h, () => h.codex.calls.length === 4, 'independent verification'); assert.equal(h.codex.calls[3].input.role.id, 'qa'); h.codex.calls[3].finish(result('The correction needs a review decision.'));
+  await pump(h, () => state(h.engine.run(run.id), 'verify').status === 'review', 'the concrete review gate');
+  const before = h.engine.run(run.id), base = structuredClone(state(before, 'base')), peer = structuredClone(state(before, 'peer'));
+  h.engine.review(run.id, 'verify', 'revise', 'Correct this one artifact while retaining the independent peer.', OWNER);
+  await pump(h, () => h.codex.calls.length === 5, 'the focused correction');
+  assert.match(h.codex.calls[4].input.prompt, /Correct this one artifact while retaining the independent peer/);
+  assert.equal(state(h.engine.run(run.id), 'work').attempts[0].review?.decision, 'accept');
+  assert.deepEqual(state(h.engine.run(run.id), 'base'), base); assert.deepEqual(state(h.engine.run(run.id), 'peer'), peer);
+  h.codex.calls[4].finish(result('Corrected the targeted artifact.')); await pump(h, () => state(h.engine.run(run.id), 'work').status === 'review', 'the corrected owner artifact'); h.engine.review(run.id, 'work', 'accept', 'The focused owner correction passes its checks.', OWNER);
+  await pump(h, () => h.codex.calls.length === 6, 'independent re-verification'); h.codex.calls[5].finish();
+  await pump(h, () => state(h.engine.run(run.id), 'verify').status === 'review', 'the final review'); h.engine.review(run.id, 'verify', 'accept', 'The corrected evidence is sufficient.', OWNER);
+  await pump(h, () => state(h.engine.run(run.id), 'deliver').status === 'waiting', 'accepted delivery'); h.engine.completeManual(run.id, 'deliver', OUTPUT, OWNER);
+  assert.equal(h.engine.run(run.id).status, 'completed'); assert.equal(h.codex.calls.length, 6);
+  assert.equal(state(h.engine.run(run.id), 'work').attempts.length, 2); assert.equal(state(h.engine.run(run.id), 'verify').attempts.length, 2);
+  assert.deepEqual(state(h.engine.run(run.id), 'peer'), peer);
+});
+
+test('pause lets current work finish, prevents new dispatch and resumes without replay', async t => {
+  for (const mode of ['dependency', 'loop', 'final-stage'] as const) await t.test(mode, async sub => {
+    const h = await fixture(sub), p = await project(h), flow = pipeline(h, p, mode === 'dependency' ? [stage('work'), stage('follow', ['work'])] : [stage('work')], {maxIterations: 3});
+    const run = start(h, p, flow, {mode: mode === 'loop' ? 'loop' : 'once'});
+    await pump(h, () => h.codex.calls.length === 1, 'the current execution'); h.engine.pause(run.id, 'Inspect this boundary before further dispatch.', OWNER);
+    assert.equal(h.codex.calls[0].aborted, false); h.codex.calls[0].finish(result('The current task finished successfully.'));
+    await pump(h, () => state(h.engine.run(run.id), 'work').status === 'completed', 'the paused current result');
+    for (let index = 0; index < 5; index++) {await h.engine.tick(); await immediate();}
+    assert.equal(h.codex.calls.length, 1);
+    if (mode === 'final-stage') {assert.equal(h.engine.run(run.id).status, 'completed'); return;}
+    assert.equal(h.engine.run(run.id).status, 'paused'); assert.equal(h.engine.run(run.id).iteration, 1);
+    const first = structuredClone(state(h.engine.run(run.id), 'work').attempts[0]); h.engine.resume(run.id, OWNER);
+    await pump(h, () => h.codex.calls.length === 2, 'the resumed next action');
+    h.codex.calls[1].finish(result('No further work remains.', 'no_change'));
+    await pump(h, () => h.engine.run(run.id).status === 'completed', 'the resumed completion');
+    assert.deepEqual(state(h.engine.run(run.id), 'work').attempts[0], first);
+  });
+});
+
+test('Multica steering routes by provider and preserves pending versus delivered receipts without a native turn ID', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')]);
+  const completion = deferred<{output: TaskOutput}>(), supplements: {ref: ExecutionRef; text: string}[] = [], calls: AgentExecutionInput[] = [];
+  let nativeSteers = 0, receipt: {id: string; status: string} | undefined = {id: 'synthetic-supplement-1', status: 'pending'};
+  h.codex.steer = async () => {nativeSteers++;};
+  h.engine.agentExecutor = {async start(input) {calls.push(input); input.signal.addEventListener('abort', () => completion.reject(new Error('Synthetic task closed.')), {once: true}); return {ref: {provider: 'multica', externalId: 'synthetic-task', issueId: 'synthetic-issue'}, completion: completion.promise};}, async steer(ref, text) {supplements.push({ref, text}); return receipt;}};
+  const run = start(h, p, flow); await pump(h, () => state(h.engine.run(run.id), 'work').attempts[0]?.ref?.externalId === 'synthetic-task', 'the Multica task reference');
+  assert.deepEqual(await h.engine.steer(run.id, 'work', 'Inspect this additional synthetic evidence.', OWNER), receipt);
+  assert.equal(h.engine.store.events({runId: run.id}).at(-1)?.type, 'multica.steer_pending');
+  receipt = {id: 'synthetic-supplement-2', status: 'delivered'}; assert.deepEqual(await h.engine.steer(run.id, 'work', 'Use the confirmed synthetic supplement.', OWNER), receipt);
+  assert.equal(h.engine.store.events({runId: run.id}).at(-1)?.type, 'multica.steered');
+  receipt = undefined; await h.engine.steer(run.id, 'work', 'Preserve compatibility with a void adapter receipt.', OWNER);
+  assert.equal(h.engine.store.events({runId: run.id}).at(-1)?.type, 'multica.steer_pending');
+  assert.equal(nativeSteers, 0); assert.equal(supplements.length, 3); assert.equal(calls.length, 1); assert.equal(h.codex.calls.length, 0);
+  completion.resolve({output: OUTPUT}); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the supplemented task completion');
+});
+
+test('close aborts and awaits executor shutdown plus late task settlement before closing storage', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')]);
+  const shutdown = deferred<void>(), started = deferred<CodexExecution>(); let input: AgentExecutionInput | undefined, closeCalls = 0, storageClosed = false, writesAfterClose = 0;
+  const originalClose = h.engine.store.close.bind(h.engine.store), originalPut = h.engine.store.put.bind(h.engine.store);
+  h.engine.store.close = () => {storageClosed = true; originalClose();};
+  h.engine.store.put = (kind, value) => {if (storageClosed) writesAfterClose++; originalPut(kind, value);};
+  h.engine.agentExecutor = {async start(value) {input = value; return started.promise;}, async steer() {}, async close() {closeCalls++; await shutdown.promise; started.resolve({ref: {provider: 'multica', externalId: 'synthetic-late-task'}, completion: Promise.resolve({output: OUTPUT})});}};
+  const run = start(h, p, flow); await pump(h, () => Boolean(input), 'the pending task submission');
+  const closing = h.engine.close(); await immediate(); assert.equal(input!.signal.aborted, true); assert.equal(closeCalls, 1); assert.equal(storageClosed, false);
+  assert.equal(h.engine.run(run.id).status, 'running'); shutdown.resolve(); await closing; await h.engine.close(); await immediate();
+  assert.equal(storageClosed, true); assert.equal(closeCalls, 1); assert.equal(writesAfterClose, 0);
+  const restored = new Store(h.stateDirectory);
+  try {const saved = restored.get<Run>('run', run.id)!; assert.equal(state(saved, 'work').attempts[0].ref?.externalId, 'synthetic-late-task'); assert.equal(state(saved, 'work').status, 'running');}
+  finally {restored.close();}
+});
+
 test('development server blocks synthetic private files through direct, raw, encoded and absolute paths', {timeout: 15000}, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const directory = await mkdtemp(path.join(tmpdir(), 'gwi-private-http-test-'));
@@ -468,4 +679,45 @@ test('development server blocks synthetic private files through direct, raw, enc
     assert.equal(response.status, 403, 'A synthetic private route is blocked before Vite serves it.');
     assert.equal(content.includes(marker), false);
   }
+});
+
+test('upstream rework invalidates a completed child even when the wrapper hits its attempt limit before relaunch', async t => {
+  const h = await fixture(t), p = await project(h), manual = (id: string, dependsOn: string[] = [], extra: Partial<Stage> = {}) => stage(id, dependsOn, {executor: 'manual', ...extra});
+  const childFlow = pipeline(h, p, [manual('leaf')], {maxAttempts: 2});
+  const parentFlow = pipeline(h, p, [manual('upstream'), stage('handoff', ['upstream'], {executor: 'pipeline', options: {pipelineId: childFlow.id}}), manual('qa', ['handoff'], {reworkTo: 'upstream'})], {maxAttempts: 2});
+  const parent = start(h, p, parentFlow);
+  await pump(h, () => state(h.engine.run(parent.id), 'upstream').status === 'waiting', 'upstream version one');
+  h.engine.completeManual(parent.id, 'upstream', result('Upstream version one.'), OWNER);
+  await pump(h, () => Boolean(state(h.engine.run(parent.id), 'handoff').attempts[0]?.ref?.childRunId), 'the original child');
+  const oldChildId = state(h.engine.run(parent.id), 'handoff').attempts[0].ref!.childRunId!;
+  await pump(h, () => state(h.engine.run(oldChildId), 'leaf').status === 'waiting', 'the original child action');
+  h.engine.completeManual(oldChildId, 'leaf', result('The original child needs one local correction.', 'blocked'), OWNER);
+  await pump(h, () => h.engine.run(parent.id).status === 'failed', 'the stopped parent handoff');
+  h.engine.retry(oldChildId, 'leaf', 'Correct only the original child action.', OWNER);
+  await pump(h, () => state(h.engine.run(oldChildId), 'leaf').status === 'waiting', 'the original child correction');
+  h.engine.completeManual(oldChildId, 'leaf', result('Accepted child for upstream version one.'), OWNER);
+  await pump(h, () => h.engine.run(oldChildId).status === 'completed', 'the accepted original child');
+  h.engine.retry(parent.id, 'handoff', 'Resume the accepted original child result.', OWNER);
+  await pump(h, () => state(h.engine.run(parent.id), 'qa').status === 'waiting', 'review after the second wrapper attempt');
+  assert.equal(state(h.engine.run(parent.id), 'handoff').attempts.length, 2);
+  const acceptedChild = structuredClone(h.engine.run(oldChildId)), history = structuredClone(state(h.engine.run(parent.id), 'handoff').attempts);
+  h.engine.completeManual(parent.id, 'qa', result('Upstream version one must change.', 'revise'), OWNER);
+  await pump(h, () => state(h.engine.run(parent.id), 'upstream').status === 'waiting', 'upstream version two');
+  h.engine.completeManual(parent.id, 'upstream', result('Upstream version two.'), OWNER);
+  await pump(h, () => h.engine.run(parent.id).status === 'failed', 'the invalidated wrapper attempt limit');
+  assert.equal(state(h.engine.run(parent.id), 'handoff').attempts.length, 2);
+  h.engine.changeLimits(parent.id, 0, {maxAttempts: 3}, 'Authorize one execution against the changed upstream input.', OWNER);
+  h.engine.retry(parent.id, 'handoff', 'The earlier accepted child belongs to the old upstream input.', OWNER);
+  await pump(h, () => h.engine.store.list<Run>('run').filter(run => run.parentRunId === parent.id).length === 2, 'a fresh child for the changed input');
+  const current = h.engine.run(parent.id), handoff = state(current, 'handoff'), newChildId = handoff.attempts[2].ref!.childRunId!;
+  assert.notEqual(newChildId, oldChildId); assert.equal(handoff.resumeChildRunId, undefined);
+  assert.deepEqual(handoff.attempts.slice(0, 2).map(attempt => ({...attempt, review: undefined})), history.map(attempt => ({...attempt, review: undefined})));
+  assert.deepEqual(handoff.attempts[0].review, history[0].review); assert.deepEqual(h.engine.run(oldChildId), acceptedChild);
+  await pump(h, () => state(h.engine.run(newChildId), 'leaf').status === 'waiting', 'the fresh child action');
+  assert.equal(state(h.engine.run(parent.id), 'qa').attempts.length, 1);
+  h.engine.completeManual(newChildId, 'leaf', result('Accepted child for upstream version two.'), OWNER);
+  await pump(h, () => state(h.engine.run(parent.id), 'qa').status === 'waiting', 'review of the fresh child');
+  h.engine.completeManual(parent.id, 'qa', result('The fresh result matches upstream version two.'), OWNER);
+  await pump(h, () => h.engine.run(parent.id).status === 'completed', 'the corrected parent outcome');
+  assert.equal(h.codex.calls.length, 0); assert.equal(h.engine.store.list<Run>('run').filter(run => run.parentRunId === parent.id).length, 2);
 });

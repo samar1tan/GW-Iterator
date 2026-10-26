@@ -9,6 +9,11 @@ import {IntakeService} from './intake.ts';
 import {AdoptionService,type AdoptionInput} from './adoption.ts';
 import {createCodexAdapter} from './adapters/codex.ts';
 import {createGithubAdapter} from './adapters/github.ts';
+import {loadPlatform} from './platform.ts';
+import {PlatformExecution} from './platform-execution.ts';
+import {ControlMcp} from './control-mcp.ts';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
 import type {Actor,IntegrationInfo,IntakeRetryInput,Pipeline,Project,StartRunInput,TaskOutput} from './contracts.ts';
 
@@ -26,17 +31,22 @@ let runtime:{codexBinary?:string;defaultModel?:string}={};
 try{const parsed:unknown=JSON.parse(await readFile(path.join(dataDirectory,'runtime.json'),'utf8'));demand(isObject(parsed)&&Object.keys(parsed).every(key=>key==='codexBinary'||key==='defaultModel')&&(parsed.codexBinary===undefined||(typeof parsed.codexBinary==='string'&&path.isAbsolute(parsed.codexBinary)&&parsed.codexBinary.length<=4096)),'INVALID_RUNTIME_CONFIG','Check the local runtime executable and default model.');demand(parsed.defaultModel===undefined||(typeof parsed.defaultModel==='string'&&parsed.defaultModel.length>0&&parsed.defaultModel.length<=160),'INVALID_RUNTIME_MODEL','Choose a model ID from the installed Codex catalog.');runtime=parsed;}
 catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
 const engine=new Engine(new Store(dataDirectory),createCodexAdapter({binary:process.env.GWI_CODEX_BIN??runtime.codexBinary,defaultModel:process.env.GWI_CODEX_MODEL??runtime.defaultModel}),createGithubAdapter());
+const controls=new ControlMcp(`http://127.0.0.1:${port}`);
+const platform=process.env.GWI_MULTICA_CONNECTION?await loadPlatform(engine,dataDirectory,process.env.GWI_MULTICA_CONNECTION,process.env.GWI_CODEX_MODEL??runtime.defaultModel):await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel)??await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica-runtime/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel);
+const execution=platform?new PlatformExecution(platform,controls):undefined;
+if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.planner;}
 const intakeService=new IntakeService(engine);
 const adoptionService=new AdoptionService(engine);adoptionService.recover();
 let integrationCache:{at:number;value:Promise<IntegrationInfo>}|null=null;
-function integrations():Promise<IntegrationInfo>{if(!integrationCache||Date.now()-integrationCache.at>30000)integrationCache={at:Date.now(),value:Promise.all([engine.codex.info(),engine.github.info()]).then(([codex,github])=>({codex,github}))};return integrationCache.value;}
+function integrations():Promise<IntegrationInfo>{if(!integrationCache||Date.now()-integrationCache.at>30000)integrationCache={at:Date.now(),value:Promise.all([engine.codex.info(),engine.github.info(),platform?.connection()]).then(([codex,github,multica])=>({codex,github,...(multica?{multica}:{})}))};return integrationCache.value;}
 const origin=`http://127.0.0.1:${port}`;
 const allowedHosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`]);
+const sessionCookie=`gwi_session_${port}`;
 function secureEqual(candidate:string):boolean{const a=Buffer.from(candidate),b=Buffer.from(token);return a.length===b.length&&timingSafeEqual(a,b);}
 function actorFor(request:IncomingMessage):Actor {
   const authorization=request.headers.authorization;
   if(authorization?.startsWith('Bearer ')&&secureEqual(authorization.slice(7)))return{name:String(request.headers['x-gwi-actor']??'local-agent').slice(0,120),kind:'agent'};
-  const cookie=request.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith('gwi_session='))?.slice('gwi_session='.length);
+  const cookie=request.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith(sessionCookie+'='))?.slice(sessionCookie.length+1);
   demand(cookie&&secureEqual(cookie),'UNAUTHENTICATED','Use the local browser session or private agent token.',401);
   demand(request.method==='GET'||request.headers.origin===origin||request.headers.origin===`http://localhost:${port}`,'INVALID_ORIGIN','Private mutations require a same-origin browser or bearer token.',403);
   return{name:'local-human',kind:'human'};
@@ -47,10 +57,12 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   const method=request.method??'GET',route=url.pathname;
   demand(allowedHosts.has(request.headers.host??''),'INVALID_HOST','This server accepts its local loopback host only.',403);
   demand(!request.headers.origin||request.headers.origin===origin||request.headers.origin===`http://localhost:${port}`,'INVALID_ORIGIN','Unexpected request origin.',403);
-  if(route==='/api/session'&&method==='GET'){response.setHeader('set-cookie',`gwi_session=${token}; Path=/; HttpOnly; SameSite=Strict`);json(response,{authenticated:true});return;}
+  if(route==='/mcp/control'){await controls.handle(request,response);return;}
+  if(route==='/api/session'&&method==='GET'){response.setHeader('set-cookie',`${sessionCookie}=${token}; Path=/; HttpOnly; SameSite=Strict`);json(response,{authenticated:true});return;}
   const actor=actorFor(request),input=method==='GET'?{}:await body(request);
   if(route==='/api/overview'&&method==='GET'){json(response,{projects:engine.overview(actor),integrations:await integrations(),events:engine.store.events({limit:50})});return;}
   if(route==='/api/integrations'&&method==='GET'){json(response,await integrations());return;}
+  if(route==='/api/platform'&&method==='GET'){json(response,platform?await platform.connection():{connected:false,available:false,authenticated:false,error:{code:'MULTICA_NOT_CONFIGURED',message:'Connect the local Multica service.'}});return;}
   if(route==='/api/adoptions'&&method==='GET'){json(response,{adoptions:adoptionService.list(actor)});return;}
   if(route==='/api/adoptions'&&method==='POST'){json(response,await adoptionService.create(input as AdoptionInput,actor),201);return;}
   const adoption=route.match(/^\/api\/adoptions\/([^/]+)(?:\/(apply))?$/);
@@ -58,6 +70,24 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   if(route==='/api/projects'&&method==='POST'){json(response,await engine.createProject(input as {name:string;workspace:string;description?:string;repository?:string},actor),201);return;}
   const project=route.match(/^\/api\/projects\/([^/]+)(?:\/(.*))?$/);
   if(project){const id=decodeURIComponent(project[1]),resource=project[2];
+    if(resource?.startsWith('team')){
+      demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local Multica service before changing the execution team.',503);
+      if(resource==='team'&&method==='GET'){json(response,await platform.team(id,actor));return;}
+      if(resource==='team/prepare'&&method==='POST'){json(response,await platform.prepareTeam(id,actor));return;}
+      if(resource==='team/roles'&&method==='POST'){json(response,await platform.saveRole(id,Number(input.expectedRevision),input.role as never,actor));return;}
+      const role=resource.match(/^team\/roles\/([^/]+)(?:\/(duplicate))?$/);
+      if(role){const roleId=decodeURIComponent(role[1]);if(role[2]&&method==='POST'){json(response,await platform.duplicateRole(id,roleId,Number(input.expectedRevision),actor));return;}if(method==='PUT'){json(response,await platform.saveRole(id,Number(input.expectedRevision),input.role as never,actor,roleId));return;}if(method==='DELETE'){json(response,await platform.retireRole(id,roleId,Number(input.expectedRevision),actor));return;}}
+      if(resource==='team/agents'&&method==='POST'){json(response,await platform.saveAgent(id,input,actor));return;}
+      if(resource==='team/mcp-servers'&&method==='POST'){json(response,await platform.saveMcp(id,input,actor));return;}
+      const mcp=resource.match(/^team\/mcp-servers\/([^/]+)$/);if(mcp&&method==='PUT'){json(response,await platform.saveMcp(id,input,actor,decodeURIComponent(mcp[1])));return;}
+      const agentMcp=resource.match(/^team\/agents\/([^/]+)\/mcp-servers(?:\/([^/]+))?$/);
+      if(agentMcp){const agentId=decodeURIComponent(agentMcp[1]),serverId=agentMcp[2]?decodeURIComponent(agentMcp[2]):String(input.serverId??'');if(method==='GET'){json(response,{servers:await platform.agentMcp(id,agentId,actor)});return;}if(method==='POST'||method==='DELETE'||method==='PUT'){json(response,await platform.setAgentMcp(id,agentId,serverId,method==='POST'?'add':method==='DELETE'?'remove':'enable',input.enabled===true,actor));return;}}
+      const agent=resource.match(/^team\/agents\/([^/]+)(?:\/(skills))?$/);
+      if(agent){const agentId=decodeURIComponent(agent[1]);if(agent[2]&&method==='GET'){engine.detail(id,actor);json(response,{skills:await platform.client.listAgentSkills(agentId)});return;}if(agent[2]&&method==='PUT'){json(response,await platform.setAgentSkills(id,agentId,input,actor));return;}if(method==='PUT'){json(response,await platform.saveAgent(id,input,actor,agentId));return;}}
+      if(resource==='team/skills'&&method==='POST'){json(response,await platform.saveSkill(id,input,actor));return;}
+      const skill=resource.match(/^team\/skills\/([^/]+)$/);
+      if(skill){const skillId=decodeURIComponent(skill[1]);if(method==='GET'){json(response,await platform.skill(id,skillId,actor));return;}if(method==='PUT'){json(response,await platform.saveSkill(id,input,actor,skillId));return;}}
+    }
     if(!resource&&method==='GET'){json(response,{...engine.detail(id,actor),intakes:intakeService.list(id)});return;}
     if(!resource&&method==='PUT'){json(response,await engine.updateProject(id,Number(input.expectedRevision),input.project as Project,actor));return;}
     if(resource==='skills'&&method==='GET'){json(response,{skills:await engine.codex.skills(engine.project(id).workspace)});return;}
@@ -72,12 +102,22 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   const pipeline=route.match(/^\/api\/pipelines\/([^/]+)(?:\/(proposals))?$/);
   if(pipeline){const id=decodeURIComponent(pipeline[1]);if(!pipeline[2]&&method==='PUT'){json(response,engine.updatePipeline(id,Number(input.expectedRevision),input.definition as Pipeline,actor));return;}if(pipeline[2]&&method==='POST'){json(response,engine.propose(id,Number(input.expectedRevision),input.definition as Pipeline,String(input.rationale??''),actor,typeof input.runId==='string'?input.runId:undefined),201);return;}}
   const proposal=route.match(/^\/api\/proposals\/([^/]+)\/apply$/);if(proposal&&method==='POST'){json(response,engine.applyProposal(proposal[1],actor));return;}
-  if(route==='/api/runs'&&method==='POST'){json(response,engine.startRun(input as StartRunInput,actor),201);return;}
+  if(route==='/api/runs'&&method==='POST'){
+    const project=engine.detail(String(input.projectId),actor).project;
+    if(typeof input.baseline!=='string'||!input.baseline.trim()){
+      let revision='';try{revision=(await promisify(execFile)('git',['-C',project.workspace,'rev-parse','HEAD'],{timeout:5000})).stdout.trim();}catch{}
+      input.baseline=revision?`${project.repository||project.name} @ ${revision}`:`${project.name} · configuration ${project.revision}`;
+    }
+    json(response,engine.startRun(input as StartRunInput,actor),201);return;
+  }
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry)$/);
   if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
-  if(run){const id=decodeURIComponent(run[1]),resource=run[2];if(!resource&&method==='GET'){json(response,{run:engine.run(id),events:engine.store.events({runId:id,limit:300})});return;}if(resource==='cancel'&&method==='POST'){json(response,await engine.cancel(id,String(input.note??''),actor));return;}
-    const stage=resource?.match(/^stages\/([^/]+)\/(complete|review|retry|steer)$/);if(stage&&method==='POST'){const stageId=decodeURIComponent(stage[1]),action=stage[2];if(action==='complete')json(response,engine.completeManual(id,stageId,input.output as TaskOutput,actor));else if(action==='review')json(response,engine.review(id,stageId,input.decision as 'accept'|'revise',String(input.note??''),actor));else if(action==='retry')json(response,engine.retry(id,stageId,String(input.note??''),actor));else{await engine.steer(id,stageId,String(input.text??''),actor);json(response,{accepted:true});}return;}}
+  if(run){const id=decodeURIComponent(run[1]),resource=run[2];engine.detail(engine.run(id).projectId,actor);if(resource==='changes'&&method==='GET'){demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await platform.workspaces.changes(id));return;}if(resource==='artifacts'&&method==='GET'){demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await platform.workspaces.artifact(id,url.searchParams.get('path')??''));return;}if(!resource&&method==='GET'){json(response,{run:engine.run(id),events:engine.store.events({runId:id,limit:300})});return;}if(resource==='cancel'&&method==='POST'){json(response,await engine.cancel(id,String(input.note??''),actor));return;}if(resource==='pause'&&method==='POST'){json(response,engine.pause(id,String(input.note??''),actor));return;}if(resource==='resume'&&method==='POST'){json(response,engine.resume(id,actor));return;}
+    if(resource==='limits'&&method==='POST'){demand(isObject(input.limits),'INVALID_RUN_LIMITS','Provide the finite new execution limits.');json(response,engine.changeLimits(id,Number(input.expectedRevision),input.limits,String(input.note??''),actor));return;}
+    if(resource==='executions'&&method==='GET'){json(response,{executions:execution?.records(id)??[]});return;}
+    const reconcile=resource?.match(/^stages\/([^/]+)\/reconcile$/);if(reconcile&&method==='POST'){demand(execution,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await execution.reconcile(id,decodeURIComponent(reconcile[1])));return;}
+    const stage=resource?.match(/^stages\/([^/]+)\/(complete|review|retry|steer)$/);if(stage&&method==='POST'){const stageId=decodeURIComponent(stage[1]),action=stage[2];if(action==='complete')json(response,engine.completeManual(id,stageId,input.output as TaskOutput,actor));else if(action==='review')json(response,engine.review(id,stageId,input.decision as 'accept'|'revise',String(input.note??''),actor));else if(action==='retry')json(response,engine.retry(id,stageId,String(input.note??''),actor));else{const receipt=await engine.steer(id,stageId,String(input.text??''),actor);json(response,{accepted:true,...receipt});}return;}}
   if(route==='/api/events'&&method==='GET'){json(response,{events:engine.store.events({projectId:url.searchParams.get('projectId')??undefined,runId:url.searchParams.get('runId')??undefined,after:Number(url.searchParams.get('after')??0),limit:300})});return;}
   throw new AppError('NOT_FOUND','API route not found.',404);
 }
@@ -99,7 +139,7 @@ const server=createServer(async(request,response)=>{
   try{
     demand(allowedHosts.has(request.headers.host??''),'INVALID_HOST','Unexpected host.',403);
     const url=new URL(request.url??'/',origin);
-    if(url.pathname.startsWith('/api/')){await api(request,response,url);return;}
+    if(url.pathname.startsWith('/api/')||url.pathname==='/mcp/control'){await api(request,response,url);return;}
     if(vite){demand(await publicDevelopmentPath(url),'PRIVATE_PATH','This path is not a public application asset.',403);vite.middlewares(request,response,()=>{if(!response.writableEnded){response.writeHead(404);response.end('Not found');}});return;}
     let filename=path.resolve(root,'dist','.'+decodeURIComponent(url.pathname));
     demand(filename===path.join(root,'dist')||filename.startsWith(path.join(root,'dist')+path.sep),'INVALID_PATH','Invalid asset path.',400);
@@ -111,5 +151,5 @@ const server=createServer(async(request,response)=>{
 });
 server.listen(port,'127.0.0.1',()=>{engine.start();console.log(`GW-Iterator listening at ${origin}`);});
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;server.close();await vite?.close();await adoptionService.close();await engine.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;server.close();await vite?.close();await adoptionService.close();await engine.close();controls.close();process.exit(0);}
 process.on('SIGINT',()=>void stop());process.on('SIGTERM',()=>void stop());

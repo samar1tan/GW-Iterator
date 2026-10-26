@@ -12,7 +12,7 @@ const statusKeys: Record<Intake['status'], MessageKey> = {
   failed: 'intakeFailed', completed: 'intakeCompleted', stopped: 'intakeStopped', retry_wait: 'recoveryRetryWait',
 };
 const decisionKeys = {
-  dispatch: 'intakeDecisionDispatch', complete: 'intakeDecisionComplete',
+  dispatch: 'intakeDecisionDispatch', retry: 'intakeDecisionRetry', complete: 'intakeDecisionComplete',
   clarify: 'intakeDecisionClarify', stop: 'intakeDecisionStop',
 } as const;
 const defaultPolicy = { maxRounds: 4, maxParallel: 2, maxTotalTokens: 250000, maxElapsedSeconds: 1800 };

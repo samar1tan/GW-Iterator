@@ -1,5 +1,7 @@
 # Goal recovery after native capacity failures
 
+Scope: the original native-goal compatibility path. The integrated Multica coordinator uses the same cumulative recovery boundaries with provider-specific references and cleanup checks; see the current [API contract](API.md#goal-entry) and [product requirements](PRD.md#loop-engineering).
+
 Owner: the goal execution backend. Independent review: the root integrator. This document adds a bounded recovery path to the current local release; it does not reopen the original product scope.
 
 ## User outcome

@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "engines": {"node": ">=24 <27"},
+  "engines": {
+    "node": ">=24 <27"
+  },
   "scripts": {
     "dev": "node src/server.ts --dev",
     "start": "node src/server.ts",
@@ -13,6 +15,18 @@
     "test": "node --test test/*.test.ts",
     "gwi": "node scripts/gwi.mjs"
   },
-  "dependencies": {"react": "19.3.1", "react-dom": "19.3.1"},
-  "devDependencies": {"@types/node": "24.19.2", "@types/react": "19.3.0", "@types/react-dom": "19.3.0", "typescript": "7.0.2", "vite": "8.3.5"}
+  "dependencies": {
+    "@dagrejs/dagre": "3.1.3",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@xyflow/react": "12.12.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
 }

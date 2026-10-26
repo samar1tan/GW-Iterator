@@ -1,33 +1,65 @@
-# Project and workflow supervision
+# Integrated pipeline workspace
 
-## Project entry
+Status: replacement interaction baseline; implementation and user review are pending. Read with [the PRD](PRD.md). The former form-and-history layout is not the target design.
 
-The landing page is the project list. Each card shows project identity, active/waiting work and knowledge/source counts. GW and GWI are peers. Create project is a real setup form for its local workspace and repository binding. A project card enters its workspace; the header always provides Projects as a return target.
+## Structure and visual system
 
-## Project workspace
+Projects is the top-level entry. Inside a project, use a compact global header, stable left navigation, the current work/pipeline in the main canvas, and selected-item details in a contextual inspector. Preserve project and role context; show runner/connection health where it affects work.
 
-The left rail holds project identity and three primary destinations: Pipelines, Knowledge and Configuration. A role filter narrows the current surface; roles are not global projects. Keep active project and selected role visible while inspecting a run or a knowledge entry.
+Primary destinations: Workbench, Pipelines, Team, Knowledge, Settings. They represent current work, reusable work definitions, working capabilities, accumulated context and deliberate configuration. Raw logs are never the initial project view.
 
-Pipelines shows available definitions, start action and actual runs. Start asks for a purpose, baseline and bounded run options, with the pipeline's relevant role configuration available. Definition editing is explicit and shows validation or revision conflicts. Dependency stages and linked runs show why work can or cannot proceed.
+Use near-black canvas, distinct charcoal surfaces, blue selection and restrained status colors. Maintain readable type, aligned controls, clear density and adequate hit targets. Large empty cards do not replace hierarchy. Every visible item has a useful role and a working interaction.
 
-A selected run uses the main canvas for stages and dependencies, and the right/context area for the selected stage's attempts, output, evidence, review decision and live Codex control. The event trail records chronological changes. A running process stays visible as running; empty states identify the useful next action without invented activity.
+## First use
 
-Review has an outcome and a note. Accept releases dependents; request revision records the finding and returns work to its owner within limits. Steering sends input to the actual active turn; interrupt requests a stop and waits for authoritative completion. Configuration changes do not rewrite its frozen run basis.
+Connect project asks for the local location. Infer name/repository/context and show a concise team/capability proposal, including reusable existing Multica agents. Ordinary work must not require prompt/model/tool/budget setup first. These remain editable afterward.
 
-## Knowledge
+Setup failures identify a missing prerequisite and useful action. A configured URL is not a successful connection. Credentials remain server-side/private; tasks do not ask users to paste provider tokens.
 
-Knowledge has source controls, search/role/type filters and an entry list. Selecting an entry opens content and provenance. Source registration asks for an explicit local path, source kind and relevant roles; shared memory can name a section. Synchronize reports changed, unchanged, failed and missing sources. Source paths and contents are private.
+After connection enter a usable workbench. GW/GWI are actual independent configurations, not fixed cards.
 
-The entry's source identity, content hash and sync time are available in context; version metadata is secondary to its title and content. Run context identifies the knowledge revisions actually supplied to the agent. A run lesson can be retained as a project knowledge entry with a link back to its source event.
+## Workbench and intake
 
-## Configuration
+Answer what is being advanced, who is doing what, what needs attention and what was delivered. Active outcomes, pending decisions, useful pipeline shortcuts and recent artifacts take priority over counts.
 
-Configuration groups project bindings, role profiles and execution settings. Roles expose instructions, model/effort, selected discovered skills, allowed GWI tools and sandbox policy. A JSON editor is available for complete pipeline definitions alongside readable stage summaries. Save reports its new version; conflicts preserve input and require refresh/reconciliation.
+A short natural-language entry starts an outcome. Known pipelines have a direct Run action with inherited defaults. Ask only for a genuinely missing required input. Keep configuration outside both ordinary paths.
 
-The first version uses near-black/gray surfaces with blue selection, restrained status colors and system fonts. Labels and empty/error states support English and Simplified Chinese from separate locale resources. Inspect the implemented project → pipeline → run/review → knowledge → configuration → project return journey. Use focused desktop and narrow-width checks; this is a working supervisor, not a full visual-polish milestone.
+Submission opens actual work with interpreted scope and next action. Clarification appears here as a specific question. Do not leave a blank start form beside a long previous transcript.
 
-## Goal supervision
+## Pipeline catalog and visual editor
 
-The project Pipelines workspace starts with a natural-language goal entry. The user need not choose a role or workflow. Submitting shows the actual Codex supervision turn; subsequent rounds show observations, the recorded action, concise rationale, expected benefit and links to each delegated run. Several workflows can contribute to one goal. Local DAGs remain inside the run inspector.
+Separate reusable definitions and executions. Templates explain purpose, handoffs and deliverables. Creation starts from a useful template or blank definition and can be inspected before running.
 
-Goals retain their history when refreshed. Show completion only from the recorded acceptance state. Expose reported usage with unavailable/partial states and a compact, collapsible execution boundary. A stop action records a reason and stops only this goal's owned work. Role and pipeline configuration stay available as resources, without becoming a mandatory entry form.
+Use an editable stage canvas, compact action palette and selected-stage inspector. Add, arrange, connect, duplicate and delete stages. Edit role/action/input/output/checks, human gates, conditions, child pipelines and bounded feedback paths. Validate broken references and unbounded cycles.
+
+Inspector fields depend on the action: human review has no model field; CI observation has no role-prompt field. Select skills/tools/permissions from real capabilities. Publishing shows meaningful changes and preserves existing execution bases. JSON/import/export remain expert actions rather than the main editor.
+
+## Live execution
+
+The header identifies the outcome, state, execution boundary and useful controls. The canvas shows active path, owners, parallel work, dependencies, child runs and rework relationships. Each stage exposes a meaningful latest result and artifact link without repeating the original request.
+
+Selecting a stage opens responsibility, inputs, actual output, check results, handoff and permitted actions. Attempts, native IDs, raw token counters, logs and frozen configuration are progressive detail. People inspect real work before accepting.
+
+Feedback attaches to its work. Rejection sends the finding and evidence to the responsible owner; affected downstream work becomes visibly stale. Accepted unaffected work stays accepted. Show a new plan revision instead of silently replacing the graph.
+
+Waiting identifies the person/service and useful action; it is stable and does not start repeated model turns. Native blocked does not discard pending human work. Retry is scoped and explains whether prior execution is known. Fallback obeys the allowed policy. Stop/cancel reflects authoritative owned and remote state.
+
+For a stopped pipeline, its stage inspector shows the used/remaining allowance and an advanced **Extend limits** action. The dialog names the pipeline scope, preserves consumption, and requires the finite new limits and a reason. Saving records a revision without starting work. Return to the outcome to continue coordination, or retry the failed stage directly. Unknown external execution state must be reconciled first.
+
+## Team
+
+Show working roles, real agents, availability and assignments. A selected role exposes responsibilities, deliverables, skills/tools, knowledge and handoffs. Add, duplicate, retire and import roles; the initial role set does not define a limit.
+
+Distinguish defaults and project overrides. Capability/permission changes show their effect on future work and retain past bases. Do not equate an instruction with an enforced native permission. Agent views link actual work, rather than only an editable prompt.
+
+## Knowledge and delivery
+
+Organize requirements, decisions, produced artifacts, selected memory and verified lessons by role/project. Show provenance and usage. Stage references open the same knowledge entry/artifact without losing run context.
+
+Delivery gathers changes, checks, reviews and external publication references. Distinguish prepared, accepted and deployed. Retain supported learning/change proposals; do not automatically store every model sentence as project memory.
+
+## Concrete review journey
+
+Use the GW website mismatch as a clearly labeled replay: select GW; submit the mismatch; see the chosen operations flow; inspect roles and shared case; review rejection/return; inspect CI/publication evidence; accept delivery; find the reusable finding. Historical evidence must not masquerade as a fresh run.
+
+Then operate a fresh bounded real task through the same controls and connected backend. Record interventions and unpassed checks. Inspect both locales, normal/narrow layouts, keyboard use, waiting/failure recovery and return navigation. Screenshots and diagrams alone are insufficient.
