@@ -10,8 +10,9 @@ import {Engine} from '../src/engine.ts';
 import {IntakeService, isNativeCapacityFailure} from '../src/intake.ts';
 import {Store} from '../src/store.ts';
 import {AppError} from '../src/validation.ts';
-import type {Actor, ExecutionRef, Intake, Pipeline, Run, TaskOutput} from '../src/contracts.ts';
+import type {Actor, ExecutionRef, Intake, IntakeDecision, Pipeline, Run, TaskOutput, Usage} from '../src/contracts.ts';
 import type {CodexAdapter, CodexExecutionInput, CodexGoalInput, CodexGoalResult} from '../src/adapters/types.ts';
+import type {GoalPlanner, GoalPlannerInput} from '../src/goal-planner.ts';
 
 const OWNER: Actor = {name: 'Synthetic goal owner', kind: 'human'};
 const OUTPUT: TaskOutput = {outcome: 'done', summary: 'Synthetic delegated action completed.', artifacts: [], observations: []};
@@ -486,4 +487,176 @@ test('handoff preservation never suppresses explicit cancellation, capacity or e
     }
     await delegated;assert.equal(h.codex.tasks[0].aborted,true);assert.equal(h.codex.goals.length,1);
   });
+});
+
+class SyntheticDecisionPlanner implements GoalPlanner {
+  calls: {input: GoalPlannerInput; ref: ExecutionRef; completion: ReturnType<typeof deferred<{decision: IntakeDecision; usage?: Usage}>>}[] = [];
+  private engine: Engine;
+  constructor(engine: Engine) {this.engine = engine;}
+  async start(input: GoalPlannerInput) {
+    const ref: ExecutionRef = {provider: 'multica', externalId: `synthetic-planner-task-${this.calls.length + 1}`, issueId: `synthetic-planner-issue-${this.calls.length + 1}`};
+    const record = {id: input.executionId, projectId: input.project.id, runId: input.executionId, stageId: `decision-${input.rounds.length + 1}`, taskId: ref.externalId, issueId: ref.issueId, status: 'running', cleanupConfirmed: false};
+    this.engine.store.put('multica-execution', record);
+    const completion = deferred<{decision: IntakeDecision; usage?: Usage}>();
+    this.calls.push({input, ref, completion});
+    input.signal.addEventListener('abort', () => {if (!completion.settled) {record.status = 'cancelled'; record.cleanupConfirmed = true; this.engine.store.put('multica-execution', record); completion.reject(new Error('Synthetic planner task authoritatively cancelled.'));}}, {once: true});
+    input.onEvent({type: 'planner.task.started', message: 'A synthetic one-decision task started.', ref});
+    return {ref, completion: completion.promise.then(value => {record.status = 'completed'; record.cleanupConfirmed = true; this.engine.store.put('multica-execution', record); return value;})};
+  }
+}
+async function plannerFixture(t: TestContext) {
+  const h = await fixture(t), planner = new SyntheticDecisionPlanner(h.engine);
+  h.engine.goalPlanner = planner;
+  return {...h, planner};
+}
+
+test('one-decision planning spends no model calls during manual/CI waits and preserves each real reference', async t => {
+  const h = await plannerFixture(t), original = h.engine.project(h.project.id);
+  h.project = await h.engine.updateProject(original.id, original.revision, {...original, repository: 'synthetic-owner/synthetic-repository'}, OWNER);
+  const manual = deliveryFlow(h), initial = h.engine.createPipeline({projectId: h.project.id, roleId: 'operations', name: 'Synthetic observed CI'}, OWNER);
+  const ci = h.engine.updatePipeline(initial.id, initial.revision, {...initial, stages: [{id: 'observe', name: 'Observe CI', roleId: 'operations', executor: 'github', dependsOn: [], prompt: 'Observe one known synthetic run.', review: false, options: {mode: 'observe', runId: 314}}]}, OWNER);
+  const observation = deferred<{status: 'completed'; summary: string; runId: number}>();
+  h.engine.github.observe = async () => observation.promise;
+  const item = create(h);
+  h.planner.calls[0].completion.resolve({decision: decision('dispatch', [task(manual), task(ci)]), usage: {input: 100, cachedInput: 80, output: 10, total: 110}});
+  await pump(h, () => current(h, item).targetRunIds.length === 2 && current(h, item).status === 'dispatched', 'manual and CI handoff');
+  const [manualId, ciId] = current(h, item).targetRunIds;
+  const firstRun = structuredClone(h.engine.run(item.routerRunId));
+  for (let index = 0; index < 20; index++) {await h.engine.tick(); await immediate();}
+  assert.equal(h.planner.calls.length, 1); assert.equal(h.codex.goals.length, 0); assert.equal(h.codex.tasks.length, 0);
+  assert.equal(h.engine.run(manualId).status, 'waiting'); assert.equal(h.engine.run(ciId).status, 'running');
+  h.engine.completeManual(manualId, 'delivery', OUTPUT, OWNER);
+  for (let index = 0; index < 5; index++) {await h.engine.tick(); await immediate();}
+  assert.equal(h.planner.calls.length, 1);
+  observation.resolve({status: 'completed', summary: 'Synthetic CI is accepted.', runId: 314});
+  await pump(h, () => h.planner.calls.length === 2, 'the next event-driven decision');
+  assert.deepEqual(h.planner.calls[1].input.observations.map(value => value.status), ['completed', 'completed']);
+  assert.equal(h.planner.calls[1].input.remaining.tokens, 9970);
+  h.planner.calls[1].completion.resolve({decision: decision('complete'), usage: {input: 20, output: 5, total: 25}});
+  await pump(h, () => current(h, item).status === 'completed', 'accepted planner completion');
+  const ids = current(h, item).supervisorRunIds!;
+  assert.equal(ids.length, 2); assert.notEqual(ids[0], ids[1]); assert.deepEqual(h.engine.run(ids[0]), firstRun);
+  for (const [index, id] of ids.entries()) {
+    const run = h.engine.run(id), attempt = run.stages[0].attempts[0];
+    assert.equal(run.executionKind, 'agent-goal'); assert.equal(attempt.provider, 'multica');
+    assert.deepEqual(attempt.ref, h.planner.calls[index].ref); assert.ok(attempt.usage); assert.equal(attempt.nativeGoal, undefined);
+  }
+});
+
+test('review feedback reworks only its stage and does not create another planner until acceptance', async t => {
+  const h = await plannerFixture(t), original = h.flows[0];
+  const reviewed = h.engine.updatePipeline(original.id, original.revision, {...original, stages: original.stages.map(stage => ({...stage, review: true}))}, OWNER);
+  const item = create(h); h.planner.calls[0].completion.resolve({decision: decision('dispatch', [task(reviewed), task(h.flows[1])])});
+  await pump(h, () => h.codex.tasks.length === 2, 'parallel worker tasks');
+  h.codex.tasks[0].completion.resolve({output: OUTPUT}); h.codex.tasks[1].completion.resolve({output: OUTPUT});
+  await pump(h, () => h.engine.run(current(h, item).targetRunIds[0]).status === 'review', 'independent review');
+  const [reviewedId, acceptedId] = current(h, item).targetRunIds;
+  const accepted = structuredClone(h.engine.run(acceptedId));
+  h.engine.review(reviewedId, 'inspect', 'revise', 'Add the missing synthetic acceptance evidence.', OWNER);
+  await pump(h, () => h.codex.tasks.length === 3, 'focused review correction');
+  assert.equal(h.planner.calls.length, 1); assert.deepEqual(h.engine.run(acceptedId), accepted);
+  h.codex.tasks[2].completion.resolve({output: {...OUTPUT, summary: 'The requested evidence is now present.'}});
+  await pump(h, () => h.engine.run(reviewedId).status === 'review', 'corrected review result');
+  assert.equal(h.planner.calls.length, 1); h.engine.review(reviewedId, 'inspect', 'accept', 'The revised evidence is sufficient.', OWNER);
+  await pump(h, () => h.planner.calls.length === 2, 'a decision after real acceptance');
+  assert.equal(h.engine.run(reviewedId).stages[0].attempts.length, 2);
+  h.planner.calls[1].completion.resolve({decision: decision('complete')});
+  await pump(h, () => current(h, item).status === 'completed', 'reviewed goal completion');
+});
+
+test('planner retries reuse an owned failed stage without replaying its successful predecessors or peers', async t => {
+  const h = await plannerFixture(t), initial = h.flows[0];
+  const flow = h.engine.updatePipeline(initial.id, initial.revision, {...initial, stages: [
+    {id: 'prepare', name: 'Prepare', roleId: 'development', executor: 'codex', dependsOn: [], prompt: 'Prepare one synthetic artifact.', review: false},
+    {id: 'repair', name: 'Repair', roleId: 'development', executor: 'codex', dependsOn: ['prepare'], prompt: 'Verify one synthetic artifact.', review: false},
+  ]}, OWNER);
+  const item = create(h, {maxRounds: 3}); h.planner.calls[0].completion.resolve({decision: decision('dispatch', [task(flow), task(h.flows[1])])});
+  await pump(h, () => h.codex.tasks.length === 2, 'initial parallel work');
+  h.codex.tasks[0].completion.resolve({output: OUTPUT}); h.codex.tasks[1].completion.resolve({output: OUTPUT});
+  await pump(h, () => h.codex.tasks.length === 3, 'the dependent stage');
+  h.codex.tasks[2].completion.reject(new Error('Synthetic repair needs one bounded retry.'));
+  await pump(h, () => h.planner.calls.length === 2, 'failure observations');
+  const [failedId, peerId] = current(h, item).targetRunIds, peer = structuredClone(h.engine.run(peerId));
+  const prepared = structuredClone(h.engine.run(failedId).stages[0]);
+  h.planner.calls[1].completion.resolve({decision: {...decision('stop'), action: 'retry', retry: {runId: failedId, stageId: 'repair', note: 'Retry the failed check against the retained artifact.'}}});
+  await pump(h, () => h.codex.tasks.length === 4, 'the single stage retry');
+  assert.equal(h.planner.calls.length, 2); assert.deepEqual(h.engine.run(peerId), peer); assert.deepEqual(h.engine.run(failedId).stages[0], prepared);
+  h.codex.tasks[3].completion.resolve({output: OUTPUT});
+  await pump(h, () => h.planner.calls.length === 3, 'retry outcome observations');
+  assert.equal(h.planner.calls[2].input.remaining.rounds, 1); assert.equal(h.engine.run(failedId).stages[1].attempts.length, 2);
+  h.planner.calls[2].completion.resolve({decision: decision('complete')});
+  await pump(h, () => current(h, item).status === 'completed', 'completion after the targeted retry');
+  assert.deepEqual(current(h, item).rounds.map(round => round.decision?.action), ['dispatch', 'retry', 'complete']);
+});
+
+test('planner stage retries reject unowned work and cumulative action-round exhaustion', async t => {
+  for (const mode of ['unowned', 'round-limit'] as const) await t.test(mode, async sub => {
+    const h = await plannerFixture(sub);
+    let unowned: Run | undefined;
+    if (mode === 'unowned') {
+      unowned = h.engine.startRun({projectId: h.project.id, pipelineId: h.flows[1].id, goal: 'An unrelated synthetic action.', baseline: 'Synthetic.', idempotencyKey: randomUUID()}, OWNER);
+      await pump(h, () => h.codex.tasks.length === 1, 'unrelated work'); h.codex.tasks[0].completion.reject(new Error('Unrelated synthetic failure.'));
+      await pump(h, () => h.engine.run(unowned!.id).status === 'failed', 'unrelated failure');
+    }
+    const offset = h.codex.tasks.length, item = create(h, {maxRounds: mode === 'unowned' ? 3 : 1});
+    h.planner.calls[0].completion.resolve({decision: decision('dispatch', [task(h.flows[0])])});
+    await pump(h, () => h.codex.tasks.length === offset + 1, 'owned work'); h.codex.tasks[offset].completion.reject(new Error('Owned synthetic failure.'));
+    await pump(h, () => h.planner.calls.length === 2, 'owned failure observation');
+    h.planner.calls[1].completion.resolve({decision: {...decision('stop'), action: 'retry', retry: {runId: unowned?.id ?? current(h, item).targetRunIds[0], stageId: mode === 'unowned' ? 'verify' : 'inspect', note: 'A bounded synthetic retry request.'}}});
+    await pump(h, () => current(h, item).status === (mode === 'unowned' ? 'failed' : 'stopped'), 'rejected retry');
+    assert.equal(h.codex.tasks.length, offset + 1); assert.equal(current(h, item).rounds.length, 1);
+    if (mode === 'unowned') assert.match(current(h, item).error!, /only this goal/);
+  });
+});
+
+test('planner restart preserves pending work and old native records until explicit continuation', async t => {
+  const h = await fixture(t), legacy = create(h); h.intake.cancel(legacy.id, 'Close the legacy synthetic supervisor.', OWNER);
+  await pump(h, () => h.engine.run(legacy.routerRunId).status === 'cancelled', 'legacy termination');
+  const legacyRecord = structuredClone(h.engine.run(legacy.routerRunId)), planner = new SyntheticDecisionPlanner(h.engine); h.engine.goalPlanner = planner;
+  const manual = deliveryFlow(h), item = create(h); planner.calls[0].completion.resolve({decision: decision('dispatch', [task(manual)])});
+  await pump(h, () => current(h, item).status === 'dispatched', 'the pending manual handoff');
+  const manualId = current(h, item).targetRunIds[0]; await h.intake.close(); h.intake = new IntakeService(h.engine);
+  for (let index = 0; index < 5; index++) {await h.engine.tick(); await immediate();}
+  assert.equal(planner.calls.length, 1); assert.equal(h.engine.run(manualId).status, 'waiting'); assert.equal(current(h, item).status, 'failed');
+  h.engine.completeManual(manualId, 'delivery', OUTPUT, OWNER);
+  await pump(h, () => current(h, item).canRetry === true, 'explicit continuation availability');
+  assert.equal(planner.calls.length, 1); assert.deepEqual(h.engine.run(legacy.routerRunId), legacyRecord);
+  await h.intake.retry(item.id, {note: 'Continue from the already accepted manual evidence.', model: 'synthetic-primary'}, OWNER);
+  assert.equal(planner.calls.length, 2); assert.equal(planner.calls[1].input.observations[0].status, 'completed');
+  planner.calls[1].completion.resolve({decision: decision('complete')});
+  await pump(h, () => current(h, item).status === 'completed', 'explicitly continued goal completion');
+  const recovery = current(h, item).recoveryHistory!.at(-1)!;
+  assert.equal(recovery.status, 'completed'); assert.ok(recovery.endedAt); assert.deepEqual(recovery.newRef, planner.calls[1].ref);
+  assert.deepEqual(h.engine.run(legacy.routerRunId), legacyRecord);
+});
+
+test('planner clarification retains owned pending work while explicit stop cancels it', async t => {
+  const h = await plannerFixture(t), item = create(h), manual = deliveryFlow(h);
+  const owned = h.engine.startRun({projectId: h.project.id, pipelineId: manual.id, goal: 'Retain this existing owned human action.', baseline: item.baseline, parentRunId: item.routerRunId, idempotencyKey: randomUUID()}, OWNER);
+  await pump(h, () => h.engine.run(owned.id).status === 'waiting', 'existing human work');
+  h.planner.calls[0].completion.resolve({decision: {...decision('clarify'), question: 'Which actual acceptance target should the reviewer use?'}});
+  await pump(h, () => current(h, item).status === 'clarification', 'the clarification question');
+  assert.equal(h.engine.run(owned.id).status, 'waiting'); assert.equal(h.planner.calls.length, 1);
+  h.intake.cancel(item.id, 'Explicitly stop the remaining owned work.', OWNER);
+  await pump(h, () => h.engine.run(owned.id).status === 'cancelled', 'explicit owned-work cancellation');
+});
+
+test('planner transport uncertainty cannot recover into a new run until the exact owned task cleanup is confirmed', async t => {
+  const h = await plannerFixture(t), item = create(h), first = h.planner.calls[0];
+  first.input.onEvent({type: 'usage', message: 'Synthetic usage before transport uncertainty.', ref: first.ref, usage: {input: 100, cachedInput: 50, output: 10, total: 110}});
+  first.completion.reject(new AppError('TRANSPORT_ERROR', 'The task observation transport failed.', 409));
+  await pump(h, () => current(h, item).status === 'failed', 'the uncertain task observation');
+  const before = structuredClone(h.engine.run(item.routerRunId)), attempt = before.stages[0].attempts[0];
+  assert.equal(attempt.output, undefined); assert.deepEqual(attempt.ref, first.ref); assert.deepEqual(attempt.usage, {input: 100, cachedInput: 50, output: 10, total: 110});
+  assert.equal(current(h, item).canRetry, false);
+  await assert.rejects(h.intake.retry(item.id, {note: 'Do not duplicate uncertain external work.', model: 'synthetic-primary'}, OWNER), code('RECOVERY_NOT_READY'));
+  assert.equal(h.planner.calls.length, 1); assert.deepEqual(current(h, item).supervisorRunIds, [item.routerRunId]);
+  const record = {...h.engine.store.get<{id: string; projectId: string; runId: string; stageId: string; taskId: string; issueId: string; status: string; cleanupConfirmed: boolean}>('multica-execution', item.routerRunId)!, status: 'failed', cleanupConfirmed: true};
+  for (const patch of [{projectId: 'another-synthetic-project'}, {runId: 'another-synthetic-run'}, {stageId: 'supervise'}, {taskId: 'another-synthetic-task'}, {issueId: 'another-synthetic-issue'}, {status: 'running'}, {cleanupConfirmed: false}]) {
+    h.engine.store.put('multica-execution', {...record, ...patch});
+    assert.equal(current(h, item).canRetry, false, 'Another scope or unconfirmed/nonterminal record cannot authorize recovery.');
+  }
+  h.engine.store.put('multica-execution', record); assert.equal(current(h, item).canRetry, true);
+  await h.intake.retry(item.id, {note: 'The exact previous task is now authoritatively terminal.', model: 'synthetic-primary'}, OWNER);
+  assert.equal(h.planner.calls.length, 2); assert.equal(h.planner.calls[1].input.remaining.tokens, 9940); assert.deepEqual(h.engine.run(item.routerRunId), before);
 });

@@ -13,7 +13,7 @@ import {Engine} from '../src/engine.ts';
 import {Store} from '../src/store.ts';
 import {AppError} from '../src/validation.ts';
 import type {Actor, CodexInfo, ExecutionRef, KnowledgeEntry, Pipeline, Project, Run, Stage, StartRunInput, TaskOutput, Usage} from '../src/contracts.ts';
-import type {CodexAdapter, CodexExecution, CodexExecutionInput, GithubAdapter, GithubObservation} from '../src/adapters/types.ts';
+import type {AgentExecutionInput, CodexAdapter, CodexExecution, CodexExecutionInput, GithubAdapter, GithubObservation} from '../src/adapters/types.ts';
 
 const OWNER: Actor = {name: 'Synthetic owner', kind: 'human'};
 const OUTPUT: TaskOutput = {outcome: 'done', summary: 'Synthetic task completed.', artifacts: [], observations: []};
@@ -404,6 +404,148 @@ test('restart preserves review/manual waits, marks native work interrupted and r
   h.engine.review(reviewed.id, 'reviewed', 'accept', 'Inspected the preserved synthetic evidence.', OWNER);
   assert.equal(h.engine.run(manual.id).status, 'completed');
   assert.equal(h.engine.run(reviewed.id).status, 'completed');
+});
+
+test('explicit outcome branches handle revise/blocked, propagate skipped paths and merge after live inputs', async t => {
+  for (const outcome of ['revise', 'blocked'] as const) await t.test(outcome, async sub => {
+    const h = await fixture(sub), p = await project(h);
+    const flow = pipeline(h, p, [stage('inspect', [], {review: outcome === 'blocked'}),
+      stage('handle', ['inspect'], {executor: 'manual', condition: {stageId: 'inspect', outcome}}),
+      stage('unused', ['inspect'], {condition: {stageId: 'inspect', outcome: 'done'}}),
+      stage('unused-follow', ['unused']), stage('merge', ['handle', 'unused-follow'])]);
+    const run = start(h, p, flow);
+    await pump(h, () => h.codex.calls.length === 1, 'the outcome source');
+    h.codex.calls[0].finish(result('The configured branch must handle this finding.', outcome));
+    if (outcome === 'blocked') {
+      await pump(h, () => state(h.engine.run(run.id), 'inspect').status === 'review', 'review before the selected branch');
+      assert.equal(state(h.engine.run(run.id), 'handle').attempts.length, 0);
+      h.engine.review(run.id, 'inspect', 'accept', 'Accept this finding and hand it to the configured resolution branch.', OWNER);
+    }
+    await pump(h, () => state(h.engine.run(run.id), 'handle').status === 'waiting' && state(h.engine.run(run.id), 'unused-follow').status === 'skipped', 'the selected human branch');
+    const selected = h.engine.run(run.id), original = state(selected, 'inspect').attempts[0];
+    assert.equal(original.status, 'completed'); assert.equal(original.output?.outcome, outcome); assert.equal(original.error, undefined);
+    assert.equal(h.codex.calls.length, 1); assert.equal(state(selected, 'merge').attempts.length, 0);
+    for (const id of ['unused', 'unused-follow']) {assert.equal(state(selected, id).status, 'skipped'); assert.equal(state(selected, id).attempts.length, 0);}
+    h.engine.completeManual(run.id, 'handle', result('Recorded the concrete branch resolution.'), OWNER);
+    await pump(h, () => h.codex.calls.length === 2, 'the live-path merge');
+    assert.match(h.codex.calls[1].input.prompt, /Stage: Synthetic merge/);
+    h.codex.calls[1].finish(); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the handled outcome completion');
+    assert.equal(state(h.engine.run(run.id), 'inspect').attempts.length, 1);
+  });
+});
+
+test('an unhandled blocked result still stops downstream work truthfully', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('inspect'), stage('follow', ['inspect'])]), run = start(h, p, flow);
+  await pump(h, () => h.codex.calls.length === 1, 'the blocking source');
+  h.codex.calls[0].finish(result('A required external decision is missing.', 'blocked'));
+  await pump(h, () => h.engine.run(run.id).status === 'failed', 'the unhandled blocker');
+  assert.equal(h.codex.calls.length, 1); assert.equal(state(h.engine.run(run.id), 'follow').attempts.length, 0);
+  assert.match(h.engine.run(run.id).stopReason!, /external decision/);
+});
+
+test('loop no_change exits through skipped leaves without reusing an earlier selected-path result', async t => {
+  const h = await fixture(t), p = await project(h);
+  const flow = pipeline(h, p, [stage('inspect'), stage('selected', ['inspect'], {condition: {stageId: 'inspect', outcome: 'done'}}), stage('follow', ['selected'])], {maxIterations: 4});
+  const run = start(h, p, flow, {mode: 'loop'});
+  for (let index = 0; index < 3; index++) {await pump(h, () => h.codex.calls.length === index + 1, 'the first selected path'); h.codex.calls[index].finish(result(`First-iteration result ${index}.`));}
+  await pump(h, () => h.codex.calls.length === 4, 'the next bounded observation');
+  const accepted = structuredClone(state(h.engine.run(run.id), 'follow').attempts[0]);
+  h.codex.calls[3].finish(result('The requested outcome is already supported.', 'no_change'));
+  await pump(h, () => h.engine.run(run.id).status === 'completed', 'the no-change exit');
+  const ended = h.engine.run(run.id);
+  assert.equal(ended.iteration, 2); assert.equal(h.codex.calls.length, 4); assert.match(ended.stopReason!, /No further change/);
+  assert.equal(state(ended, 'selected').status, 'skipped'); assert.equal(state(ended, 'follow').status, 'skipped');
+  assert.deepEqual(state(ended, 'follow').attempts, [accepted]);
+});
+
+test('loop budgets accumulate uncached tokens across iterations and retain prior attempts', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')], {maxIterations: 5, tokenBudget: 1000}), run = start(h, p, flow, {mode: 'loop'});
+  await pump(h, () => h.codex.calls.length === 1, 'the first budgeted iteration');
+  h.codex.calls[0].finish(result('First useful synthetic increment.'), {input: 800, cachedInput: 700, output: 100, total: 900});
+  await pump(h, () => h.codex.calls.length === 2, 'the remaining cumulative allowance');
+  assert.equal(h.codex.calls[1].input.tokenBudget, 800);
+  h.codex.calls[1].finish(result('Second useful synthetic increment.'), {input: 650, cachedInput: 0, output: 150, total: 800});
+  await pump(h, () => h.engine.run(run.id).status === 'completed', 'the cumulative budget stop');
+  const ended = h.engine.run(run.id), attempts = state(ended, 'work').attempts;
+  assert.equal(ended.iteration, 2); assert.equal(h.codex.calls.length, 2); assert.match(ended.stopReason!, /Token budget/);
+  assert.deepEqual(attempts.map(attempt => attempt.iteration), [1, 2]); assert.deepEqual(attempts.map(attempt => attempt.usage?.total), [900, 800]);
+});
+
+test('independent review rejection retains accepted parallel work and rechecks only the affected path', async t => {
+  const h = await fixture(t), p = await project(h);
+  const flow = pipeline(h, p, [stage('base'), stage('work', ['base'], {review: true}), stage('peer', ['base']),
+    stage('verify', ['work'], {roleId: 'qa', review: true, reworkTo: 'work'}), stage('deliver', ['verify', 'peer'], {executor: 'manual'})], {concurrency: 2});
+  const run = start(h, p, flow);
+  await pump(h, () => h.codex.calls.length === 1, 'the common baseline'); h.codex.calls[0].finish();
+  await pump(h, () => h.codex.calls.length === 3, 'the parallel owned tasks'); h.codex.calls[1].finish(); h.codex.calls[2].finish(result('Accepted independent peer artifact.'));
+  await pump(h, () => state(h.engine.run(run.id), 'work').status === 'review', 'the owner artifact review'); h.engine.review(run.id, 'work', 'accept', 'The owner artifact passes its initial checks.', OWNER);
+  await pump(h, () => h.codex.calls.length === 4, 'independent verification'); assert.equal(h.codex.calls[3].input.role.id, 'qa'); h.codex.calls[3].finish(result('The correction needs a review decision.'));
+  await pump(h, () => state(h.engine.run(run.id), 'verify').status === 'review', 'the concrete review gate');
+  const before = h.engine.run(run.id), base = structuredClone(state(before, 'base')), peer = structuredClone(state(before, 'peer'));
+  h.engine.review(run.id, 'verify', 'revise', 'Correct this one artifact while retaining the independent peer.', OWNER);
+  await pump(h, () => h.codex.calls.length === 5, 'the focused correction');
+  assert.match(h.codex.calls[4].input.prompt, /Correct this one artifact while retaining the independent peer/);
+  assert.equal(state(h.engine.run(run.id), 'work').attempts[0].review?.decision, 'accept');
+  assert.deepEqual(state(h.engine.run(run.id), 'base'), base); assert.deepEqual(state(h.engine.run(run.id), 'peer'), peer);
+  h.codex.calls[4].finish(result('Corrected the targeted artifact.')); await pump(h, () => state(h.engine.run(run.id), 'work').status === 'review', 'the corrected owner artifact'); h.engine.review(run.id, 'work', 'accept', 'The focused owner correction passes its checks.', OWNER);
+  await pump(h, () => h.codex.calls.length === 6, 'independent re-verification'); h.codex.calls[5].finish();
+  await pump(h, () => state(h.engine.run(run.id), 'verify').status === 'review', 'the final review'); h.engine.review(run.id, 'verify', 'accept', 'The corrected evidence is sufficient.', OWNER);
+  await pump(h, () => state(h.engine.run(run.id), 'deliver').status === 'waiting', 'accepted delivery'); h.engine.completeManual(run.id, 'deliver', OUTPUT, OWNER);
+  assert.equal(h.engine.run(run.id).status, 'completed'); assert.equal(h.codex.calls.length, 6);
+  assert.equal(state(h.engine.run(run.id), 'work').attempts.length, 2); assert.equal(state(h.engine.run(run.id), 'verify').attempts.length, 2);
+  assert.deepEqual(state(h.engine.run(run.id), 'peer'), peer);
+});
+
+test('pause lets current work finish, prevents new dispatch and resumes without replay', async t => {
+  for (const mode of ['dependency', 'loop', 'final-stage'] as const) await t.test(mode, async sub => {
+    const h = await fixture(sub), p = await project(h), flow = pipeline(h, p, mode === 'dependency' ? [stage('work'), stage('follow', ['work'])] : [stage('work')], {maxIterations: 3});
+    const run = start(h, p, flow, {mode: mode === 'loop' ? 'loop' : 'once'});
+    await pump(h, () => h.codex.calls.length === 1, 'the current execution'); h.engine.pause(run.id, 'Inspect this boundary before further dispatch.', OWNER);
+    assert.equal(h.codex.calls[0].aborted, false); h.codex.calls[0].finish(result('The current task finished successfully.'));
+    await pump(h, () => state(h.engine.run(run.id), 'work').status === 'completed', 'the paused current result');
+    for (let index = 0; index < 5; index++) {await h.engine.tick(); await immediate();}
+    assert.equal(h.codex.calls.length, 1);
+    if (mode === 'final-stage') {assert.equal(h.engine.run(run.id).status, 'completed'); return;}
+    assert.equal(h.engine.run(run.id).status, 'paused'); assert.equal(h.engine.run(run.id).iteration, 1);
+    const first = structuredClone(state(h.engine.run(run.id), 'work').attempts[0]); h.engine.resume(run.id, OWNER);
+    await pump(h, () => h.codex.calls.length === 2, 'the resumed next action');
+    h.codex.calls[1].finish(result('No further work remains.', 'no_change'));
+    await pump(h, () => h.engine.run(run.id).status === 'completed', 'the resumed completion');
+    assert.deepEqual(state(h.engine.run(run.id), 'work').attempts[0], first);
+  });
+});
+
+test('Multica steering routes by provider and preserves pending versus delivered receipts without a native turn ID', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')]);
+  const completion = deferred<{output: TaskOutput}>(), supplements: {ref: ExecutionRef; text: string}[] = [], calls: AgentExecutionInput[] = [];
+  let nativeSteers = 0, receipt: {id: string; status: string} | undefined = {id: 'synthetic-supplement-1', status: 'pending'};
+  h.codex.steer = async () => {nativeSteers++;};
+  h.engine.agentExecutor = {async start(input) {calls.push(input); input.signal.addEventListener('abort', () => completion.reject(new Error('Synthetic task closed.')), {once: true}); return {ref: {provider: 'multica', externalId: 'synthetic-task', issueId: 'synthetic-issue'}, completion: completion.promise};}, async steer(ref, text) {supplements.push({ref, text}); return receipt;}};
+  const run = start(h, p, flow); await pump(h, () => state(h.engine.run(run.id), 'work').attempts[0]?.ref?.externalId === 'synthetic-task', 'the Multica task reference');
+  assert.deepEqual(await h.engine.steer(run.id, 'work', 'Inspect this additional synthetic evidence.', OWNER), receipt);
+  assert.equal(h.engine.store.events({runId: run.id}).at(-1)?.type, 'multica.steer_pending');
+  receipt = {id: 'synthetic-supplement-2', status: 'delivered'}; assert.deepEqual(await h.engine.steer(run.id, 'work', 'Use the confirmed synthetic supplement.', OWNER), receipt);
+  assert.equal(h.engine.store.events({runId: run.id}).at(-1)?.type, 'multica.steered');
+  receipt = undefined; await h.engine.steer(run.id, 'work', 'Preserve compatibility with a void adapter receipt.', OWNER);
+  assert.equal(h.engine.store.events({runId: run.id}).at(-1)?.type, 'multica.steer_pending');
+  assert.equal(nativeSteers, 0); assert.equal(supplements.length, 3); assert.equal(calls.length, 1); assert.equal(h.codex.calls.length, 0);
+  completion.resolve({output: OUTPUT}); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the supplemented task completion');
+});
+
+test('close aborts and awaits executor shutdown plus late task settlement before closing storage', async t => {
+  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')]);
+  const shutdown = deferred<void>(), started = deferred<CodexExecution>(); let input: AgentExecutionInput | undefined, closeCalls = 0, storageClosed = false, writesAfterClose = 0;
+  const originalClose = h.engine.store.close.bind(h.engine.store), originalPut = h.engine.store.put.bind(h.engine.store);
+  h.engine.store.close = () => {storageClosed = true; originalClose();};
+  h.engine.store.put = (kind, value) => {if (storageClosed) writesAfterClose++; originalPut(kind, value);};
+  h.engine.agentExecutor = {async start(value) {input = value; return started.promise;}, async steer() {}, async close() {closeCalls++; await shutdown.promise; started.resolve({ref: {provider: 'multica', externalId: 'synthetic-late-task'}, completion: Promise.resolve({output: OUTPUT})});}};
+  const run = start(h, p, flow); await pump(h, () => Boolean(input), 'the pending task submission');
+  const closing = h.engine.close(); await immediate(); assert.equal(input!.signal.aborted, true); assert.equal(closeCalls, 1); assert.equal(storageClosed, false);
+  assert.equal(h.engine.run(run.id).status, 'running'); shutdown.resolve(); await closing; await h.engine.close(); await immediate();
+  assert.equal(storageClosed, true); assert.equal(closeCalls, 1); assert.equal(writesAfterClose, 0);
+  const restored = new Store(h.stateDirectory);
+  try {const saved = restored.get<Run>('run', run.id)!; assert.equal(state(saved, 'work').attempts[0].ref?.externalId, 'synthetic-late-task'); assert.equal(state(saved, 'work').status, 'running');}
+  finally {restored.close();}
 });
 
 test('development server blocks synthetic private files through direct, raw, encoded and absolute paths', {timeout: 15000}, async t => {

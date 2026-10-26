@@ -1,6 +1,7 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  intakeDecisionRetry: '重试对应工作',
   appName: 'GW-Iterator', projects: '项目', pipelines: '流程', knowledge: '知识', configuration: '配置',
   language: '语言', switchLanguage: 'Switch to English', loading: '正在加载…', refresh: '刷新', retry: '重试', close: '关闭', cancel: '取消', save: '保存', saving: '正在保存…', edit: '编辑', create: '创建', add: '添加', remove: '移除', search: '搜索', allRoles: '全部角色', role: '角色', roles: '角色',
   projectListTitle: '本地项目', projectListDescription: '选择项目，查看和管理它的工作与知识。', createProject: '创建项目', noProjects: '还没有项目。设置本地工作区后即可开始。', name: '名称', description: '说明', workspace: '本地工作区', repository: '仓库', repositoryHint: '仓库地址或 owner/repository', createProjectTitle: '新建本地项目', projectName: '项目名称', active: '进行中', waiting: '待处理', runs: '运行', sources: '来源', entries: '条目', definitions: '定义', openProject: '进入项目',
@@ -27,4 +28,5 @@ export const zhCN: Messages = {
   recoveryContinue: '继续目标', recoveryContinuing: '正在继续…', recoveryContinueHelp: '保留已有行动、证据和累计用量，以新的原生执行继续同一目标。', recoveryNote: '继续说明', recoveryModel: '协调模型', recoveryKeepModel: '保留此前模型', recoveryActualModel: '实际模型', recoveryRefreshConfiguration: '后续工作使用最新项目配置', recoveryChangeLimits: '更改行动、预算或时间上限', recoveryCurrentLimit: '当前上限：{count}', recoveryCapacityPolicy: '容量恢复', recoveryAuto: '模型容量不足时自动重试', recoveryMaxAttempts: '累计自动恢复上限', recoveryBackoff: '等待间隔（秒）', recoveryFallbackPool: '允许的后备模型', recoveryFallbackHelp: '自动切换只使用明确选中的模型；留空不允许自动切换模型。', recoveryNoModels: '暂无模型目录。', recoveryUnavailableModels: '当前模型目录中没有：{models}', recoveryRemoveUnavailable: '移除不可用模型', recoveryChangePolicy: '更改恢复策略', recoveryRetryWait: '等待重试', recoveryNextRetry: '下次自动尝试：{date}', recoveryHistory: '恢复记录', recoveryAutomatic: '自动', recoveryManual: '手动', recoveryScheduled: '已安排', recoveryBasis: '配置依据', recoveryConfigurationRefreshed: '已刷新配置', recoveryPreviousRun: '此前执行', recoveryNewRun: '恢复执行', recoveryPolicyChanges: '已记录的边界变更', recoveryUnavailable: '请刷新目标状态后继续。', recoveryEnabled: '已启用', recoveryDisabled: '未启用',
   recoveryNoFallback: '不允许切换模型', newTokensConservative: '保守计量',
   recoveryActionRounds: '行动轮次上限', recoveryRoundRange: '行动轮次上限须为 {current} 到 10 之间的整数。',
+  paused: '已暂停', skipped: '已跳过',
 };
