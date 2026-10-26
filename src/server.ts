@@ -1,0 +1,115 @@
+import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
+import {readFile,writeFile,mkdir,stat,realpath} from 'node:fs/promises';
+import {randomBytes,timingSafeEqual} from 'node:crypto';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {Store} from './store.ts';
+import {Engine} from './engine.ts';
+import {IntakeService} from './intake.ts';
+import {AdoptionService,type AdoptionInput} from './adoption.ts';
+import {createCodexAdapter} from './adapters/codex.ts';
+import {createGithubAdapter} from './adapters/github.ts';
+import {AppError,demand,isObject} from './validation.ts';
+import type {Actor,IntegrationInfo,IntakeRetryInput,Pipeline,Project,StartRunInput,TaskOutput} from './contracts.ts';
+
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
+for(const name of ['dist','web','src','node_modules','public'])demand(dataDirectory!==path.join(root,name)&&!dataDirectory.startsWith(path.join(root,name)+path.sep),'UNSAFE_DATA_DIRECTORY','Keep private runtime data outside public source and asset directories.');
+const port=Number(process.env.GWI_PORT??4318);
+demand(Number.isInteger(port)&&port>=1024&&port<65536,'INVALID_PORT','Choose a local port between 1024 and 65535.');
+await mkdir(dataDirectory,{recursive:true,mode:0o700});
+const tokenFile=path.join(dataDirectory,'token');
+let token:string;
+try{token=(await readFile(tokenFile,'utf8')).trim();demand(/^[a-f0-9]{64}$/.test(token),'INVALID_TOKEN_FILE','The private runtime token file is invalid.');}
+catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;token=randomBytes(32).toString('hex');await writeFile(tokenFile,token+'\n',{mode:0o600,flag:'wx'});}
+let runtime:{codexBinary?:string;defaultModel?:string}={};
+try{const parsed:unknown=JSON.parse(await readFile(path.join(dataDirectory,'runtime.json'),'utf8'));demand(isObject(parsed)&&Object.keys(parsed).every(key=>key==='codexBinary'||key==='defaultModel')&&(parsed.codexBinary===undefined||(typeof parsed.codexBinary==='string'&&path.isAbsolute(parsed.codexBinary)&&parsed.codexBinary.length<=4096)),'INVALID_RUNTIME_CONFIG','Check the local runtime executable and default model.');demand(parsed.defaultModel===undefined||(typeof parsed.defaultModel==='string'&&parsed.defaultModel.length>0&&parsed.defaultModel.length<=160),'INVALID_RUNTIME_MODEL','Choose a model ID from the installed Codex catalog.');runtime=parsed;}
+catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+const engine=new Engine(new Store(dataDirectory),createCodexAdapter({binary:process.env.GWI_CODEX_BIN??runtime.codexBinary,defaultModel:process.env.GWI_CODEX_MODEL??runtime.defaultModel}),createGithubAdapter());
+const intakeService=new IntakeService(engine);
+const adoptionService=new AdoptionService(engine);adoptionService.recover();
+let integrationCache:{at:number;value:Promise<IntegrationInfo>}|null=null;
+function integrations():Promise<IntegrationInfo>{if(!integrationCache||Date.now()-integrationCache.at>30000)integrationCache={at:Date.now(),value:Promise.all([engine.codex.info(),engine.github.info()]).then(([codex,github])=>({codex,github}))};return integrationCache.value;}
+const origin=`http://127.0.0.1:${port}`;
+const allowedHosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`]);
+function secureEqual(candidate:string):boolean{const a=Buffer.from(candidate),b=Buffer.from(token);return a.length===b.length&&timingSafeEqual(a,b);}
+function actorFor(request:IncomingMessage):Actor {
+  const authorization=request.headers.authorization;
+  if(authorization?.startsWith('Bearer ')&&secureEqual(authorization.slice(7)))return{name:String(request.headers['x-gwi-actor']??'local-agent').slice(0,120),kind:'agent'};
+  const cookie=request.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith('gwi_session='))?.slice('gwi_session='.length);
+  demand(cookie&&secureEqual(cookie),'UNAUTHENTICATED','Use the local browser session or private agent token.',401);
+  demand(request.method==='GET'||request.headers.origin===origin||request.headers.origin===`http://localhost:${port}`,'INVALID_ORIGIN','Private mutations require a same-origin browser or bearer token.',403);
+  return{name:'local-human',kind:'human'};
+}
+async function body(request:IncomingMessage):Promise<Record<string,unknown>>{let length=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);length+=bytes.length;demand(length<=2*1024*1024,'BODY_TOO_LARGE','Request exceeds two MiB.',413);chunks.push(bytes);}if(!length)return{};let value:unknown;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new AppError('INVALID_JSON','Send a JSON object.');}demand(isObject(value),'INVALID_JSON','Send a JSON object.');return value;}
+function json(response:ServerResponse,value:unknown,statusCode=200){response.writeHead(statusCode,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});response.end(JSON.stringify(value));}
+async function api(request:IncomingMessage,response:ServerResponse,url:URL):Promise<void>{
+  const method=request.method??'GET',route=url.pathname;
+  demand(allowedHosts.has(request.headers.host??''),'INVALID_HOST','This server accepts its local loopback host only.',403);
+  demand(!request.headers.origin||request.headers.origin===origin||request.headers.origin===`http://localhost:${port}`,'INVALID_ORIGIN','Unexpected request origin.',403);
+  if(route==='/api/session'&&method==='GET'){response.setHeader('set-cookie',`gwi_session=${token}; Path=/; HttpOnly; SameSite=Strict`);json(response,{authenticated:true});return;}
+  const actor=actorFor(request),input=method==='GET'?{}:await body(request);
+  if(route==='/api/overview'&&method==='GET'){json(response,{projects:engine.overview(actor),integrations:await integrations(),events:engine.store.events({limit:50})});return;}
+  if(route==='/api/integrations'&&method==='GET'){json(response,await integrations());return;}
+  if(route==='/api/adoptions'&&method==='GET'){json(response,{adoptions:adoptionService.list(actor)});return;}
+  if(route==='/api/adoptions'&&method==='POST'){json(response,await adoptionService.create(input as AdoptionInput,actor),201);return;}
+  const adoption=route.match(/^\/api\/adoptions\/([^/]+)(?:\/(apply))?$/);
+  if(adoption){const id=decodeURIComponent(adoption[1]);if(!adoption[2]&&method==='GET'){json(response,adoptionService.get(id,actor));return;}if(adoption[2]==='apply'&&method==='POST'){json(response,await adoptionService.apply(id,Number(input.expectedRevision),actor));return;}}
+  if(route==='/api/projects'&&method==='POST'){json(response,await engine.createProject(input as {name:string;workspace:string;description?:string;repository?:string},actor),201);return;}
+  const project=route.match(/^\/api\/projects\/([^/]+)(?:\/(.*))?$/);
+  if(project){const id=decodeURIComponent(project[1]),resource=project[2];
+    if(!resource&&method==='GET'){json(response,{...engine.detail(id,actor),intakes:intakeService.list(id)});return;}
+    if(!resource&&method==='PUT'){json(response,await engine.updateProject(id,Number(input.expectedRevision),input.project as Project,actor));return;}
+    if(resource==='skills'&&method==='GET'){json(response,{skills:await engine.codex.skills(engine.project(id).workspace)});return;}
+    if(resource==='knowledge/sync'&&method==='POST'){json(response,await engine.sync(id,actor));return;}
+    if(resource==='knowledge'&&method==='GET'){engine.project(id);json(response,{entries:engine.search(id,url.searchParams.get('q')??'',url.searchParams.get('role')??undefined,url.searchParams.get('kind')??undefined)});return;}
+    if(resource==='knowledge/lessons'&&method==='POST'){json(response,engine.lesson(id,input as {title:string;content:string;roles?:string[];runId?:string},actor),201);return;}
+    if(resource==='revisions'&&method==='GET'){engine.project(id);json(response,{project:engine.store.list<{id:string;projectId:string}>('project-revision').filter(item=>item.projectId===id),pipelines:engine.store.list<{id:string;projectId:string}>('pipeline-revision').filter(item=>item.projectId===id)});return;}
+    if(resource==='intakes'&&method==='GET'){json(response,{intakes:intakeService.list(id)});return;}
+    if(resource==='intakes'&&method==='POST'){json(response,intakeService.create(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
+  }
+  if(route==='/api/pipelines'&&method==='POST'){json(response,engine.createPipeline(input as {projectId:string;roleId:string;name?:string;description?:string;template?:string},actor),201);return;}
+  const pipeline=route.match(/^\/api\/pipelines\/([^/]+)(?:\/(proposals))?$/);
+  if(pipeline){const id=decodeURIComponent(pipeline[1]);if(!pipeline[2]&&method==='PUT'){json(response,engine.updatePipeline(id,Number(input.expectedRevision),input.definition as Pipeline,actor));return;}if(pipeline[2]&&method==='POST'){json(response,engine.propose(id,Number(input.expectedRevision),input.definition as Pipeline,String(input.rationale??''),actor,typeof input.runId==='string'?input.runId:undefined),201);return;}}
+  const proposal=route.match(/^\/api\/proposals\/([^/]+)\/apply$/);if(proposal&&method==='POST'){json(response,engine.applyProposal(proposal[1],actor));return;}
+  if(route==='/api/runs'&&method==='POST'){json(response,engine.startRun(input as StartRunInput,actor),201);return;}
+  const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry)$/);
+  if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
+  const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
+  if(run){const id=decodeURIComponent(run[1]),resource=run[2];if(!resource&&method==='GET'){json(response,{run:engine.run(id),events:engine.store.events({runId:id,limit:300})});return;}if(resource==='cancel'&&method==='POST'){json(response,await engine.cancel(id,String(input.note??''),actor));return;}
+    const stage=resource?.match(/^stages\/([^/]+)\/(complete|review|retry|steer)$/);if(stage&&method==='POST'){const stageId=decodeURIComponent(stage[1]),action=stage[2];if(action==='complete')json(response,engine.completeManual(id,stageId,input.output as TaskOutput,actor));else if(action==='review')json(response,engine.review(id,stageId,input.decision as 'accept'|'revise',String(input.note??''),actor));else if(action==='retry')json(response,engine.retry(id,stageId,String(input.note??''),actor));else{await engine.steer(id,stageId,String(input.text??''),actor);json(response,{accepted:true});}return;}}
+  if(route==='/api/events'&&method==='GET'){json(response,{events:engine.store.events({projectId:url.searchParams.get('projectId')??undefined,runId:url.searchParams.get('runId')??undefined,after:Number(url.searchParams.get('after')??0),limit:300})});return;}
+  throw new AppError('NOT_FOUND','API route not found.',404);
+}
+
+const development=process.argv.includes('--dev');
+const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'node_modules')],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
+async function publicDevelopmentPath(url:URL):Promise<boolean>{
+  let decoded=url.pathname;for(let count=0;count<3;count++){try{const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}catch{return false;}}
+  decoded=decoded.replaceAll('\\','/');
+  if(decoded==='/'||decoded==='/index.html'||decoded==='/@vite/client')return true;
+  const filename=decoded.startsWith('/@fs/')?path.resolve(decoded.slice('/@fs/'.length)):path.resolve(root,'.'+decoded);
+  const allowed=[path.join(root,'web'),path.join(root,'node_modules')];
+  if(filename!==path.join(root,'src/contracts.ts')&&!allowed.some(directory=>filename.startsWith(directory+path.sep)))return false;
+  const actual=await realpath(filename).catch(()=>filename);
+  return actual!==dataDirectory&&!actual.startsWith(dataDirectory+path.sep)&&(actual===path.join(root,'src/contracts.ts')||allowed.some(directory=>actual.startsWith(directory+path.sep)));
+}
+const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2','.png':'image/png'};
+const server=createServer(async(request,response)=>{
+  try{
+    demand(allowedHosts.has(request.headers.host??''),'INVALID_HOST','Unexpected host.',403);
+    const url=new URL(request.url??'/',origin);
+    if(url.pathname.startsWith('/api/')){await api(request,response,url);return;}
+    if(vite){demand(await publicDevelopmentPath(url),'PRIVATE_PATH','This path is not a public application asset.',403);vite.middlewares(request,response,()=>{if(!response.writableEnded){response.writeHead(404);response.end('Not found');}});return;}
+    let filename=path.resolve(root,'dist','.'+decodeURIComponent(url.pathname));
+    demand(filename===path.join(root,'dist')||filename.startsWith(path.join(root,'dist')+path.sep),'INVALID_PATH','Invalid asset path.',400);
+    demand(filename!==dataDirectory&&!filename.startsWith(dataDirectory+path.sep),'PRIVATE_PATH','Runtime data is private.',403);
+    if(url.pathname==='/')filename=path.join(root,'dist/index.html');
+    demand((await stat(filename).catch(()=>null))?.isFile(),'NOT_FOUND','Public asset not found.',404);
+    const bytes=await readFile(filename);response.writeHead(200,{'content-type':types[path.extname(filename)]??'application/octet-stream','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});response.end(bytes);
+  }catch(error){if(response.headersSent){response.end();return;}if(error instanceof AppError)json(response,{error:{code:error.code,message:error.message,details:error.details}},error.status);else json(response,{error:{code:'INTERNAL_ERROR',message:error instanceof Error?error.message.slice(0,500):'Local operation failed.'}},500);}
+});
+server.listen(port,'127.0.0.1',()=>{engine.start();console.log(`GW-Iterator listening at ${origin}`);});
+let stopping=false;
+async function stop(){if(stopping)return;stopping=true;server.close();await vite?.close();await adoptionService.close();await engine.close();process.exit(0);}
+process.on('SIGINT',()=>void stop());process.on('SIGTERM',()=>void stop());

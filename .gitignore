@@ -1,0 +1,20 @@
+# Private runtime, project/pipeline/role configuration and knowledge stay local.
+.local/
+private/
+runtime/
+config/
+configs/
+.codex/
+.env
+.env.*
+*.db
+*.db-*
+*.sqlite*
+*.log
+node_modules/
+dist/
+coverage/
+.DS_Store
+*.key
+*.pem
+*.p12
