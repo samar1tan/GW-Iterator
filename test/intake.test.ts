@@ -335,7 +335,7 @@ test('automatic capacity recovery waits, uses only the explicit pool and stops a
   due();await pump(h,()=>h.codex.goals.length===2,'the first automatic fresh execution');assert.equal(h.codex.goals[1].input.role.model,'synthetic-primary');assert.equal(h.codex.goals[1].input.tokenBudget,9880);
   await capacityFailure(h,item,{input:50,output:10,total:60});assert.equal(current(h,item).status,'retry_wait');due();await pump(h,()=>h.codex.goals.length===3,'the allowed fallback execution');assert.equal(h.codex.goals[2].input.role.model,'synthetic-fallback');
   await capacityFailure(h,item);assert.equal(current(h,item).status,'failed');assert.equal(current(h,item).nextRetryAt,undefined);assert.equal(current(h,item).recoveryHistory?.filter(value=>value.trigger==='automatic'&&value.newRunId).length,2);
-  await h.engine.tick();assert.equal(h.codex.goals.length,3);assert.ok(current(h,item).recoveryHistory?.every(value=>!value.refreshConfiguration&&!value.previousPolicy&&!value.newPolicy));assert.equal(current(h,item).policy.maxTotalTokens,10000);
+  await h.engine.tick();assert.equal(h.codex.goals.length,3);assert.ok(current(h,item).recoveryHistory?.every(value=>!value.refreshConfiguration&&!value.previousPolicy&&!value.newPolicy));assert.equal(current(h,item).policy.maxTotalTokens,10000);assert.equal(current(h,item).policy.maxRounds,4);
 });
 
 test('budget/permission/task blockers never become automatic capacity retries and restart never resumes a scheduled retry', async t=>{
@@ -391,4 +391,47 @@ test('stopping retry_wait during manual catalog validation cannot start a fresh 
   const starting=h.intake.retry(item.id,{note:'Replace the automatic wait manually.',model:'synthetic-primary'},OWNER);const ended=assert.rejects(starting,code('RECOVERY_CANCELLED'));
   h.intake.cancel(item.id,'Stop the waiting recovery while its catalog request is pending.',OWNER);pending.resolve(catalog);await ended;
   assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');assert.equal(current(h,item).nextRetryAt,undefined);
+});
+
+test('manual recovery extends action rounds only explicitly and never resets consumed actions',async t=>{
+  const h=await fixture(t),item=create(h,{maxRounds:2});
+  for(let index=0;index<2;index++){
+    const observed=h.codex.goals[0].input.onTool('intake.route',decision('dispatch',[task(h.flows[index],`Accepted synthetic action ${index+1}.`)]));
+    await pump(h,()=>h.codex.tasks.length===index+1,'an original accepted action');h.codex.tasks[index].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','the accepted original result');await observed;
+  }
+  await h.codex.goals[0].input.onTool('intake.route',decision('stop'));await pump(h,()=>current(h,item).canRetry===true,'the first stopped supervisor');
+  const originalSnapshot=structuredClone(h.engine.run(item.routerRunId).snapshot),oldDispatches=current(h,item).rounds.filter(round=>round.decision?.action==='dispatch').length;
+  const sameBounds=await h.intake.retry(item.id,{note:'Continue without changing any action limit.',model:'synthetic-primary'},OWNER);
+  assert.equal(sameBounds.policy.maxRounds,2);assert.equal(sameBounds.rounds.filter(round=>round.decision?.action==='dispatch').length,oldDispatches);
+  await assert.rejects(h.codex.goals[1].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'A third distinct synthetic action.')])),code('GOAL_ROUND_LIMIT'));
+  await pump(h,()=>current(h,item).canRetry===true,'the unchanged round-limit stop');assert.equal(h.codex.tasks.length,2);
+  await assert.rejects(h.intake.retry(item.id,{note:'',model:'synthetic-primary',policy:{maxRounds:3}},OWNER),code('RECOVERY_NOTE_REQUIRED'));
+  await assert.rejects(h.intake.retry(item.id,{note:'Do not shrink the action allowance.',model:'synthetic-primary',policy:{maxRounds:1}},OWNER),code('INVALID_POLICY_EXTENSION'));
+  for(const maxRounds of [0,11])await assert.rejects(h.intake.retry(item.id,{note:'Reject an invalid action allowance.',model:'synthetic-primary',policy:{maxRounds}},OWNER),code('INVALID_GOAL_POLICY'));
+  const note='Approve one additional cumulative action round.',expanded=await h.intake.retry(item.id,{note,model:'synthetic-primary',policy:{maxRounds:3}},OWNER);
+  assert.equal(expanded.policy.maxRounds,3);assert.equal(expanded.rounds.filter(round=>round.decision?.action==='dispatch').length,2);
+  const record=expanded.recoveryHistory!.at(-1)!;assert.equal(record.previousPolicy?.maxRounds,2);assert.equal(record.newPolicy?.maxRounds,3);
+  const audit=h.engine.store.events({runId:expanded.routerRunId}).find(event=>event.type==='goal.policy_extended')!;assert.equal(audit.message,note);assert.deepEqual([(audit.data as {previous:Intake['policy']}).previous.maxRounds,(audit.data as {current:Intake['policy']}).current.maxRounds],[2,3]);
+  const third=h.codex.goals[2].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'A third distinct synthetic action.')]));await pump(h,()=>h.codex.tasks.length===3,'the newly authorized third action');h.codex.tasks[2].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','the third accepted result');await third;
+  assert.equal(current(h,item).rounds.filter(round=>round.decision?.action==='dispatch').length,3);assert.deepEqual(h.engine.run(item.routerRunId).snapshot,originalSnapshot);
+});
+
+test('recovered completion uses the latest dispatch despite later stop or clarification decisions',async t=>{
+  for(const closing of ['stop','clarify'] as const)for(const accepted of [true,false])await t.test(`${closing} accepted=${accepted}`,async sub=>{
+    const h=await fixture(sub),item=create(h),first=h.codex.goals[0];
+    const observed=first.input.onTool('intake.route',decision('dispatch',[task(h.flows[0])]));await pump(h,()=>h.codex.tasks.length===1,'the original action');
+    if(accepted)h.codex.tasks[0].completion.resolve({output:OUTPUT});else h.codex.tasks[0].completion.reject(new Error('Synthetic evidence was not accepted.'));
+    await pump(h,()=>current(h,item).status==='routing','the original action observations');await observed;
+    await first.input.onTool('intake.route',{...decision(closing),...(closing==='clarify'?{question:'Which synthetic acceptance evidence should be used?'}:{})});
+    await pump(h,()=>current(h,item).canRetry===true,'the closed native supervisor');assert.equal(current(h,item).rounds.at(-1)!.targetRunIds.length,0);
+    const recovered=await h.intake.retry(item.id,{note:'Continue from the retained action evidence.',model:'synthetic-primary'},OWNER),second=h.codex.goals[1];
+    if(!accepted){await assert.rejects(second.input.onTool('intake.route',decision('complete')),code('UNVERIFIED_COMPLETION'));assert.notEqual(current(h,item).status,'completed');return;}
+    if(closing==='stop'){
+      const linked=h.engine.startRun({projectId:h.project.id,pipelineId:h.flows[1].id,goal:'An active linked synthetic acceptance task.',baseline:item.baseline,idempotencyKey:randomUUID(),parentRunId:recovered.routerRunId},OWNER);
+      await pump(h,()=>h.codex.tasks.length===2,'the additional active family member');await assert.rejects(second.input.onTool('intake.route',decision('complete')),code('ACTIVE_GOAL_WORK'));
+      h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>h.engine.run(linked.id).status==='completed','family termination');
+    }
+    const response=await second.input.onTool('intake.route',decision('complete')) as {accepted:boolean};assert.equal(response.accepted,true);assert.equal(current(h,item).status,'routing');
+    second.completion.resolve({status:'complete',summary:'Retained accepted evidence completes the synthetic objective.'});await pump(h,()=>current(h,item).status==='completed','native completion after accepted evidence');
+  });
 });

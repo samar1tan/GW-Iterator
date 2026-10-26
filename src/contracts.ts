@@ -77,7 +77,7 @@ export type GoalRecoveryRecord = {
   refreshConfiguration:boolean; previousPolicy?:IntakePolicy; newPolicy?:IntakePolicy; error?:string;
   startedAt?:string; endedAt?:string;
 };
-export type IntakeRetryInput = {note:string; model?:string; refreshConfiguration?:boolean; policy?:{maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
+export type IntakeRetryInput = {note:string; model?:string; refreshConfiguration?:boolean; policy?:{maxRounds?:number; maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
 export type IntakeDecision = {action: 'dispatch' | 'complete' | 'clarify' | 'stop'; rationale: string; expectedGain: string; tasks: {pipelineId: string; goal: string}[]; question?: string};
 export type IntakeRound = {number: number; routerRunId: string; targetRunIds: string[]; decision?: IntakeDecision};
 export type ProjectDetail = {project: Project; pipelines: Pipeline[]; runs: Run[]; knowledge: KnowledgeEntry[]; proposals: Proposal[]; events: AuditEvent[]; intakes: Intake[]};

@@ -301,7 +301,10 @@ test('project, pipeline and knowledge revisions stay frozen for a run and its la
   const child = h.engine.run(childId);
   assert.equal(child.snapshot.project.revision, frozen.project.revision);
   assert.equal(child.snapshot.pipeline.revision, childFlow.revision);
-  assert.equal(h.codex.calls[0].input.role.instructions, frozen.project.roles.find(role => role.id === 'development')?.instructions);
+  assert.ok(h.codex.calls[0].input.role.instructions.startsWith(frozen.project.roles.find(role => role.id === 'development')!.instructions));
+  assert.match(h.codex.calls[0].input.role.instructions, /Current stage: Synthetic child-work/);
+  assert.match(h.codex.calls[0].input.role.instructions, /Original synthetic child instructions/);
+  assert.doesNotMatch(h.codex.calls[0].input.role.instructions, /Updated synthetic child instructions/);
   assert.match(h.codex.calls[0].input.prompt, /Original synthetic child instructions/);
   assert.match(h.codex.calls[0].input.prompt, /Original synthetic knowledge/);
   assert.doesNotMatch(h.codex.calls[0].input.prompt, /Updated synthetic knowledge/);
@@ -314,7 +317,8 @@ test('project, pipeline and knowledge revisions stay frozen for a run and its la
   assert.deepEqual(h.engine.run(parent.id).snapshot, frozen);
   const fresh = start(h, p, revisedChild);
   await pump(h, () => h.codex.calls.length === 2, 'a new revision run');
-  assert.equal(h.codex.calls[1].input.role.instructions, 'Updated synthetic role instructions.');
+  assert.ok(h.codex.calls[1].input.role.instructions.startsWith('Updated synthetic role instructions.'));
+  assert.match(h.codex.calls[1].input.role.instructions, /Updated synthetic child instructions/);
   assert.match(h.codex.calls[1].input.prompt, /Updated synthetic child instructions/);
   assert.match(h.codex.calls[1].input.prompt, /Updated synthetic knowledge/);
   h.codex.calls[1].finish();

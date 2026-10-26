@@ -31,6 +31,7 @@ export function GoalRetryForm({intake, models, onRetry, onClose}: {intake: Intak
   const [refreshConfiguration, setRefreshConfiguration] = useState(false);
   const [tokens, setTokens] = useState('');
   const [elapsed, setElapsed] = useState('');
+  const [rounds, setRounds] = useState('');
   const [overrideRecovery, setOverrideRecovery] = useState(false);
   const [recovery, setRecovery] = useState<GoalRecoveryPolicy>(() => structuredClone(intake.policy.recovery ?? defaultRecoveryPolicy));
   const [busy, setBusy] = useState(false);
@@ -41,7 +42,9 @@ export function GoalRetryForm({intake, models, onRetry, onClose}: {intake: Intak
     const policy: NonNullable<IntakeRetryInput['policy']> = {};
     if (tokens !== '') policy.maxTotalTokens = Number(tokens);
     if (elapsed !== '') policy.maxElapsedSeconds = Number(elapsed);
-    if ([policy.maxTotalTokens, policy.maxElapsedSeconds].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1)) || (overrideRecovery && (!Number.isSafeInteger(recovery.maxAttempts) || recovery.maxAttempts < 1 || !Number.isSafeInteger(recovery.backoffSeconds) || recovery.backoffSeconds < 1))) {setError(new Error(t('intakePolicyInvalid'))); return;}
+    if (rounds !== '') policy.maxRounds = Number(rounds);
+    if ([policy.maxTotalTokens, policy.maxElapsedSeconds, policy.maxRounds].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1)) || (overrideRecovery && (!Number.isSafeInteger(recovery.maxAttempts) || recovery.maxAttempts < 1 || !Number.isSafeInteger(recovery.backoffSeconds) || recovery.backoffSeconds < 1))) {setError(new Error(t('intakePolicyInvalid'))); return;}
+    if (policy.maxRounds !== undefined && (policy.maxRounds < intake.policy.maxRounds || policy.maxRounds > 10)) {setError(new Error(t('recoveryRoundRange', {current: intake.policy.maxRounds}))); return;}
     if (overrideRecovery) policy.recovery = recovery;
     setBusy(true); setError(null);
     try {await onRetry({note: note.trim(), ...(model ? {model} : {}), ...(refreshConfiguration ? {refreshConfiguration: true} : {}), ...(Object.keys(policy).length ? {policy} : {})}); onClose();}
@@ -54,7 +57,7 @@ export function GoalRetryForm({intake, models, onRetry, onClose}: {intake: Intak
     <Field label={t('recoveryNote')}><textarea required rows={3} value={note} onChange={event => setNote(event.target.value)} disabled={busy}/></Field>
     <Field label={`${t('recoveryModel')} · ${t('optional')}`}><select value={model} onChange={event => setModel(event.target.value)} disabled={busy}><option value="">{t('recoveryKeepModel')}</option>{models.map(value => <option key={value.id} value={value.id}>{value.name || value.id} · {value.id}</option>)}</select></Field>
     <label className="check"><input type="checkbox" checked={refreshConfiguration} disabled={busy} onChange={event => setRefreshConfiguration(event.target.checked)}/><span>{t('recoveryRefreshConfiguration')}</span></label>
-    <details><summary>{t('recoveryChangeLimits')}</summary><div className="intake-policy-grid"><Field label={t('intakeMaxTokens')} hint={t('recoveryCurrentLimit', {count: number(intake.policy.maxTotalTokens)})}><input type="number" min={1} step={1} value={tokens} disabled={busy} onChange={event => setTokens(event.target.value)}/></Field><Field label={t('intakeMaxElapsed')} hint={t('recoveryCurrentLimit', {count: number(intake.policy.maxElapsedSeconds)})}><input type="number" min={1} step={1} value={elapsed} disabled={busy} onChange={event => setElapsed(event.target.value)}/></Field></div></details>
+    <details><summary>{t('recoveryChangeLimits')}</summary><div className="intake-policy-grid"><Field label={t('recoveryActionRounds')}><input type="number" min={intake.policy.maxRounds} max={10} step={1} placeholder={String(intake.policy.maxRounds)} value={rounds} disabled={busy} onChange={event => setRounds(event.target.value)}/></Field><Field label={t('intakeMaxTokens')} hint={t('recoveryCurrentLimit', {count: number(intake.policy.maxTotalTokens)})}><input type="number" min={1} step={1} value={tokens} disabled={busy} onChange={event => setTokens(event.target.value)}/></Field><Field label={t('intakeMaxElapsed')} hint={t('recoveryCurrentLimit', {count: number(intake.policy.maxElapsedSeconds)})}><input type="number" min={1} step={1} value={elapsed} disabled={busy} onChange={event => setElapsed(event.target.value)}/></Field></div></details>
     <details><summary>{t('recoveryCapacityPolicy')}</summary><label className="check"><input type="checkbox" checked={overrideRecovery} disabled={busy} onChange={event => setOverrideRecovery(event.target.checked)}/><span>{t('recoveryChangePolicy')}</span></label>{overrideRecovery && <RecoveryPolicyFields value={recovery} onChange={setRecovery} models={models} disabled={busy}/>}</details>
     <div className="actions"><Button disabled={busy} onClick={onClose}>{t('close')}</Button><Button type="submit" tone="primary" disabled={busy || !intake.canRetry || !note.trim()}>{busy ? t('recoveryContinuing') : t('recoveryContinue')}</Button></div>
   </form>;

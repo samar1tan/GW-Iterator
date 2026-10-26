@@ -12,7 +12,7 @@ A temporary model-capacity failure must not erase an investigation, repeat compl
 - Manual recovery requires a note, a terminal previous native run, confirmed native cleanup, and terminal child runs. Completed goals cannot be retried. A recovery already starting or running cannot be started again.
 - A requested model must be an ID in the actual adapter model catalog. Without an override, recovery retains a known previous requested/effective model; it does not guess a model from a catalog's default marker. The override applies to the native supervisor only. Delegated roles retain their project configuration; refreshing that configuration is a separate explicit choice. Earlier role/run snapshots are unchanged.
 - `refreshConfiguration` defaults to false. A manual request may refresh the future project, workflow and current knowledge basis. Each basis revision is retained, with project/workflow revisions and source knowledge hashes. Automatic recovery never refreshes configuration.
-- Manual requests may explicitly extend the total token or execution-time limit. The note and previous/new policy are audited. Consumption and execution time are cumulative and never reset. `active-windows-v1` merges the actual supervisor/child execution intervals, so parallel work is not added twice; scheduled recovery backoff counts, while idle time after a stopped/failed execution does not. `createdAt` remains the original wall-clock creation time. Legacy timestamps supply the intervals without rewriting old snapshots, and the first recovery records the meter migration. A new native execution receives only the remaining reported token allowance and remaining execution time.
+- Manual requests may explicitly extend the action-round, total-token or execution-time limit. Limits can increase within their existing validation bounds; the required note and previous/new policy are audited. Already-used action rounds, consumption and execution time are cumulative and never reset. Completion checks the most recent dispatch with real accepted targets, even when a later stop or clarification decision exists, and still requires all linked work to be terminal. `active-windows-v1` merges the actual supervisor/child execution intervals, so parallel work is not added twice; scheduled recovery backoff counts, while idle time after a stopped/failed execution does not. `createdAt` remains the original wall-clock creation time. Legacy timestamps supply the intervals without rewriting old snapshots, and the first recovery records the meter migration. A new native execution receives only the remaining reported token allowance and remaining execution time.
 - The GWI token meter uses the shared `budgetTokens` helper over reported `Usage`; raw counts and the native goal meter remain distinct. Missing usage remains unavailable and is not described as an exact zero or a monetary cost.
 
 ## Automatic recovery
@@ -31,7 +31,7 @@ Waiting uses `retry_wait` and `nextRetryAt`. The existing engine reconciliation 
 
 ```ts
 { note: string; model?: string; refreshConfiguration?: boolean;
-  policy?: { maxTotalTokens?: number; maxElapsedSeconds?: number;
+  policy?: { maxRounds?: number; maxTotalTokens?: number; maxElapsedSeconds?: number;
     recovery?: GoalRecoveryPolicy } }
 ```
 
