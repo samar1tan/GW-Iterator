@@ -435,3 +435,55 @@ test('recovered completion uses the latest dispatch despite later stop or clarif
     second.completion.resolve({status:'complete',summary:'Retained accepted evidence completes the synthetic objective.'});await pump(h,()=>current(h,item).status==='completed','native completion after accepted evidence');
   });
 });
+
+function deliveryFlow(h:Fixture):Pipeline {
+  const initial=h.engine.createPipeline({projectId:h.project.id,roleId:'operations',name:'Synthetic manual delivery'},OWNER);
+  return h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'delivery',name:'Manual browser and delivery acceptance',roleId:'operations',executor:'manual',dependsOn:[],prompt:'Record the actual synthetic browser and delivery evidence.',review:false}]},OWNER);
+}
+
+test('a blocked native supervisor preserves manual delivery and deployment observation until explicit continuation',async t=>{
+  const h=await fixture(t),project=h.engine.project(h.project.id);h.project=await h.engine.updateProject(project.id,project.revision,{...project,repository:'synthetic-owner/synthetic-repository'},OWNER);
+  const delivery=deliveryFlow(h),initial=h.engine.createPipeline({projectId:h.project.id,roleId:'operations',name:'Synthetic deployment observation'},OWNER);
+  const deployment=h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'observe',name:'Observe synthetic deployment',roleId:'operations',executor:'github',dependsOn:[],prompt:'Observe the configured synthetic CI run.',review:false,options:{mode:'observe'}}]},OWNER);
+  const observation=deferred<{status:'completed'|'queued';summary:string;runId:number}>();h.engine.github.observe=async()=>observation.promise;
+  const item=create(h),first=h.codex.goals[0];
+  try{
+    const delegated=first.input.onTool('intake.route',decision('dispatch',[task(delivery,'Record manual acceptance.'),task(deployment,'Observe the deployment.')]));
+    await pump(h,()=>current(h,item).targetRunIds.length===2&&h.engine.run(current(h,item).targetRunIds[0]).status==='waiting'&&h.engine.run(current(h,item).targetRunIds[1]).status==='running','manual and deployment work');
+    const [manualId,deploymentId]=current(h,item).targetRunIds;
+    first.completion.resolve({status:'blocked',summary:'Waiting for manual browser acceptance and the deployment observation.'});
+    await pump(h,()=>current(h,item).status==='clarification'&&h.engine.run(item.routerRunId).status==='cancelled','the native handoff');
+    assert.equal((await delegated as {handoff:boolean}).handoff,true);
+    assert.equal(h.engine.run(manualId).status,'waiting');assert.equal(h.engine.run(deploymentId).status,'running');assert.equal(h.engine.run(deploymentId).cancelRequested,undefined);
+    assert.equal(current(h,item).canRetry,false);await assert.rejects(h.intake.retry(item.id,{note:'Do not duplicate pending handoff work.',model:'synthetic-primary'},OWNER),code('RECOVERY_NOT_READY'));
+    const previousAttempt=structuredClone(h.engine.run(item.routerRunId).stages[0].attempts[0]);
+    h.engine.completeManual(manualId,'delivery',{...OUTPUT,summary:'The synthetic live browser and delivery checks passed.'},OWNER);
+    observation.resolve({status:'completed',summary:'The synthetic deployment succeeded.',runId:314});
+    await pump(h,()=>current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='completed'),'the existing handoff outcomes');
+    assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'clarification');assert.equal(current(h,item).canRetry,true);assert.deepEqual(h.engine.run(item.routerRunId).stages[0].attempts[0],previousAttempt);
+    await h.intake.retry(item.id,{note:'The existing manual and deployment evidence is complete; perform final acceptance.',model:'synthetic-primary'},OWNER);
+    assert.equal(h.codex.goals.length,2);await h.codex.goals[1].input.onTool('intake.route',decision('complete'));h.codex.goals[1].completion.resolve({status:'complete',summary:'Accepted the retained manual and deployment evidence.'});
+    await pump(h,()=>current(h,item).status==='completed','explicit final native acceptance');assert.deepEqual(h.engine.run(item.routerRunId).stages[0].attempts[0],previousAttempt);
+  }finally{observation.resolve({status:'completed',summary:'Synthetic observation teardown.',runId:314});await immediate();}
+});
+
+test('handoff preservation never suppresses explicit cancellation, capacity or execution limits',async t=>{
+  for(const mode of ['cancel','native_budget','capacity','handoff_budget','handoff_timeout'] as const)await t.test(mode,async sub=>{
+    const h=await fixture(sub),delivery=deliveryFlow(h),item=create(h),first=h.codex.goals[0];
+    const delegated=first.input.onTool('intake.route',decision('dispatch',[task(delivery),task(h.flows[0])]));void delegated.catch(()=>{});
+    await pump(h,()=>current(h,item).targetRunIds.length===2&&h.codex.tasks.length===1,'work that must still obey stop conditions');
+    if(mode==='capacity')first.input.onEvent({type:'error',message:CAPACITY,ref:first.ref,data:{code:'model_at_capacity'}});
+    first.completion.resolve({status:mode==='native_budget'?'budgetLimited':'blocked',summary:mode==='capacity'?CAPACITY:'A synthetic native handoff or limit.'});
+    if(mode==='native_budget'||mode==='capacity'){
+      await pump(h,()=>current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='cancelled'),'required native-failure cleanup');
+      assert.equal(current(h,item).status,mode==='capacity'?'failed':'stopped');
+    }else{
+      await pump(h,()=>current(h,item).status==='clarification','the pending handoff');assert.equal(h.codex.tasks[0].aborted,false);
+      if(mode==='cancel')h.intake.cancel(item.id,'Explicitly stop the pending handoff.',OWNER);
+      if(mode==='handoff_budget')h.codex.tasks[0].input.onEvent({type:'usage',message:'Actual reported synthetic usage exceeds the goal limit.',usage:{input:10000,output:1,total:10001}});
+      if(mode==='handoff_timeout'){const manual=h.engine.run(current(h,item).targetRunIds[0]);manual.stages[0].attempts[0].startedAt=new Date(Date.now()-301000).toISOString();h.engine.store.put('run',manual);}
+      await pump(h,()=>current(h,item).status==='stopped'&&current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='cancelled'),'explicit or bounded handoff cleanup');
+    }
+    await delegated;assert.equal(h.codex.tasks[0].aborted,true);assert.equal(h.codex.goals.length,1);
+  });
+});
