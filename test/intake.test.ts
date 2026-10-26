@@ -621,8 +621,10 @@ test('planner restart preserves pending work and old native records until explic
   h.engine.completeManual(manualId, 'delivery', OUTPUT, OWNER);
   await pump(h, () => current(h, item).canRetry === true, 'explicit continuation availability');
   assert.equal(planner.calls.length, 1); assert.deepEqual(h.engine.run(legacy.routerRunId), legacyRecord);
-  await h.intake.retry(item.id, {note: 'Continue from the already accepted manual evidence.', model: 'synthetic-primary'}, OWNER);
+  const continuationNote = 'Continue from the already accepted manual evidence.', continuationReason = current(h, item).error;
+  await h.intake.retry(item.id, {note: continuationNote, model: 'synthetic-primary'}, OWNER);
   assert.equal(planner.calls.length, 2); assert.equal(planner.calls[1].input.observations[0].status, 'completed');
+  assert.equal(planner.calls[0].input.continuation, undefined); assert.deepEqual(planner.calls[1].input.continuation, {note: continuationNote, reason: continuationReason});
   planner.calls[1].completion.resolve({decision: decision('complete')});
   await pump(h, () => current(h, item).status === 'completed', 'explicitly continued goal completion');
   const recovery = current(h, item).recoveryHistory!.at(-1)!;

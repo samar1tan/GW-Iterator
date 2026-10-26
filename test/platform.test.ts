@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
@@ -8,7 +9,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import test from 'node:test';
 import type {TestContext} from 'node:test';
-import type {Actor, RoleProfile, TaskOutput} from '../src/contracts.ts';
+import type {Actor, KnowledgeEntry, RoleProfile, TaskOutput} from '../src/contracts.ts';
 import type {AgentExecutionInput, CodexAdapter} from '../src/adapters/types.ts';
 import {MulticaClient} from '../src/adapters/multica.ts';
 import type {MulticaAgent, MulticaIssue, MulticaProject, MulticaTask} from '../src/adapters/multica.ts';
@@ -174,10 +175,14 @@ test('reconciled issue-only planner usage remains in the cumulative allowance fo
 
 test('an issued MCP capability expires after authoritative task completion and never appears in team responses', async t => {
   const h = await fixture(t), gate = h.taskGate; h.state.taskListGate = gate.promise;
-  const reported: unknown[] = [], started = await h.execution.agent.start(h.input({onEvent: event => {if (event.usage) reported.push(event.usage);}}));
+  const external = {type: 'http', url: 'https://example.invalid/synthetic-tools', headers: {Authorization: 'SYNTHETIC_EXTERNAL_AUTH'}, default_tools_approval_mode: 'prompt'};
+  const template: MulticaAgent = {id: 'synthetic-external-template', workspace_id: WORKSPACE, name: 'Synthetic template', runtime_id: 'synthetic-runtime', status: 'active', mcp_config: {mcpServers: {external}}}; h.state.agents.set(template.id, structuredClone(template));
+  const input = h.input(), reported: unknown[] = [], started = await h.execution.agent.start({...input, role: {...input.role, sandbox: 'read-only', multica: {agentId: template.id, runtimeId: template.runtime_id}}, onEvent: event => {if (event.usage) reported.push(event.usage);}});
   assert.equal(started.ref.provider, 'multica'); assert.ok(started.ref.issueId); assert.equal(started.ref.externalId, undefined);
   const worker = [...h.state.agents.values()].find(agent => agent.description?.includes('Execution synthetic-attempt'))!;
-  const config = worker.mcp_config as {mcpServers: {gwi: {url: string; headers: {Authorization: string}}}}, authorization = config.mcpServers.gwi.headers.Authorization;
+  const config = worker.mcp_config as {mcpServers: {external: unknown; gwi: {url: string; headers: {Authorization: string}; default_tools_approval_mode: string}}}, authorization = config.mcpServers.gwi.headers.Authorization;
+  assert.equal(config.mcpServers.gwi.default_tools_approval_mode, 'approve'); assert.deepEqual(config.mcpServers.external, external); assert.deepEqual(h.state.agents.get(template.id), template);
+  assert.match(worker.instructions!, /GWI owns coordination and result delivery/); assert.match(worker.instructions!, /final JSON directly/); assert.match(worker.instructions!, /Do not create Multica comments, reporting files/); assert.ok(worker.custom_args?.includes('default_permissions="gwi-readonly"'));
   const rpc = async () => fetch(config.mcpServers.gwi.url, {method: 'POST', headers: {authorization, 'content-type': 'application/json', accept: 'application/json, text/event-stream'}, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/list', params: {}})});
   const live = await rpc(); assert.equal(live.status, 200); const listed = await live.json() as {result: {tools: {name: string}[]}}; assert.deepEqual(listed.result.tools.map(tool => tool.name), ['gwi_context_read']);
   assert.equal(JSON.stringify(await h.platform.team(h.project.id, OWNER)).includes(authorization.slice('Bearer '.length)), false);
@@ -185,6 +190,23 @@ test('an issued MCP capability expires after authoritative task completion and n
   task.status = 'completed'; task.usage = [{model: 'synthetic-model', input_tokens: 1, output_tokens: 1}];
   const result = await started.completion; assert.deepEqual(result.output, OUTPUT); assert.deepEqual(result.usage, {input: 420, output: 20, cachedInput: 300, total: 440}, 'Late lower provider readings cannot reset consumed allowance.');
   assert.equal((await rpc()).status, 401); assert.equal(h.execution.records('synthetic-run')[0].cleanupConfirmed, true);
+});
+
+test('planner context carries continuation and role sandboxes while bounding knowledge without losing provenance', async t => {
+  const h = await fixture(t), project = structuredClone(h.project);
+  project.roles.push({...project.roles[0], id: 'synthetic-retired-role', name: 'Retired synthetic role', retired: true});
+  const knowledge: KnowledgeEntry[] = Array.from({length: 6}, (_, index): KnowledgeEntry => {const content = (`Synthetic planner knowledge ${index}. `).repeat(180); return {id: `synthetic-knowledge-${index}`, projectId: project.id, sourceId: 'synthetic-source', kind: 'document', title: `Synthetic knowledge ${index}`, content, hash: createHash('sha256').update(content).digest('hex'), revision: index + 1, roles: index % 2 ? ['lead'] : [], status: 'current', syncedAt: '2026-01-01T00:00:00.000Z'};});
+  knowledge.push({...knowledge[0], id: 'synthetic-qa-private', title: 'QA private context', content: 'SYNTHETIC_QA_ONLY_CONTEXT', roles: ['qa']});
+  const originalProject = structuredClone(project), originalKnowledge = structuredClone(knowledge), continuation = {note: 'The task-scoped MCP approval configuration is repaired; verify the failed action again.', reason: 'The previous action could not receive its authorized MCP tools.'};
+  h.state.taskResult = () => JSON.stringify({action: 'stop', rationale: 'The synthetic context check is complete.', expectedGain: 'No extra work.', tasks: []});
+  const started = await h.execution.planner.start({project, pipelines: [], knowledge, request: 'Inspect the bounded synthetic continuation.', baseline: 'Synthetic committed input.', continuation, rounds: [], observations: [], remaining: {tokens: 5000, seconds: 10, rounds: 3}, signal: new AbortController().signal, onEvent() {}, executionId: 'synthetic-planner-context'});
+  await started.completion;
+  const prompt = String(h.state.requests.find(request => request.method === 'POST' && request.path === '/api/issues')!.body.description), line = prompt.split('\n').find(value => value.startsWith('{"request":'))!;
+  const brief = JSON.parse(line) as {continuation: {note: string; reason: string}; roles: {id: string; sandbox: string}[]; knowledge: {id: string; revision: number; hash: string; excerpt: string}[]};
+  assert.deepEqual(brief.continuation, continuation); assert.equal(brief.roles.find(role => role.id === 'lead')?.sandbox, 'read-only'); assert.equal(brief.roles.find(role => role.id === 'development')?.sandbox, 'workspace-write'); assert.equal(brief.roles.some(role => role.id === 'synthetic-retired-role'), false);
+  assert.equal(brief.knowledge.length, 4); assert.equal(line.includes('SYNTHETIC_QA_ONLY_CONTEXT'), false);
+  for (const [index, entry] of brief.knowledge.entries()) assert.deepEqual(entry, {id: knowledge[index].id, title: knowledge[index].title, revision: knowledge[index].revision, hash: knowledge[index].hash, excerpt: knowledge[index].content.slice(0, 1500)});
+  assert.deepEqual(project, originalProject); assert.deepEqual(knowledge, originalKnowledge);
 });
 
 test('real HTTP planner references advance only after authoritative completion and human acceptance without paid waiting', async t => {

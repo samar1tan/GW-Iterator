@@ -9,6 +9,7 @@ export type GoalPlannerObservation = {
 export type GoalPlannerInput = {
   project: Project; pipelines: Pipeline[]; knowledge: KnowledgeEntry[];
   request: string; baseline: string; rounds: IntakeRound[]; observations: GoalPlannerObservation[];
+  continuation?:{note:string;reason:string};
   remaining: {tokens: number; seconds: number; rounds: number};
   signal: AbortSignal; onEvent: (event: AdapterEvent) => void; executionId: string;
 };

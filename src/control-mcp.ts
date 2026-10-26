@@ -16,7 +16,8 @@ export class ControlMcp {
     const secret=randomBytes(32).toString('hex'),key=this.key(secret);
     const lease:Lease={tools:[...new Set(tools)].filter(tool=>tool in TOOL_DEFINITIONS),invoke,expiresAt:Date.now()+seconds*1000};
     this.leases.set(key,lease);
-    return{config:{mcpServers:{gwi:{type:'http',url:this.origin+'/mcp/control',headers:{Authorization:'Bearer '+secret}}}},revoke:()=>this.leases.delete(key)};
+    // Only this short-lived, role-scoped server is preauthorized by the GWI role contract.
+    return{config:{mcpServers:{gwi:{type:'http',url:this.origin+'/mcp/control',headers:{Authorization:'Bearer '+secret},default_tools_approval_mode:'approve'}}},revoke:()=>this.leases.delete(key)};
   }
   private key(secret:string){return createHash('sha256').update(secret).digest('hex');}
   private lease(request:IncomingMessage){
@@ -29,7 +30,7 @@ export class ControlMcp {
     const server=new Server({name:'gwi-project-control',version:'0.1.0'},{capabilities:{tools:{}}});
     const transport=new StreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
     const names=new Map(lease.tools.map(tool=>['gwi_'+tool.replaceAll('.','_'),tool]));
-    server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[...names].map(([name,tool])=>({name,description:TOOL_DEFINITIONS[tool].description,inputSchema:{type:'object' as const,properties:TOOL_DEFINITIONS[tool].properties,required:TOOL_DEFINITIONS[tool].required,additionalProperties:false}}))}));
+    server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[...names].map(([name,tool])=>({name,description:TOOL_DEFINITIONS[tool].description,annotations:{readOnlyHint:['context.read','knowledge.search','pipeline.read','run.read'].includes(tool),destructiveHint:['run.start','intake.route','pipeline.write'].includes(tool),idempotentHint:['context.read','knowledge.search','pipeline.read','run.read','run.start'].includes(tool),openWorldHint:['run.start','intake.route'].includes(tool)},inputSchema:{type:'object' as const,properties:TOOL_DEFINITIONS[tool].properties,required:TOOL_DEFINITIONS[tool].required,additionalProperties:false}}))}));
     server.setRequestHandler(CallToolRequestSchema,async message=>{
       try{
         this.lease(request);const tool=names.get(message.params.name);demand(tool,'TOOL_NOT_ALLOWED','This role cannot use the requested tool.',403);

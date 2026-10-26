@@ -21,6 +21,7 @@ const en = {
   conditionNeedsDependency:'Connect an upstream stage before adding a condition.',
   proposals:'Process proposals', inspectProposal:'Review proposal', sourceExecution:'Source execution', applyProposal:'Apply to future work', propose:'Propose revision', proposalReason:'Reason and supporting evidence', invalidDefinition:'A definition must contain stages with stable IDs and dependency arrays.',
   skillReadFailed:'Skill content was not returned. Refresh before editing.', replay:'Replay', noBoundSkills:'No skills are bound to this role.',
+  fullRequest:'Full request',
   integrations:'Integrations', agentExecution:'Agent execution: Multica',
   roleManagedAgent:'Managed by role configuration', roleSettings:'Role settings',
   externalState:'External execution', externalStatus:'Reported status', externalStateUnavailable:'External execution records were not returned.', externalEnded:'The previous external task has ended. Its recorded result still needs review.', externalUnconfirmed:'Confirm that the previous external task has ended before retrying.', reconcileExternal:'Check external state', reconcileHelp:'This check observes the existing task and does not start another task.',
@@ -32,6 +33,7 @@ const en = {
 } as const;
 type Key = keyof typeof en;
 const zh: Record<Key,string> = {
+  fullRequest:'完整需求',
   integrations:'集成', agentExecution:'代理执行：Multica',
   roleManagedAgent:'由角色配置管理', roleSettings:'角色设置',
   externalState:'外部执行', externalStatus:'已报告状态', externalStateUnavailable:'未返回外部执行记录。', externalEnded:'已确认上次外部任务结束；已有结果仍需审阅。', externalUnconfirmed:'重试前，先确认上次外部任务已结束。', reconcileExternal:'核对外部状态', reconcileHelp:'此操作只核对已有任务，不会启动新任务。',
