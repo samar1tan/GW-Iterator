@@ -118,6 +118,7 @@ export class IntakeService {
   }
   private async launch(item:Intake,basis:Basis,active:Active):Promise<void>{
     const runId=active.runId;
+    let handoff=false;
     try{
       const frozen=this.engine.run(runId),owner=frozen.snapshot.project.roles.find(value=>value.id===frozen.snapshot.pipeline.roleId)!,catalog=basis.pipelines.map(value=>({id:value.id,name:value.name,role:value.roleId,description:value.description,stages:value.stages.map(stage=>({name:stage.name,role:stage.roleId,review:stage.review,executor:stage.executor}))}));
       const role={...owner,sandbox:'read-only' as const,skills:[],tools:['context.read','knowledge.search','pipeline.read','run.read','intake.route'] as const};
@@ -133,9 +134,13 @@ export class IntakeService {
         else{current.status=result.status==='blocked'?'clarification':'stopped';current.outcome=`Native goal ended with ${result.status}: ${result.summary}`;this.save(current,'goal.ended');}
       }
       this.changeRun(current,(run,attempt)=>{const status=current.status==='completed'?'completed':current.status==='failed'?'failed':'cancelled';run.status=run.stages[0].status=attempt.status=status;attempt.endedAt=run.endedAt=at();attempt.nativeCleanupConfirmed=true;attempt.usage=result.usage??attempt.usage;if(result.nativeGoal)attempt.nativeGoal={status:result.nativeGoal.status,tokensUsed:result.nativeGoal.tokensUsed,timeUsedSeconds:result.nativeGoal.timeUsedSeconds};attempt.output={outcome:status==='completed'?'done':'blocked',summary:result.summary||current.outcome||current.question||'Goal ended.',artifacts:[],observations:[]};if(current.error)attempt.error=current.error;run.stopReason=current.error??current.outcome??current.question;},runId);
+      if(!this.closed&&current.status==='clarification'&&(result.status==='blocked'||decision?.action==='clarify')&&current.lastFailure?.kind!=='capacity'){
+        if(this.tokens(current)>=current.policy.maxTotalTokens||this.elapsed(current)>=current.policy.maxElapsedSeconds)this.stop(current,'Goal execution boundary reached.');
+        else{handoff=true;this.save(current,'goal.handoff');}
+      }
       const recovery=current.recoveryHistory?.find(value=>value.newRunId===runId);if(recovery){recovery.status=current.status==='completed'?'completed':active.controller.signal.aborted?'cancelled':'failed';recovery.endedAt=at();recovery.error=current.error??current.outcome;this.save(current);}
     }catch(error){const current=this.get(item.id);if(current.status==='routing'||current.status==='dispatched'){current.status='failed';current.error=error instanceof Error?error.message:'Native goal execution failed.';current.lastFailure={kind:isNativeCapacityFailure(current.error)?'capacity':'other',message:current.error,at:at(),runId,native:true};this.save(current,'goal.failed');}this.changeRun(current,(run,attempt)=>{run.status=run.stages[0].status=attempt.status=current.status==='failed'?'failed':'cancelled';attempt.nativeCleanupConfirmed=false;attempt.endedAt=run.endedAt=at();attempt.error=current.error??current.outcome??current.question;},runId);const recovery=current.recoveryHistory?.find(value=>value.newRunId===runId);if(recovery){recovery.status='failed';recovery.endedAt=at();recovery.error=current.error;this.save(current);}}
-    finally{active.wake?.({stopped:true});if(this.active.get(item.id)===active)this.active.delete(item.id);const current=this.get(item.id);if(current.status!=='completed')this.cancelActions(current,'Goal supervision ended.');if(!this.closed&&!active.controller.signal.aborted&&current.status==='failed'&&current.lastFailure?.kind==='capacity')this.scheduleRecovery(current);}
+    finally{if(this.active.get(item.id)===active)this.active.delete(item.id);const current=this.get(item.id),preserve=handoff&&current.status==='clarification'&&!this.closed;active.wake?.(preserve?{handoff:true,runIds:current.targetRunIds}:{stopped:true});if(current.status!=='completed'&&!preserve)this.cancelActions(current,'Goal supervision ended.');if(!this.closed&&!active.controller.signal.aborted&&current.status==='failed'&&current.lastFailure?.kind==='capacity')this.scheduleRecovery(current);}
   }
   private family(item:Intake):Run[]{const all=this.engine.store.list<Run>('run'),ids=new Set([...(item.supervisorRunIds??[item.routerRunId]),...item.targetRunIds]);let changed=true;while(changed){changed=false;for(const run of all)if(run.parentRunId&&ids.has(run.parentRunId)&&!ids.has(run.id)){ids.add(run.id);changed=true;}}return all.filter(run=>ids.has(run.id));}
   private tokens(item:Intake):number{return this.family(item).reduce((sum,run)=>sum+run.stages.reduce((a,stage)=>a+stage.attempts.reduce((b,attempt)=>b+(attempt.usage?budgetTokens(attempt.usage):0),0),0),0);}
@@ -228,9 +233,13 @@ export class IntakeService {
   }
   reconcile():void{
     if(this.closed||this.reconciling)return;this.reconciling=true;
-    try{for(const stored of this.engine.store.list<Intake>('intake').filter(value=>['routing','dispatched','retry_wait'].includes(value.status))){
+    try{for(const stored of this.engine.store.list<Intake>('intake').filter(value=>['routing','dispatched','retry_wait','clarification'].includes(value.status))){
       const item=this.normalize(stored);
       if(this.dispatching.has(item.id))continue;
+      if(item.status==='clarification'){
+        if(this.elapsed(item)>=item.policy.maxElapsedSeconds||this.tokens(item)>=item.policy.maxTotalTokens)this.stop(item,'Goal execution boundary reached.');
+        continue;
+      }
       if(item.status==='retry_wait'){
         const recovery=item.recoveryHistory!.findLast(value=>value.status==='scheduled');
         if(!this.scheduled.has(item.id)||!recovery){item.status='failed';item.error='Supervisor restarted; inspect the recorded execution before manual recovery.';delete item.nextRetryAt;if(recovery){recovery.status='cancelled';recovery.endedAt=at();recovery.error=item.error;}this.save(item,'goal.recovery_interrupted');continue;}
