@@ -53,6 +53,12 @@ function isCredentialPath(path: string): boolean {
     || /\.(?:pem|key|p12|pfx|kdbx|keychain(?:-db)?)$/.test(name);
 }
 
+function isWorkflowFile(path: string): boolean {
+  const parts = path.split(sep);
+  return parts.at(-3) === '.github' && parts.at(-2) === 'workflows'
+    && ['.yml', '.yaml'].includes(extname(path).toLowerCase());
+}
+
 function readableError(error: unknown): SourceError {
   if (error instanceof SourceError) return error;
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
@@ -114,11 +120,13 @@ function selectContent(content: string, source: KnowledgeSource, path: string): 
   return { content: content.trimEnd(), title: headings[0]?.title || basename(path) };
 }
 
-async function readText(path: string, root: string, budget: { bytes: number }): Promise<{ text: string; sourcePath: string }> {
+async function readText(path: string, root: string, budget: { bytes: number }, explicitWorkflowArtifact = false): Promise<{ text: string; sourcePath: string }> {
   const before = await realpath(path);
   if (!isWithin(root, before)) throw new SourceError('A symbolic link leaves the configured source root.');
   if (isCredentialPath(before)) throw new SourceError('Credential and runtime configuration files cannot be indexed.');
-  if (!TEXT_EXTENSIONS.has(extname(before).toLowerCase())) throw new SourceError('Only Markdown, text and reStructuredText files can be indexed.');
+  if (!TEXT_EXTENSIONS.has(extname(before).toLowerCase()) && !(explicitWorkflowArtifact && isWorkflowFile(before))) {
+    throw new SourceError('Use Markdown, text, reStructuredText or an explicitly registered workflow artifact.');
+  }
   const handle = await open(before, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const info = await handle.stat();
@@ -195,7 +203,7 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
     async function indexFile(path: string, sourceRelativePath: string, root: string): Promise<void> {
       try {
         if (isCredentialPath(path)) throw new SourceError('Credential and runtime configuration files cannot be indexed.');
-        const read = await readText(path, root, budget);
+        const read = await readText(path, root, budget, sourceRelativePath === '.' && source.kind === 'artifact' && isWorkflowFile(path));
         const selected = selectContent(read.text, source, path);
         const id = entryId(project.id, source.id, sourceRelativePath);
         const prior = previousById.get(id);

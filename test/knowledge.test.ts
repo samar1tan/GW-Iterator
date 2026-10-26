@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { mkdtemp, mkdir, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -216,6 +217,76 @@ test('directory traversal accepts a deliberate local report root and excludes ne
     assert.equal(resynced.stats.missing, 1);
     assert.equal(resynced.stats.unchanged, 2);
     assert.deepEqual(result.entries, snapshots);
+  });
+});
+
+test('explicit adopted workflow artifacts synchronize as text with their role tags and content hash', async () => {
+  await fixture(async workspace => {
+    const directory = join(workspace, '.github', 'workflows');
+    await mkdir(directory, { recursive: true });
+    const roles = ['development', 'qa'];
+    const workflows = [
+      { name: 'ci.yml', content: 'name: Synthetic checks\non: push\njobs: {}' },
+      { name: 'review.yaml', content: 'name: Synthetic review\non: workflow_dispatch\njobs: {}' },
+    ];
+    for (const workflow of workflows) await writeFile(join(directory, workflow.name), workflow.content);
+    const config = project(workspace, workflows.map((workflow, index) => source(join(directory, workflow.name), {
+      id: `adopted-workflow-${index}`, kind: 'artifact', roles,
+    })));
+    const first = await syncKnowledge(config, []);
+    assert.deepEqual(first.stats, { added: 2, changed: 0, unchanged: 0, missing: 0, errors: 0 });
+    for (const [index, workflow] of workflows.entries()) {
+      const entry = first.entries.find(item => item.sourceId === `adopted-workflow-${index}`)!;
+      assert.equal(entry.status, 'current');
+      assert.equal(entry.kind, 'artifact');
+      assert.deepEqual(entry.roles, roles);
+      assert.equal(entry.title, workflow.name);
+      assert.equal(entry.content, workflow.content);
+      assert.equal(entry.sourcePath, join(directory, workflow.name));
+      const hash = createHash('sha256').update(workflow.content).digest('hex');
+      assert.equal(entry.hash, hash);
+      assert.equal(entry.sourceRevision, `sha256:${hash}`);
+      assert.equal(entry.revision, 1);
+    }
+    const unchanged = await syncKnowledge(config, first.entries);
+    assert.equal(unchanged.stats.unchanged, 2);
+    assert.deepEqual(unchanged.entries.map(entry => [entry.id, entry.hash, entry.revision]), first.entries.map(entry => [entry.id, entry.hash, entry.revision]));
+    assert.equal(searchKnowledge(first.entries, 'Synthetic', 'qa', 'artifact').length, 2);
+  });
+});
+
+test('the workflow exception rejects other YAML, credential paths and non-artifact registrations', async () => {
+  await fixture(async workspace => {
+    const directory = join(workspace, '.github', 'workflows');
+    await mkdir(join(directory, 'nested'), { recursive: true });
+    const paths = ['runtime.yaml', '.github/settings.yml', '.github/workflows/credentials.yml', '.github/workflows/nested/ci.yml'];
+    for (const path of paths) await writeFile(join(workspace, path), 'PRIVATE_UNSUPPORTED_YAML');
+    const workflow = join(directory, 'ci.yml');
+    await writeFile(workflow, 'name: A workflow requiring an explicit artifact registration');
+    const config = project(workspace, [
+      ...paths.map((path, index) => source(join(workspace, path), { id: `unsupported-${index}`, kind: 'artifact' })),
+      source(workflow, { id: 'wrong-kind-document', kind: 'document' }),
+      source(workflow, { id: 'wrong-kind-memory', kind: 'memory' }),
+    ]);
+    const result = await syncKnowledge(config, []);
+    assert.equal(result.stats.added, 0);
+    assert.equal(result.stats.errors, 6);
+    assert.ok(result.entries.every(entry => entry.status === 'error' && entry.content === ''));
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_UNSUPPORTED_YAML/);
+  });
+});
+
+test('directory discovery does not adopt workflow YAML through the explicit-file exception', async () => {
+  await fixture(async workspace => {
+    const directory = join(workspace, '.github', 'workflows');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'ci.yml'), 'UNSELECTED_WORKFLOW_YAML');
+    await writeFile(join(directory, 'review.yaml'), 'UNSELECTED_WORKFLOW_YAML');
+    await writeFile(join(directory, 'README.md'), '# Workflow notes\nAn ordinary text source.');
+    const result = await syncKnowledge(project(workspace, [source(directory, { kind: 'artifact' })]), []);
+    assert.deepEqual(result.stats, { added: 1, changed: 0, unchanged: 0, missing: 0, errors: 0 });
+    assert.equal(result.entries[0].title, 'Workflow notes');
+    assert.doesNotMatch(JSON.stringify(result), /UNSELECTED_WORKFLOW_YAML/);
   });
 });
 
