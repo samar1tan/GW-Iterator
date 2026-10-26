@@ -21,7 +21,7 @@ const en = {
   conditionNeedsDependency:'Connect an upstream stage before adding a condition.',
   proposals:'Process proposals', inspectProposal:'Review proposal', sourceExecution:'Source execution', applyProposal:'Apply to future work', propose:'Propose revision', proposalReason:'Reason and supporting evidence', invalidDefinition:'A definition must contain stages with stable IDs and dependency arrays.',
   skillReadFailed:'Skill content was not returned. Refresh before editing.', replay:'Replay', noBoundSkills:'No skills are bound to this role.',
-  fullRequest:'Full request',
+  focusedTemplate:'Focused change', singleRoleTemplate:'Single role task', fullRequest:'Full request',
   limitBasisChanged:'Limits changed while this draft was open. Load the current limits before saving.', reloadLimits:'Load current limits', pipelineAllowance:'Pipeline allowance', usedBudget:'{used} / {limit} new tokens used', extendLimits:'Extend limits', extendLimitsHelp:'This changes only this pipeline execution. Previous work and consumption stay recorded. Outcome limits are separate; saving does not start work.', limitReason:'Reason for further work', saveLimits:'Save limits',
   integrations:'Integrations', agentExecution:'Agent execution: Multica',
   roleManagedAgent:'Managed by role configuration', roleSettings:'Role settings',
@@ -34,7 +34,7 @@ const en = {
 } as const;
 type Key = keyof typeof en;
 const zh: Record<Key,string> = {
-  fullRequest:'完整需求',
+  focusedTemplate:'小范围变更', singleRoleTemplate:'单角色任务', fullRequest:'完整需求',
   limitBasisChanged:'此草稿打开后，额度已被更改。请载入当前额度后再保存。', reloadLimits:'载入当前额度', pipelineAllowance:'本次执行额度', usedBudget:'已用 {used} / {limit} 新 token', extendLimits:'调整额度', extendLimitsHelp:'仅调整本次流水线执行，保留已有工作和累计用量。目标有独立上限；保存后不会自动执行。', limitReason:'继续工作的依据', saveLimits:'保存额度',
   integrations:'集成', agentExecution:'代理执行：Multica',
   roleManagedAgent:'由角色配置管理', roleSettings:'角色设置',

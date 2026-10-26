@@ -43,7 +43,7 @@ export class Engine {
     const at=now(),project:Project={id:newId(),revision:1,name:input.name,description:input.description??'',workspace:input.workspace,repository:input.repository??'',roles:defaultRoles(),knowledgeSources:[],createdAt:at,updatedAt:at};
     validateProject(project);demand((await stat(project.workspace).catch(()=>null))?.isDirectory(),'WORKSPACE_NOT_FOUND','Choose an existing workspace directory.');
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
-    this.store.transaction(()=>{this.putProject(project);for(const role of project.roles)this.putPipeline(defaultPipeline(project,role.id));this.putPipeline(defaultPipeline(project,'lead','product'));this.putPipeline(defaultPipeline(project,'operations','operations'));this.audit(actor,project.id,'project.created','Project and role workflows created.');});return project;
+    this.store.transaction(()=>{this.putProject(project);for(const role of project.roles)this.putPipeline(defaultPipeline(project,role.id));this.putPipeline(defaultPipeline(project,'lead','product'));this.putPipeline(defaultPipeline(project,'operations','operations'));this.putPipeline(defaultPipeline(project,'development','focused'));this.audit(actor,project.id,'project.created','Project and role workflows created.');});return project;
   }
   async updateProject(id:string,expectedRevision:number,input:Project,actor:Actor):Promise<Project>{
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);

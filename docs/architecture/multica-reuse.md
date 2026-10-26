@@ -1,33 +1,22 @@
-# Multica backend reuse
+# Multica integration
 
-Assessed on 2026-10-26 at `e8fdcfd226d238e6f1f22d5d95245936a795d9fd`. The latest release observed was `v0.7.0` (2026-10-23). Findings against this main-branch commit are not verified release capabilities. No upstream backend or daemon has been deployed in this assessment.
+GWI connects to the real [Multica](https://github.com/multica-ai/multica) backend and daemon at source revision `a097f592be73067d56908ca50ece557fa2af1293`. The integration uses the pinned App API; it is not only a source assessment or a frontend mock. The [local setup command](../multica-setup.md) builds the separate dependency and verifies native permissions without a model turn.
 
-An independently written GWI frontend can use Multica without running its frontend. Prefer reusing project/agent/skill management and native task execution behind an adapter. GWI retains its iteration contract and knowledge layer. Do not run two native tasks for one stage or let two schedulers own the same transition.
+| Authority | Responsibility |
+| --- | --- |
+| Multica | Projects, agents, skills, MCP connections, queued tasks, native execution, task messages and actual provider results. |
+| GWI | Project knowledge, frozen workflow/role bases, dependencies, bounded decisions, review/rework, cumulative limits and accepted outcomes. |
+| GitHub | Repository, pull request, CI and publication facts observed through the connected CLI. |
+| Supervising owner | Consequential scope decisions and acceptance of actual delivery evidence. |
 
-For this local version, use Codex's native goal API for the reasoning/continuation loop and keep GWI's project context, action constraints and audit records around it. Multica remains a feasible execution-provider option; adopting its issue/daemon lifecycle now would add a second task authority and a PostgreSQL deployment before it replaces the required native-goal contract. This is a bounded first-version choice, not a claim that Multica cannot be used headlessly.
+A GWI stage has one execution authority. The adapter persists an assignment intent before creating a task-bearing issue. A lost response is not permission to repeat a mutation. Reconciliation requires matching project, assignment, agent, runtime and task identities. Preparing an agent or a connection is distinct from dispatching model work.
 
-| Need | Reusable capability | GWI responsibility |
-| --- | --- | --- |
-| Project list and bindings | Projects and resource APIs | Private local mapping and project scope |
-| Roles and tools | Agents, skills and MCP bindings | Role policy and truthful effective permissions |
-| Codex execution | Daemon, task messages, status and cancellation | Stage linkage and outcome acceptance |
-| Handoffs and triggers | Issue workflows, chat, Autopilots | Strict dependencies and finite loops |
-| Knowledge | Repository/local directory resource references | Role indexing, provenance, revisions and frozen context |
-| Audit | Issue snapshots and task/timeline records | Full project/role/pipeline/knowledge basis |
+Each bounded goal decision ends before GWI waits for child work or a person. A stage DAG describes local dependencies; successive decisions, review returns and scoped retries form the larger iteration loop. Earlier accepted work, attempts and reported consumption remain inspectable. Legacy native-goal records and the native adoption/discovery adapter remain distinct compatibility paths.
 
-The inspected workflow is read at task-context creation and updates overwrite it. Next/back statuses are agent instructions; native task completion does not itself advance the issue. Upstream has real concurrency admission and retries, but a provider-network failure may expand its nominal retry ceiling. These are not substitutes for GWI's immutable basis, DAG or hard iteration limits.
+Workers use standalone committed-source checkouts. Generated role agents are immutable revisions; project custom agents and shared templates have explicit copy/binding behavior. Task-scoped MCP capabilities expose selected GWI tools without the owner token. Native sandbox behavior is tested separately from role instructions. Network access is enabled for local service communication and is not claimed to be restricted to localhost; filesystem read isolation is not claimed.
 
-The App API provides the needed resources. Stable Public API v1 currently covers a smaller issue/comment slice, so a headless client needs a pinned App API compatibility check. Tokens must stay server-side. Deployment needs the Go backend, PostgreSQL/pgvector and host CLI/daemon; the Next.js frontend can be omitted. Disable self-host telemetry explicitly for the private local deployment. The inspected macOS daemon chooses Codex `danger-full-access` as a network fallback: an adapter must address and report that effective boundary, rather than promise a read-only role it cannot enforce.
+Provider completion, valid structured output, independent verification and accepted delivery are different facts. Metadata synchronization cannot establish product acceptance or authorize another model execution. Exact references and unknown states are retained rather than replaced by invented success or cost data.
 
-Multica's license adds conditions to Apache-2.0. Part I permits backend/daemon/CLI use without its UI branding requirement, while requiring documentation attribution and the upstream link. Internal use in one organization needs no commercial license; third-party hosting and commercial embedding have further restrictions. Keep separately installed Multica's complete license/notices distinct from original Apache-licensed GWI source.
+Multica remains separately installed and licensed. Its complete license includes additional conditions beyond the incorporated Apache text. Read [the pinned license](https://github.com/multica-ai/multica/blob/a097f592be73067d56908ca50ece557fa2af1293/LICENSE), the setup guide and [third-party notices](../../THIRD_PARTY_NOTICES.md). GWI does not relicense upstream source or include private runtime settings.
 
-Before selecting this provider, test an isolated deployment: create/read a project and agent, execute one bounded Codex task, inspect actual messages/outcome, cancel another task, and record the effective policy and exact version. The current direct Codex adapter remains available for the real website acceptance run; source research alone does not justify migrating live work.
-
-Primary evidence:
-
-- [License, Part I](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/LICENSE).
-- [Self-hosting](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/SELF_HOSTING.md), [Compose](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/docker-compose.selfhost.yml).
-- [App routes](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/server/cmd/server/router.go), [Public API ledger](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/server/pkg/publicapi/v1/README.md).
-- [Workflow behavior](https://multica.ai/docs/workflows), [claim-time workflow context](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/server/internal/handler/issue_workflow_entry.go).
-- [Task snapshots and retries](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/server/internal/service/task.go).
-- [Codex sandbox selection](https://github.com/multica-ai/multica/blob/e8fdcfd226d238e6f1f22d5d95245936a795d9fd/server/internal/daemon/execenv/codex_sandbox.go).
+Primary integration references: [self-hosting](https://github.com/multica-ai/multica/blob/a097f592be73067d56908ca50ece557fa2af1293/SELF_HOSTING.md), [App routes](https://github.com/multica-ai/multica/blob/a097f592be73067d56908ca50ece557fa2af1293/server/cmd/server/router.go), and [workflow documentation](https://multica.ai/docs/workflows). Runtime observations and synthetic protocol tests are separate from product acceptance.

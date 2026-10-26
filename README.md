@@ -1,31 +1,36 @@
 # GW-Iterator
 
-GW-Iterator (GWI) is a local interface for explaining and supervising Codex goals. Submit an outcome in a project; Codex chooses available workflows, waits for their results, and decides the next useful action. GWI records the decisions, execution references, evidence and reported usage.
+GW-Iterator (GWI) is a local workbench for advancing project work through configurable teams, pipelines and feedback loops. It uses [Multica](https://github.com/multica-ai/multica) for agent execution and keeps project context, dependencies, review, limits and delivery evidence in one interface.
 
-Roles, pipelines and project knowledge provide resources for a goal. Initial templates let you begin without designing a workflow first. The interface supports English and Simplified Chinese.
+Choose a project, describe an outcome or run a saved pipeline, then follow the work on its stage canvas. Inspect actual changes and artifacts, return a finding to its owner, and accept delivery from evidence. The interface supports English and Simplified Chinese.
 
 ## Run locally
 
-Use Node.js 24–26 and npm. Install Codex on your `PATH` and sign in through Codex itself. You can select an executable with `GWI_CODEX_BIN` or the private runtime settings described in the [operating guide](docs/operating-guide.md#select-the-codex-executable). GitHub actions need an installed, signed-in `gh` CLI. Native goal entry requires Codex app-server support for goals.
+Use Node.js 24–26, Git, curl, Docker with Compose, and an authenticated local Codex installation. GitHub operations also need a signed-in `gh` CLI. macOS is the verified native execution platform; other hosts must pass the setup checks.
 
 ```sh
 npm ci --ignore-scripts
+node scripts/setup-multica.mjs
 npm run build
 npm start
 ```
 
-Open [the local app](http://127.0.0.1:4318). Use **Adopt existing project** to review a Codex setup proposal, or **Create project** for manual setup. Then use **Set a goal** on the project's Pipelines page. Add a repository binding when work needs GitHub. The project list reflects your private local state; populated project configurations are not included in this repository.
+Open [the local app](http://127.0.0.1:4318). Connect an existing project through its local workspace. Codex-assisted adoption can propose project guidance and knowledge sources for review. Real project settings and account connections are private local state; this repository contains no populated project configuration.
 
-For frontend development, use `npm run dev`. Run `npm test` for the automated checks.
+The [setup guide](docs/multica-setup.md) covers prerequisites, native permission probes, private state and recovery. Use `npm run dev` for frontend development and `npm test` for automated checks.
 
-## What to expect
+## Work in a project
 
-- Goals show concise reasons, expected gains and linked actions. Native Codex status and GWI's accepted result are shown separately.
-- Pipeline runs expose dependencies, attempts, human tasks, review, steering and cancellation. Configuration and knowledge revisions are captured for each run.
-- Knowledge uses explicitly registered local sources and retained lessons, with role filters and provenance.
+- **Workbench** shows current outcomes, pending decisions and delivered artifacts. A general request can coordinate several saved workflows.
+- **Pipelines** contains reusable definitions and executions. The visual editor supports dependencies, conditions, human gates, child pipelines and bounded return paths. A focused change starts with implementation, independent QA and delivery review.
+- **Team** connects role contracts to actual agents, skills, MCP tools and runtimes. Role changes create revisions; older runs keep their basis.
+- **Knowledge** indexes selected documents, artifacts, memory sections and verified lessons with provenance.
+- **Settings** holds project bindings and deliberate configuration changes.
 
-Starting an action does not establish that a goal is complete. A prepared change does not establish publication or deployment; inspect the recorded review and evidence. Execution budgets count uncached input plus output when reported, otherwise the gross token total. Raw usage and the native goal's meter remain inspectable; reports can be incomplete or delayed.
+GWI waits for human and CI results without repeatedly invoking the model. Execution and outcome completion remain separate. A prepared change does not establish publication: a delivery step must perform and record the required integration or release.
 
-Application state stays in `.local/state` by default. Keep that directory, tokens, project settings, knowledge, transcripts and captures out of publication. GWI uses Codex and GitHub's existing authentication; it does not import their credential files. The HTTP server binds to loopback.
+Agent work uses isolated checkouts of committed source. Dirty files, ignored state and installed dependencies are not copied. Inspect the recorded source revision, diff and artifact previews before accepting work. The original working directory is not silently overwritten.
 
-Read the [operating guide](docs/operating-guide.md) for controls and private API/CLI use, the [API reference](docs/API.md) for request formats, and the [goal recovery contract](docs/goal-recovery-prd.md) for restart and continuation rules. [Multica headless reuse](docs/architecture/multica-reuse.md) has been assessed from source; it is not a deployed integration. The current execution adapter talks directly to Codex.
+State, credentials, knowledge, transcripts and captures stay under ignored `.local/` directories by default. Services bind to loopback. Codex and GitHub manage their own authentication. Multica is a separately installed dependency with its [own license conditions](THIRD_PARTY_NOTICES.md).
+
+See the [operating guide](docs/operating-guide.md), [API reference](docs/API.md), [product requirements](docs/PRD.md) and [integration architecture](docs/architecture/multica-reuse.md).

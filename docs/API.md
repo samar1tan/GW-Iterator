@@ -4,7 +4,7 @@ UI and agents use the same versioned objects from `src/contracts.ts`. The server
 
 Browser requests use a same-origin HttpOnly session established by `GET /api/session`. Agent clients send the bearer token from the private runtime token file. Never put a token in a URL. Mutations reject an unexpected Origin or Host. JSON errors use `{error:{code,message,details?}}` and preserve existing state.
 
-The server resolves its Codex executable from `GWI_CODEX_BIN`, then `codexBinary` in the private `GWI_DATA_DIR/runtime.json`, then `codex` on `PATH`. Runtime JSON accepts an absolute `codexBinary` value and optional `defaultModel`; the model must be an ID from the installed Codex catalog. `GWI_CODEX_MODEL` overrides that runtime default; an explicit role model overrides the default. The default data directory is ignored `.local/state`; no actual runtime file or machine path is shipped. Restart the server after changing these settings. See [executable selection](operating-guide.md#select-the-codex-executable).
+The server resolves its Codex executable from `GWI_CODEX_BIN`, then `codexBinary` in the private `GWI_DATA_DIR/runtime.json`, then `codex` on `PATH`. Runtime JSON accepts an absolute `codexBinary` value and optional `defaultModel`; the model must be an ID from the installed Codex catalog. `GWI_CODEX_MODEL` overrides that runtime default; an explicit role model overrides the default. The default data directory is ignored `.local/state`; no actual runtime file or machine path is shipped. Restart the server after changing these settings. See [runtime settings](operating-guide.md#private-api-and-runtime-settings).
 
 | Method and route | Input and result |
 | --- | --- |
@@ -14,7 +14,7 @@ The server resolves its Codex executable from `GWI_CODEX_BIN`, then `codexBinary
 | `PUT /api/projects/:id` | `{expectedRevision,project:Project}` → next `Project` revision |
 | `GET /api/integrations` | `IntegrationInfo` |
 | `GET /api/projects/:id/skills` | `{skills:[{name,path,description}]}` discovered for this workspace |
-| `POST /api/pipelines` | `{projectId,name,description,roleId,template?}` → `Pipeline`; optional template is `product`, `operations`, `role` or `knowledge` |
+| `POST /api/pipelines` | `{projectId,name,description,roleId,template?}` → `Pipeline`; optional template is `focused`, `product`, `operations`, `role` or `knowledge` |
 | `PUT /api/pipelines/:id` | `{expectedRevision,definition:Pipeline}` → next pipeline revision; validates roles and DAG |
 | `POST /api/pipelines/:id/proposals` | `{expectedRevision,definition,rationale,runId?}` → `Proposal` |
 | `POST /api/proposals/:id/apply` | `{}` → updated pipeline; fails on stale proposal basis |
@@ -77,14 +77,14 @@ New goal decisions run once, return structured actions and end before GWI waits 
 - `POST /api/projects/:id/intakes`: `{request, baseline?, idempotencyKey, policy?}` creates a supervised goal. It does not require a role or pipeline selection.
 - `GET /api/projects/:id/intakes`: returns persisted goals and decision rounds. Project detail also includes `intakes`.
 - `POST /api/intakes/:id/cancel`: `{note}` records a stop and cancels owned work.
-- `POST /api/intakes/:id/retry`: `IntakeRetryInput` starts a fresh native supervisor for the same goal after cleanup, child-state and model-catalog checks. Read responses expose `canRetry` and `retryBlockedReason`.
-- Goal policy bounds `maxRounds`, `maxParallel`, `maxTotalTokens` and `maxElapsedSeconds`. A round may dispatch multiple existing workflows. The project-scoped `intake.route` tool records `dispatch`, `complete`, `clarify` or `stop`, concise rationale, expected gain and delegated tasks. It is valid only in the current goal supervision turn.
+- `POST /api/intakes/:id/retry`: `IntakeRetryInput` continues the same goal through a fresh bounded coordinator after cleanup, child-state and model-catalog checks. Read responses expose `canRetry` and `retryBlockedReason`.
+- Goal policy bounds `maxRounds`, `maxParallel`, `maxTotalTokens` and `maxElapsedSeconds`. A decision can dispatch existing workflows, retry a specific failed owned stage, complete, clarify or stop. The Multica coordinator returns one validated structured decision; GWI applies it and waits without keeping a model turn alive. Recorded legacy native-goal runs instead use the project-scoped `intake.route` tool.
 
 Restart and continuation behavior is specified in the [goal recovery contract](goal-recovery-prd.md). Recovery must be an explicit action based on recorded execution references, not an automatic replay of previously dispatched work.
 
-`IntakeRetryInput` is `{note,model?,refreshConfiguration?,policy?}`. The optional policy can extend `maxRounds`, `maxTotalTokens` or `maxElapsedSeconds` and set `recovery: {autoRetry,maxAttempts,backoffSeconds,allowedFallbackModels}`. The note is required. Defaults keep the prior configuration basis and known model; a model override affects the native supervisor, while delegated roles retain their project settings. Explicit configuration refresh creates a new future basis. Earlier snapshots, decisions, runs and cumulative consumption are preserved. Duplicate active recovery, completed goals, unknown native cleanup or active children are rejected.
+`IntakeRetryInput` is `{note,model?,refreshConfiguration?,policy?}`. The optional policy can extend `maxRounds`, `maxTotalTokens` or `maxElapsedSeconds` and set `recovery: {autoRetry,maxAttempts,backoffSeconds,allowedFallbackModels}`. The note is required. Defaults keep the prior configuration basis and known model; a model override affects the coordinator, while delegated roles retain their project settings. Explicit configuration refresh creates a new future basis. Earlier snapshots, decisions, runs and cumulative consumption are preserved. Duplicate active recovery, completed goals, unknown external cleanup or active children are rejected.
 
-Capacity recovery is off by default and accepts only confirmed native capacity failures. Attempts and backoff are bounded; model fallback uses only the explicit allowed pool and actual catalog. Automatic recovery does not refresh configuration or extend limits. History retains previous/new run IDs and native references, requested/actual model, basis revision, trigger, reason and explicit policy changes. Actual provider recovery is separate acceptance evidence.
+Capacity recovery is off by default and accepts only the recognized provider capacity code or precise native capacity message. Attempts and backoff are bounded; model fallback uses only the explicit allowed pool and actual catalog. Automatic recovery does not refresh configuration or extend limits. History retains previous/new run IDs and actual execution references, requested/actual model, basis revision, trigger, reason and explicit policy changes. Actual provider recovery is separate acceptance evidence.
 
 `executionTimeMeter: "active-windows-v1"` measures merged supervisor/owned-action execution intervals, including scheduled backoff and counting concurrent intervals once. Stopped/failed idle time is excluded. Read responses expose `executionTime.usedSeconds`, `remainingSeconds` and wall-clock `totalElapsedSeconds`; `createdAt` remains the original timestamp. Recovery forwards only the remaining cumulative token and execution-time allowance.
 
@@ -102,3 +102,5 @@ Adoption routes require the local owner and the ordinary authentication/Host/Ori
 ## Token accounting
 
 `Usage` retains raw `input`, `output`, `total` and optional `cachedInput` counters. Execution budgets use `max(0, input - cachedInput) + output` when a valid cached-input counter is reported; without it, they use `total`. Goal accounting includes owned descendant execution. The native goal's meter remains separately identified and is used as a fallback when detailed usage is unavailable. Missing usage is not a fabricated zero, and delayed reports cannot guarantee an exact pre-spend ceiling. These are token meters, not a currency estimate or a cache-clearing operation.
+
+Each agent attempt uses a unique issue title and the explicit upstream duplicate allowance after the GWI execution guard. This does not authorize repeating an uncertain POST. Reconciliation can locate a lost assignment through its exact execution marker, provider project, agent and runtime; zero or ambiguous candidates stay unconfirmed. Finished issue metadata is synchronized only after task termination is confirmed. Metadata-update failure retains its desired state for a later check and never retries model work.

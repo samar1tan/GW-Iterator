@@ -41,6 +41,7 @@ A role must be able to reference what it consumed and hand a concrete result to 
 
 - Provide a visual stage editor and contextual inspector. Add, arrange, connect, duplicate and remove stages; choose responsibility/action and define inputs, outputs, checks and handoff behavior. Structured import/export and API access complement ordinary GUI editing; JSON is not the only editor.
 - Reuse editable templates for product iteration, focused implementation, independent review, project operations, CI/release and knowledge/process maintenance. Short work remains short.
+  The focused-change starter uses implementation, independent QA and one delivery gate. A known bounded request must not require a second discovery stage or the full product-development sequence.
 - Support ordered/parallel work, explicit dependencies, human gates, conditions, child pipelines and bounded return/rework paths. A stage DAG is a local execution structure, not the complete project-iteration model.
 - Publish definition revisions; executions preserve their basis. New evidence can select a bounded next action or append a plan revision. Never silently rewrite completed work, previous decisions or evidence.
 - Use one execution authority per task. Multica owns its agents/tasks/runners; GitHub owns CI/deployment facts; GWI owns recorded dependencies, loop policy, review and product acceptance. Do not let two schedulers advance the same task independently.
