@@ -4,7 +4,8 @@ import {demand, isObject, text} from './validation.ts';
 
 export type GoalPlannerObservation = {
   id: string; status: WorkStatus; goal: string; stopReason?: string;
-  stages: {id: string; status: WorkStatus; output?: TaskOutput; error?: string}[];
+  stages: {id: string; status: WorkStatus; output?: TaskOutput; error?: string;attemptCount?:number}[];
+  limits?:{tokenBudget:number;usedTokens:number;remainingTokens:number;maxAttempts:number};
 };
 export type GoalPlannerInput = {
   project: Project; pipelines: Pipeline[]; knowledge: KnowledgeEntry[];

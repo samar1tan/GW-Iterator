@@ -1,4 +1,4 @@
-import {budgetTokens} from './contracts.ts';
+import {budgetTokens,runPolicy} from './contracts.ts';
 import type {Actor, Attempt, GoalFailure, GoalRecoveryPolicy, GoalRecoveryRecord, Intake, IntakeDecision, IntakePolicy, IntakeRetryInput, Pipeline, Project, Run} from './contracts.ts';
 import type {AdapterEvent} from './adapters/types.ts';
 import {Engine} from './engine.ts';
@@ -94,11 +94,19 @@ export class IntakeService {
   }
   private elapsed(item:Intake):number {
     const now=Date.now(),intervals:[number,number][]=[];
-    for(const run of this.family(item)){
-      const attempts=run.stages.flatMap(stage=>stage.attempts),starts=attempts.map(attempt=>Date.parse(attempt.startedAt)).filter(Number.isFinite);
-      const start=starts.length?Math.min(...starts):Date.parse(run.createdAt),end=terminal(run)?Date.parse(run.endedAt??attempts.at(-1)?.endedAt??run.updatedAt):now;
-      if(Number.isFinite(start)&&Number.isFinite(end)&&end>=start)intervals.push([start,end]);
+    for(const run of this.family(item))for(const state of run.stages){
+      const executor=run.snapshot.pipeline.stages.find(stage=>stage.id===state.stageId)?.executor;
+      if(executor==='manual'||executor==='pipeline')continue;
+      for(const attempt of state.attempts){
+        const start=Date.parse(attempt.startedAt);
+        // An earlier attempt keeps its own end when the same run is retried or awaits review.
+        const end=attempt.endedAt?Date.parse(attempt.endedAt)
+          :run.executionKind==='native-goal'&&terminal(run)?Date.parse(run.endedAt??run.updatedAt)
+          :attempt.status==='running'&&!terminal(run)?now:NaN;
+        if(Number.isFinite(start)&&Number.isFinite(end)&&end>=start)intervals.push([start,end]);
+      }
     }
+    // Scheduled automatic recovery backoff is an explicit allowance window; stopped idle time is not.
     for(const recovery of item.recoveryHistory??[])if(recovery.trigger==='automatic'){
       const start=Date.parse(recovery.at),end=recovery.startedAt?Date.parse(recovery.startedAt):recovery.endedAt?Date.parse(recovery.endedAt):recovery.status==='scheduled'?now:start;
       if(Number.isFinite(start)&&Number.isFinite(end)&&end>=start)intervals.push([start,end]);
@@ -132,7 +140,7 @@ export class IntakeService {
     this.engine.store.event({projectId:item.projectId,runId,stageId:'supervise',type:event.type,actor:'codex-native-goal',message:event.message,data:{...(event.ref?{ref:event.ref}:{}),...(event.usage?{usage:event.usage}:{}),...(event.data===undefined?{}:{detail:event.data})}});
   }
   private actionRounds(item:Intake):number{return item.rounds.filter(round=>round.decision?.action==='dispatch'||round.decision?.action==='retry').length;}
-  private observations(item:Intake):GoalPlannerObservation[]{return [...new Set(item.targetRunIds)].map(id=>{const run=this.engine.run(id);return{id,status:run.status,goal:run.goal,stopReason:run.stopReason,stages:run.stages.map(stage=>({id:stage.stageId,status:stage.status,output:stage.attempts.at(-1)?.output,error:stage.attempts.at(-1)?.error}))};});}
+  private observations(item:Intake):GoalPlannerObservation[]{return [...new Set(item.targetRunIds)].map(id=>{const run=this.engine.run(id),policy=runPolicy(run),usedTokens=this.runTokens(run);return{id,status:run.status,goal:run.goal,stopReason:run.stopReason,limits:{tokenBudget:policy.tokenBudget,usedTokens,remainingTokens:Math.max(0,policy.tokenBudget-usedTokens),maxAttempts:policy.maxAttempts},stages:run.stages.map(stage=>({id:stage.stageId,status:stage.status,attemptCount:stage.attempts.filter(attempt=>attempt.iteration===run.iteration).length,output:stage.attempts.at(-1)?.output,error:stage.attempts.at(-1)?.error}))};});}
   private plannerEvent(id:string,runId:string,event:AdapterEvent):void{
     if(this.closed)return;
     const item=this.get(id);
@@ -218,7 +226,8 @@ export class IntakeService {
     finally{if(this.active.get(item.id)===active)this.active.delete(item.id);const current=this.get(item.id),preserve=handoff&&current.status==='clarification'&&!this.closed;active.wake?.(preserve?{handoff:true,runIds:current.targetRunIds}:{stopped:true});if(current.status!=='completed'&&!preserve)this.cancelActions(current,'Goal supervision ended.');if(!this.closed&&!active.controller.signal.aborted&&current.status==='failed'&&current.lastFailure?.kind==='capacity')this.scheduleRecovery(current);}
   }
   private family(item:Intake):Run[]{const all=this.engine.store.list<Run>('run'),ids=new Set([...(item.supervisorRunIds??[item.routerRunId]),...item.targetRunIds]);let changed=true;while(changed){changed=false;for(const run of all)if(run.parentRunId&&ids.has(run.parentRunId)&&!ids.has(run.id)){ids.add(run.id);changed=true;}}return all.filter(run=>ids.has(run.id));}
-  private tokens(item:Intake):number{return this.family(item).reduce((sum,run)=>sum+run.stages.reduce((a,stage)=>a+stage.attempts.reduce((b,attempt)=>b+(attempt.usage?budgetTokens(attempt.usage):0),0),0),0);}
+  private runTokens(run:Run):number{return run.stages.reduce((sum,stage)=>sum+stage.attempts.reduce((used,attempt)=>used+(attempt.usage?budgetTokens(attempt.usage):0),0),0);}
+  private tokens(item:Intake):number{return this.family(item).reduce((sum,run)=>sum+this.runTokens(run),0);}
   private previousModel(item:Intake):string|undefined {
     const run=this.engine.run(item.routerRunId),role=run.snapshot.project.roles.find(value=>value.id===run.snapshot.pipeline.roleId);
     return item.recoveryHistory?.find(value=>value.newRunId===run.id)?.model??role?.model??run.stages[0].attempts.at(-1)?.nativeConfiguration?.model;
@@ -298,7 +307,8 @@ export class IntakeService {
       const target=this.engine.run(retry.runId),state=target.stages.find(stage=>stage.stageId===retry!.stageId);
       demand(target.projectId===item.projectId&&!target.executionKind&&this.family(item).some(run=>run.id===target.id),'PROJECT_SCOPE','Retry only this goal\'s delegated work.',403);
       demand(terminal(target)&&state&&['failed','interrupted'].includes(state.status),'INVALID_STAGE_STATE','Retry a failed stage after its execution ends.',409);
-      demand(state.attempts.filter(attempt=>attempt.iteration===target.iteration).length<target.snapshot.pipeline.policy.maxAttempts,'STAGE_ATTEMPT_LIMIT','The failed stage has reached its attempt limit.',409);
+      const policy=runPolicy(target);demand(this.runTokens(target)<policy.tokenBudget,'RUN_TOKEN_BUDGET','Extend this pipeline run token limit before retrying.',409);
+      demand(state.attempts.filter(attempt=>attempt.iteration===target.iteration).length<policy.maxAttempts,'STAGE_ATTEMPT_LIMIT','The failed stage has reached its attempt limit.',409);
     }
     if(args.action==='clarify')demand(text(args.question,2000),'QUESTION_REQUIRED','Ask one concrete question.');
     if(args.action==='complete'){const previous=item.rounds.findLast(value=>value.decision?.action==='dispatch'||value.decision?.action==='retry');demand(previous?.targetRunIds.length&&previous.targetRunIds.every(id=>this.engine.run(id).status==='completed'),'UNVERIFIED_COMPLETION','Complete only after the latest actions are accepted.');demand(this.family(item).filter(value=>value.id!==runId).every(terminal),'ACTIVE_GOAL_WORK','Resolve active work before completing the goal.');if(active.planner)demand(item.targetRunIds.every(id=>this.engine.run(id).status==='completed'),'UNVERIFIED_COMPLETION','Every delegated target must have an accepted outcome.');}

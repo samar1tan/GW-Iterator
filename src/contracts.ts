@@ -47,7 +47,7 @@ export type Attempt = {
   nativeConfiguration?: {model?:string; modelProvider?:string; reasoningEffort?:string|null; serviceTier?:string|null};
   review?: {decision: 'accept' | 'revise'; note: string; actor: string; at: string};
 };
-export type StageRun = {stageId: string; status: WorkStatus; attempts: Attempt[]};
+export type StageRun = {stageId: string; status: WorkStatus; attempts: Attempt[];resumeChildRunId?:string;childInputInvalidated?:boolean};
 export type Trigger = {kind: 'human' | 'agent' | 'loop' | 'replay'; actor: string};
 export type Run = {
   executionKind?: 'native-goal'|'agent-goal';
@@ -58,7 +58,9 @@ export type Run = {
   snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]};
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
   recoveryOfRunId?:string;
+  limitRevisions?:{revision:number;policy:RunPolicy;note:string;actor:string;at:string}[];
 };
+export function runPolicy(run:Run):RunPolicy{return run.limitRevisions?.at(-1)?.policy??run.snapshot.pipeline.policy;}
 export type AuditEvent = {seq: number; at: string; projectId: string | null; runId: string | null; stageId: string | null; type: string; actor: string; message: string; data?: unknown};
 export type Proposal = {id: string; projectId: string; pipelineId: string; runId?: string; baseRevision: number; definition: Pipeline; rationale: string; status: 'pending' | 'applied' | 'rejected'; createdAt: string};
 export type ModelInfo = {id: string; name: string; efforts: string[]; isDefault?: boolean};

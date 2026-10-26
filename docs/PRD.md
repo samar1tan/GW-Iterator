@@ -57,6 +57,8 @@ Independent checks must substantiate the requested outcome. A completion message
 
 Bound concurrency, attempts, newly processed tokens and active execution time. Human/CI waits do not spend model tokens. Capacity recovery is finite and uses an allowed model pool; permission and task blockers are distinct. Reconcile authoritative work after restart before resuming; never blindly relaunch uncertain external operations.
 
+When a finite run limit prevents further work, show the consumed allowance and the limiting scope: a pipeline run and its supervising outcome have separate ceilings. The owner can explicitly extend tokens, attempts or execution time for a stopped pipeline, with a note and revision check. Retain the original definition, prior limits, consumption and attempts; an extension neither starts work nor resets usage. Retry must reject exhausted limits before creating another attempt. Stopped gaps, human review and manual waiting must not become model-execution time when an old run is reopened.
+
 Retain verified findings as project/role knowledge. Loop/team/pipeline improvements are reviewable revisions linked to their evidence; self-improvement cannot grant broader permissions or waive checks.
 
 References: [loop-engineering practice](https://github.com/cobusgreyling/loop-engineering) and [the empirical study](https://arxiv.org/abs/2608.21884). These inform the design and do not prove GWI's loops effective.

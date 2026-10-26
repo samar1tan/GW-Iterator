@@ -134,6 +134,59 @@ test('manual dependencies and delivery wait for real recorded outcomes', async t
   assert.equal(h.engine.store.events({runId: run.id}).filter(event => event.type === 'manual.completed').length, 2);
 });
 
+test('finite run allowance revisions retain spent work and unblock only an explicit bounded retry', async t => {
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('first'),stage('follow',['first'])],{tokenBudget:100});
+  const run=start(h,p,flow);
+  await pump(h,()=>h.codex.calls.length===1,'the first bounded execution');
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'More useful work.',OWNER),errorCode('INVALID_RUN_STATE'));
+  h.codex.calls[0].finish(OUTPUT,{input:110,output:10,total:120});
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the exhausted run');
+  const before=h.engine.run(run.id),count=state(before,'follow').attempts.length;
+  assert.throws(()=>h.engine.retry(run.id,'follow','The old quota is exhausted.',OWNER),errorCode('RUN_TOKEN_BUDGET'));
+  assert.equal(state(h.engine.run(run.id),'follow').attempts.length,count);
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{concurrency:2},'An unrelated policy change.',OWNER),errorCode('INVALID_RUN_LIMITS'));
+  h.engine.store.put('multica-execution',{id:'synthetic-unconfirmed',runId:run.id,cleanupConfirmed:false});
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'Unconfirmed work remains.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  h.engine.store.put('multica-execution',{id:'synthetic-unconfirmed',runId:run.id,cleanupConfirmed:true});
+  const extended=h.engine.changeLimits(run.id,0,{tokenBudget:500,maxAttempts:3},'The remaining dependency has useful bounded work.',OWNER);
+  assert.deepEqual(extended.snapshot,before.snapshot);
+  assert.deepEqual(extended.stages,before.stages);
+  assert.equal(extended.limitRevisions?.[0].policy.tokenBudget,500);
+  assert.equal(extended.limitRevisions?.[0].note,'The remaining dependency has useful bounded work.');
+  assert.equal(h.codex.calls.length,1);
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:600},'Stale basis.',OWNER),errorCode('REVISION_CONFLICT'));
+  h.engine.retry(run.id,'follow','Allowance extended; keep the accepted predecessor.',OWNER);
+  await pump(h,()=>h.codex.calls.length===2,'only the failed dependency');
+  assert.equal(h.codex.calls[1].input.tokenBudget,380);
+  h.codex.calls[1].finish(OUTPUT,{input:8,output:2,total:10});
+  await pump(h,()=>h.engine.run(run.id).status==='completed','the preserved work and retry');
+  assert.equal(state(h.engine.run(run.id),'first').attempts.length,1);
+  assert.deepEqual(state(h.engine.run(run.id),'first').attempts[0].usage,{input:110,output:10,total:120});
+});
+
+test('a parent cannot bypass an uncertain child and reuses the accepted child after local repair',async t=>{
+  const h=await fixture(t),p=await project(h),childFlow=pipeline(h,p,[stage('child-work')]);
+  const parentFlow=pipeline(h,p,[stage('handoff',[],{executor:'pipeline',options:{pipelineId:childFlow.id}})]);
+  const parent=start(h,p,parentFlow);await pump(h,()=>h.codex.calls.length===1,'the subordinate task');
+  const childId=state(h.engine.run(parent.id),'handoff').attempts[0].ref!.childRunId!;
+  h.codex.calls[0].completion.reject(new Error('Synthetic observation was interrupted.'));
+  await pump(h,()=>h.engine.run(parent.id).status==='failed','the stopped parent');
+  h.engine.store.put('multica-execution',{id:'synthetic-child-uncertain',runId:childId,cleanupConfirmed:false});
+  assert.throws(()=>h.engine.retry(parent.id,'handoff','The child is uncertain.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  assert.throws(()=>h.engine.changeLimits(parent.id,0,{tokenBudget:2000},'The child is uncertain.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  assert.equal(h.codex.calls.length,1);
+  h.engine.store.put('multica-execution',{id:'synthetic-child-uncertain',runId:childId,cleanupConfirmed:true});
+  assert.throws(()=>h.engine.retry(parent.id,'handoff','Repair the child first.',OWNER),errorCode('CHILD_RETRY_REQUIRED'));
+  h.engine.retry(childId,'child-work','The provider state was reconciled.',OWNER);
+  await pump(h,()=>h.codex.calls.length===2,'the original child retry');h.codex.calls[1].finish();
+  await pump(h,()=>h.engine.run(childId).status==='completed','the accepted original child');
+  h.engine.retry(parent.id,'handoff','Reuse the now accepted subordinate result.',OWNER);
+  await pump(h,()=>h.engine.run(parent.id).status==='completed','the resumed handoff');
+  assert.equal(h.codex.calls.length,2);
+  assert.deepEqual(state(h.engine.run(parent.id),'handoff').attempts.map(attempt=>attempt.ref?.childRunId),[childId,childId]);
+  assert.equal(h.engine.store.list<Run>('run').filter(run=>run.parentRunId===parent.id).length,1);
+});
+
 test('review revision retains the reviewer and earlier output while rerunning the required task', async t => {
   const h = await fixture(t), p = await project(h);
   const flow = pipeline(h, p, [stage('work', [], {review: true}), stage('follow', ['work'])]);
@@ -626,4 +679,45 @@ test('development server blocks synthetic private files through direct, raw, enc
     assert.equal(response.status, 403, 'A synthetic private route is blocked before Vite serves it.');
     assert.equal(content.includes(marker), false);
   }
+});
+
+test('upstream rework invalidates a completed child even when the wrapper hits its attempt limit before relaunch', async t => {
+  const h = await fixture(t), p = await project(h), manual = (id: string, dependsOn: string[] = [], extra: Partial<Stage> = {}) => stage(id, dependsOn, {executor: 'manual', ...extra});
+  const childFlow = pipeline(h, p, [manual('leaf')], {maxAttempts: 2});
+  const parentFlow = pipeline(h, p, [manual('upstream'), stage('handoff', ['upstream'], {executor: 'pipeline', options: {pipelineId: childFlow.id}}), manual('qa', ['handoff'], {reworkTo: 'upstream'})], {maxAttempts: 2});
+  const parent = start(h, p, parentFlow);
+  await pump(h, () => state(h.engine.run(parent.id), 'upstream').status === 'waiting', 'upstream version one');
+  h.engine.completeManual(parent.id, 'upstream', result('Upstream version one.'), OWNER);
+  await pump(h, () => Boolean(state(h.engine.run(parent.id), 'handoff').attempts[0]?.ref?.childRunId), 'the original child');
+  const oldChildId = state(h.engine.run(parent.id), 'handoff').attempts[0].ref!.childRunId!;
+  await pump(h, () => state(h.engine.run(oldChildId), 'leaf').status === 'waiting', 'the original child action');
+  h.engine.completeManual(oldChildId, 'leaf', result('The original child needs one local correction.', 'blocked'), OWNER);
+  await pump(h, () => h.engine.run(parent.id).status === 'failed', 'the stopped parent handoff');
+  h.engine.retry(oldChildId, 'leaf', 'Correct only the original child action.', OWNER);
+  await pump(h, () => state(h.engine.run(oldChildId), 'leaf').status === 'waiting', 'the original child correction');
+  h.engine.completeManual(oldChildId, 'leaf', result('Accepted child for upstream version one.'), OWNER);
+  await pump(h, () => h.engine.run(oldChildId).status === 'completed', 'the accepted original child');
+  h.engine.retry(parent.id, 'handoff', 'Resume the accepted original child result.', OWNER);
+  await pump(h, () => state(h.engine.run(parent.id), 'qa').status === 'waiting', 'review after the second wrapper attempt');
+  assert.equal(state(h.engine.run(parent.id), 'handoff').attempts.length, 2);
+  const acceptedChild = structuredClone(h.engine.run(oldChildId)), history = structuredClone(state(h.engine.run(parent.id), 'handoff').attempts);
+  h.engine.completeManual(parent.id, 'qa', result('Upstream version one must change.', 'revise'), OWNER);
+  await pump(h, () => state(h.engine.run(parent.id), 'upstream').status === 'waiting', 'upstream version two');
+  h.engine.completeManual(parent.id, 'upstream', result('Upstream version two.'), OWNER);
+  await pump(h, () => h.engine.run(parent.id).status === 'failed', 'the invalidated wrapper attempt limit');
+  assert.equal(state(h.engine.run(parent.id), 'handoff').attempts.length, 2);
+  h.engine.changeLimits(parent.id, 0, {maxAttempts: 3}, 'Authorize one execution against the changed upstream input.', OWNER);
+  h.engine.retry(parent.id, 'handoff', 'The earlier accepted child belongs to the old upstream input.', OWNER);
+  await pump(h, () => h.engine.store.list<Run>('run').filter(run => run.parentRunId === parent.id).length === 2, 'a fresh child for the changed input');
+  const current = h.engine.run(parent.id), handoff = state(current, 'handoff'), newChildId = handoff.attempts[2].ref!.childRunId!;
+  assert.notEqual(newChildId, oldChildId); assert.equal(handoff.resumeChildRunId, undefined);
+  assert.deepEqual(handoff.attempts.slice(0, 2).map(attempt => ({...attempt, review: undefined})), history.map(attempt => ({...attempt, review: undefined})));
+  assert.deepEqual(handoff.attempts[0].review, history[0].review); assert.deepEqual(h.engine.run(oldChildId), acceptedChild);
+  await pump(h, () => state(h.engine.run(newChildId), 'leaf').status === 'waiting', 'the fresh child action');
+  assert.equal(state(h.engine.run(parent.id), 'qa').attempts.length, 1);
+  h.engine.completeManual(newChildId, 'leaf', result('Accepted child for upstream version two.'), OWNER);
+  await pump(h, () => state(h.engine.run(parent.id), 'qa').status === 'waiting', 'review of the fresh child');
+  h.engine.completeManual(parent.id, 'qa', result('The fresh result matches upstream version two.'), OWNER);
+  await pump(h, () => h.engine.run(parent.id).status === 'completed', 'the corrected parent outcome');
+  assert.equal(h.codex.calls.length, 0); assert.equal(h.engine.store.list<Run>('run').filter(run => run.parentRunId === parent.id).length, 2);
 });

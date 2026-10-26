@@ -44,6 +44,8 @@ Feedback attaches to its work. Rejection sends the finding and evidence to the r
 
 Waiting identifies the person/service and useful action; it is stable and does not start repeated model turns. Native blocked does not discard pending human work. Retry is scoped and explains whether prior execution is known. Fallback obeys the allowed policy. Stop/cancel reflects authoritative owned and remote state.
 
+For a stopped pipeline, its stage inspector shows the used/remaining allowance and an advanced **Extend limits** action. The dialog names the pipeline scope, preserves consumption, and requires the finite new limits and a reason. Saving records a revision without starting work. Return to the outcome to continue coordination, or retry the failed stage directly. Unknown external execution state must be reconciled first.
+
 ## Team
 
 Show working roles, real agents, availability and assignments. A selected role exposes responsibilities, deliverables, skills/tools, knowledge and handoffs. Add, duplicate, retire and import roles; the initial role set does not define a limit.
