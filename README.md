@@ -12,6 +12,21 @@ Choose a project, describe an outcome or run a saved pipeline, then follow the s
 
 *Illustrative workflow example; contains no actual project configuration or run data.*
 
+## Codex directly or through GWI
+
+Codex already supports goals, skills, review and subagents. It provides the reasoning and tools in both routes; GWI adds project-level workflow configuration, supervision and records.
+
+| Work | Codex directly | Through GWI |
+| --- | --- | --- |
+| Start and adapt | Describe a goal; let Codex plan, delegate and adapt in the conversation. | Describe an outcome for the coordinator to choose existing workflows, or run a saved pipeline directly. Decisions and progress stay recorded. |
+| Supervise | Read chat and agent activity, inspect changes, and steer the next action. | Follow named stages, owners, handoffs, artifacts and pending human decisions in one workbench. |
+| Check and deliver | Ask Codex for checks/review and follow your project's acceptance and publication process. | Configured verification and human gates organize evidence, revision requests and delivery decisions. |
+| Reuse and recover | Reuse instructions and skills; resume or fork a conversation to continue work. | Reuse versioned roles, pipelines and selected knowledge. Keep earlier attempts and check external progress before continuing failed work. |
+
+Use Codex directly for a focused fix or exploration with less setup. Choose GWI when repeatable work needs several handoffs or regular human review. GWI requires local GWI/Multica services and adds coordination/context overhead; faster or cheaper completion still needs measurement.
+
+Native capability references: [Codex goals, review and skills](https://learn.chatgpt.com/docs/app-server#api-overview), [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
 ## Run locally
 
 Use Node.js 24–26, Git, curl, Docker with Compose, and an authenticated local Codex installation. GitHub operations also need a signed-in `gh` CLI. macOS is the verified native execution platform; other hosts must pass the setup checks.
