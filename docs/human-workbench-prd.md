@@ -47,6 +47,8 @@ Role imports use the same revision-checked team APIs. Show confirmed progress du
 
 A confirmed source registration or lesson receipt stays saved if a later refresh fails; recovery retries only observation and never repeats that write.
 
+The advanced continuation path must preserve a confirmed retry receipt before refreshing project observations, just like ordinary recovery and request submission. A failed refresh must not leave an apparently failed start or invite a duplicate retry; retain the exact acknowledged work and offer observation recovery.
+
 ## Verification capabilities
 
 The desired default is source protection with a usable place to run checks. A verification stage may operate in a disposable verification copy of the actual prepared bytes, with task-scoped scratch writes, while the original execution checkout and project source remain protected. Permanent role configuration stays unchanged.
@@ -60,6 +62,8 @@ Where a verification capability is unavailable, identify it before wasting a mod
 Use one original GWI mark in app chrome, favicon, website and README. The website explains an ordinary project-to-delivery journey, provides a clearly labeled example, local setup and source/docs links. English and Simplified Chinese have equivalent content and working language navigation. Public documentation describes actual behavior, prerequisites and remaining verification limits without private artifacts or a feature-count report.
 
 ## Acceptance
+
+Close related entry points together using the [quality loop](quality-loop.md); retain a short issue/evidence checklist instead of treating a closed issue as proof of every path.
 
 - Operate launch from a saved workflow; cancelling/empty submission creates no native task. A concrete request reaches the normal execution path.
 - Render changing stage, review, failure, retry and completed states without losing selection or moving the reader's scroll position. Verify both locales and narrow/desktop layouts.
@@ -128,6 +132,10 @@ Web links open separately without replacing the workbench. Document section link
 
 Acceptance covers the same renderer in both UI locales, long documents, nested lists, code indentation, horizontally scrollable wide tables/code and keyboard link operation. Verify real registered knowledge and synthetic unsafe-content cases; retain the source-list containment introduced by the preceding repair.
 
+Completed stage summaries and outcome decisions use the same safe Markdown reader as answers and knowledge: support headings, lists, code and links without executing HTML or loading remote media. A complete answer or delivered result has one primary reading surface. Activity records the transition and retains full output in collapsed details rather than repeating the answer in its default message preview. Preserve original evidence text and audit types.
+
+Show useful source identity and the source-execution action before technical provenance. Full hashes, raw IDs and source revision diagnostics remain available in a collapsed details disclosure.
+
 ## Direct informational answers
 
 A question submitted through Workbench may be satisfied by a read-only answer from the coordinator. Use the same ordinary entry and one bounded decision; do not ask the person to select a mode or create a pipeline merely to obtain a project-status explanation. The coordinator must distinguish informational requests from artifact-changing work and use only relevant evidence, identifying uncertainty rather than claiming delivery.
@@ -173,7 +181,7 @@ Preserve unsent text by project and parent/clarification execution. A confirmed 
 
 ## Request-entry keyboard behavior
 
-The shared request composer on project/global workbenches, result follow-ups and clarification replies sends with Enter and inserts a line break with Shift+Enter. Existing Command/Ctrl+Enter remains supported. Show the ordinary shortcut in both UI locales. Handle the shortcut only in the message textarea; buttons and other controls retain their native keyboard behavior.
+The shared request composer on project/global workbenches, saved-workflow outcomes, result follow-ups and clarification replies sends with Enter and inserts a line break with Shift+Enter. Existing Command/Ctrl+Enter remains supported. Show the ordinary shortcut in both UI locales. Handle the shortcut only in the message textarea; buttons and other controls retain their native keyboard behavior.
 
 Input-method composition/candidate confirmation must not submit. Suppress held-key repetition and retain all existing empty-input, pending, source/account, idempotency and receipt guards. This correction adds no configuration or execution behavior. Verify ordinary Enter, multiline input, composition/repeat guards and disabled submission, with actual model-free browser operation separate from OS input-method validation.
 
@@ -188,3 +196,14 @@ Keep the exact original input in the existing Full request disclosure, collapsed
 ## Recoverable task handoff
 
 A person returning to unattended work can identify whether it is running, retrying, waiting for a person or stopped. Replace repeated internal cleanup banners with one task-level recovery state that names the affected step and offers the next useful action. Failed-step recovery is reachable directly from the outcome header and project/global work lists. Recovery confirms prior termination and refreshes account observations as part of the guarded action; it does not require manually interpreting provider lifecycle terms. Preserve detailed errors and explicit extension/approval paths without showing them as default setup.
+
+
+## Knowledge and template maintenance
+
+Duplicating a role must retain its selected runtime, skills and MCP bindings, including the distinction between inherited/unspecified and an explicitly empty selection. The new role has a new identity and an independently materialized agent revision; cloning must not silently reset capabilities or change the original role. Existing project revisions and old runs remain intact. Verify with independently authored role/agent inputs without starting a provider task.
+
+A project owner can archive an obsolete lesson and restore it from Knowledge. Archive is reversible: retain its text, origin and revision; exclude it from new search/context selection and future run snapshots. A small explicit archived-lesson view keeps restoration discoverable. Source synchronization preserves this decision. Frozen knowledge in earlier work is not rewritten. Require current entry identity/revision for lifecycle changes; reject cross-project or source-document mutations, retain mutation receipts across refresh failure, and audit the actual transition. Do not infer whether a lesson is correct or silently archive it using a model.
+
+Team must distinguish inherited template bindings from explicit role selections. When skills or MCP bindings are inherited, show their effective selections; the first explicit edit begins from those selections, not an empty list. Saving an unchanged role preserves unspecified-versus-empty behavior. A source-agent read failure is not evidence of empty capabilities.
+
+The default knowledge workflow proposes and reviews a reusable lesson; it does not promise that review alone writes Knowledge. Direct the owner to the existing Add lesson operation when the role lacks a write tool. Do not grant extra permissions or rewrite existing private workflow definitions to make the wording true.

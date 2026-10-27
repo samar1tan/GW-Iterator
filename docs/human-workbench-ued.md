@@ -38,6 +38,8 @@ The selected step prioritizes actual result, evidence, pending decision and next
 
 Use a GitHub-like timeline with stable event keys, short localized event titles, real message/evidence, actor/time and optional details. Present human activity newest first, ordered by each group’s latest recorded sequence. Follow the top on entry. Scrolling down to earlier work pauses following; new entries and updated groups preserve the reader’s visible record and relative offset. The new-activity action counts relevant groups in the selected category and returns to the top. Category changes start at that category’s latest update. Keep details keyboard-operable, grouping and raw audit sequence intact. Do not present raw event codes as the main title.
 
+Use the existing safe Markdown reader for stage summaries and outcome decisions. Step-list and graph previews use the compact first meaningful line rather than repeating a full formatted result or its markup. Complete answer/delivery events retain full formatted output behind the existing result disclosure in Activity; the main result is the ordinary reading location.
+
 ## State feedback and motion
 
 Recorded stage state is the source of truth. Render the same state in the step list, optional graph and inspector; selection is an independent treatment. A model message, healthy connection, account observation or elapsed timer does not make a stage running. A paused run may still have an in-flight task; show the actual stage and pause boundary instead of inventing its termination.
@@ -80,9 +82,11 @@ Team defaults to working roles, responsibilities, current model/effort and effec
 
 Knowledge uses a readable source/list/detail structure with provenance and current/stale status. Source entry explains project-relative paths and supported formats; the registered effective path remains inspectable. Settings groups project bindings and read-only default/integration summaries. Team owns all role edits and Knowledge owns source management. Six effort labels stay English; surrounding explanation follows the locale.
 
+Knowledge entry actions offer Archive for an active lesson and Restore in the archived-lesson view. Keep the text and source execution readable; mark its excluded-from-new-work state. A confirmed lifecycle action stays acknowledged if observation fails. Show source identity and its execution action before collapsed hash/ID diagnostics. In role editing, inherited skills/MCP are visibly selected with a short inheritance label; editing starts from the effective set. No new global configuration or automatic cleanup policy is introduced.
+
 ## Public website and README
 
-Lead with what a person does and the work they can inspect. Use the own mark, a representative workflow preview with explicitly authored example data, setup and source links. Language switching preserves equivalent sections/case content. A preview is not an acceptance record of a real private run.
+Lead with what a person does and the work they can inspect. Use the own mark, a representative workflow preview with explicitly authored example data, setup and source links. Language switching preserves equivalent sections/case content. A preview is not an acceptance record of a real private run. Present the five core modules in one shared example frame: a persistent project/context bar, a compact module tab row and one changing panel. Projects shows the project boundary, Workbench its outcome and current decision, Pipelines its parallel checks and review handoff, Team the responsible roles, and Knowledge the source-to-lesson relationship. Use roving keyboard focus with arrow/Home/End selection; keep the selected module on locale changes. No automatic carousel. Collapse the existing repeated workflow/principle blocks into this walkthrough; keep comparison and setup as distinct supporting sections.
 
 ## Rendered review
 
@@ -173,7 +177,7 @@ Clarification uses a Reply field in the same location and the guarded continuati
 
 ## Request-entry keys
 
-Use Enter to send and Shift+Enter for a new line in the shared message textarea. Keep Command/Ctrl+Enter as an equivalent send shortcut. A short localized hint beside the input's actions makes this discoverable; the hint and accessible description do not replace the normal action button. Input-method candidate confirmation follows native composition behavior, and a held Enter cannot create repeated requests. Focus on account refresh, disclosure controls or action buttons retains native behavior.
+Use Enter to send and Shift+Enter for a new line in general requests, replies, follow-ups and saved-workflow outcomes. The launch hint sits beneath its request; footer actions remain outside the scrolling body. Keep Command/Ctrl+Enter as an equivalent send shortcut. A short localized hint beside the input's actions makes this discoverable; the hint and accessible description do not replace the normal action button. Input-method candidate confirmation follows native composition behavior, and a held Enter cannot create repeated requests. Focus on account refresh, disclosure controls or action buttons retains native behavior.
 
 
 ## Request heading hierarchy
@@ -186,3 +190,5 @@ Full request remains a separate, keyboard-operable disclosure directly below the
 ## Recovery without a navigation hunt
 
 Show one compact recovery surface before the result/history: affected step, a localized cause, the current automatic action or concrete stopping reason, and the primary Retry failed step action. While checking termination or backing off, show the finite next check/retry and retain Stop. Distinguish Check again from a confirmed dispatch. Keep full provider errors and attempt records in details. Failed outcome links from project/global work lists open this surface; a stage inspector uses the same recovery vocabulary and does not require account refresh before a model-free termination check. A failed-step retry preserves accepted upstream work and returns to ordinary coordination after the target completes.
+
+An advanced continuation closes on the acknowledged retry and keeps its receipt visible if observation fails; the observation warning is distinct from a failed mutation. Late observation cannot navigate after the person has left that scope.

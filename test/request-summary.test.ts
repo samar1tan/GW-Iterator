@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {requestSummary} from '../web/platform/requestSummary.ts';
+import {requestSummary,resultPreview} from '../web/platform/requestSummary.ts';
 
 test('multiline requests have one identifying line while punctuation and file names remain useful',()=>{
   assert.equal(requestSummary('\n  检查项目网站的导航和语言切换\n保留原来的内容，不要重写整个网站'),'检查项目网站的导航和语言切换');
@@ -31,4 +31,13 @@ test('delegated envelopes and short requests retain their identity without chang
   assert.ok(request.endsWith('Delegated action: Review the changes.'));
   assert.equal(requestSummary('你好'),'你好');
   assert.equal(requestSummary('  \n  '),'');
+});
+
+
+test('result previews keep the useful line without common Markdown decoration',()=>{
+ assert.equal(resultPreview('## **Reviewed change**\n\n- More detail.'),'Reviewed change');
+ assert.equal(resultPreview('Check [the source](https://example.com/guide).'),'Check the source.');
+ assert.equal(resultPreview('Inspect `src/file.ts` and some_file_name.'),'Inspect src/file.ts and some_file_name.');
+ assert.equal(resultPreview('**X**'),'X');
+ assert.equal(resultPreview('## __已核对__\n\n后续详情'),'已核对');
 });

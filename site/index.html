@@ -34,6 +34,41 @@
       <div class="hero-aside"><img src="./brand/gwi-mark.svg" width="72" height="72" alt=""><p data-i18n="balance">Room for Codex to adapt.<br>Clear boundaries for the work.</p><a href="https://github.com/samar1tan/GW-Iterator/blob/main/docs/human-workbench-prd.md" data-i18n="principle">Read the product approach →</a></div>
     </section>
 
+    <section id="workflow" class="product-tour" aria-labelledby="tour-heading">
+      <div class="section-heading"><div><p class="eyebrow" data-i18n="tourEyebrow">PRODUCT WALKTHROUGH</p><h2 id="tour-heading" data-i18n="tourTitle">Follow a change through GWI</h2></div><p data-i18n="tourNote">One example project.<br>Choose a view to explore it.</p></div>
+      <div class="tour-frame">
+        <div class="tour-topbar"><span><img src="./brand/gwi-mark.svg" width="24" height="24" alt=""><b data-i18n="tourProject">Project website</b><span class="slash">/</span><span data-i18n="tourCase">Language parity</span></span><span class="example-badge" data-i18n="tourExample">Illustrative example</span></div>
+        <div class="tour-tabs" role="tablist" aria-label="Product views" data-i18n-aria="tourViews">
+          <button type="button" role="tab" id="tab-projects" aria-controls="panel-projects" aria-selected="true" tabindex="0" data-module="projects"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zM3 8h14M8 8v8"/></svg><span data-i18n="moduleProjects">Projects</span></button>
+          <button type="button" role="tab" id="tab-workbench" aria-controls="panel-workbench" aria-selected="false" tabindex="-1" data-module="workbench"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zM6 8l2 2-2 2M10 12h4"/></svg><span data-i18n="moduleWorkbench">Workbench</span></button>
+          <button type="button" role="tab" id="tab-pipelines" aria-controls="panel-pipelines" aria-selected="false" tabindex="-1" data-module="pipelines"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 3h5v5H2zM13 12h5v5h-5zM7 5h6v9M5 8v6h8"/></svg><span data-i18n="modulePipelines">Pipelines</span></button>
+          <button type="button" role="tab" id="tab-team" aria-controls="panel-team" aria-selected="false" tabindex="-1" data-module="team"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="6" r="3"/><path d="M2 17v-3a6 6 0 0112 0v3M14 3a3 3 0 010 6M17 17v-3a6 6 0 00-2-4"/></svg><span data-i18n="moduleTeam">Team</span></button>
+          <button type="button" role="tab" id="tab-knowledge" aria-controls="panel-knowledge" aria-selected="false" tabindex="-1" data-module="knowledge"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 2h8l4 4v12H4zM12 2v5h4M7 10h6M7 13h6"/></svg><span data-i18n="moduleKnowledge">Knowledge</span></button>
+        </div>
+        <div class="tour-panel" role="tabpanel" id="panel-projects" aria-labelledby="tab-projects" tabindex="0">
+          <div class="tour-panel-copy"><span class="tour-number">01 / 05</span><h3 data-i18n="projectsTitle">Choose the project that owns the work</h3><p data-i18n="projectsBody">Start and supervise work across projects, or open one project with its own workspace, team and knowledge.</p><button type="button" class="tour-next" data-open-module="workbench" data-i18n="projectsNext">Open its workbench →</button></div>
+          <div class="tour-visual project-example"><div class="mini-section-label" data-i18n="projectOverview">Project overview</div><div class="mini-project selected-project"><span class="mini-avatar" aria-hidden="true">W</span><div><strong data-i18n="tourProject">Project website</strong><span data-i18n="projectCurrent">Language parity · ready for review</span></div><span class="status-dot" aria-hidden="true"></span></div><div class="mini-project"><span class="mini-avatar neutral" aria-hidden="true">D</span><div><strong data-i18n="docsProject">Documentation</strong><span data-i18n="noCurrentWork">No active work</span></div></div><div class="mini-project-footer" data-i18n="projectBoundary">Separate project context. One place to supervise.</div></div>
+        </div>
+        <div class="tour-panel" role="tabpanel" id="panel-workbench" aria-labelledby="tab-workbench" tabindex="0" hidden>
+          <div class="tour-panel-copy"><span class="tour-number">02 / 05</span><h3 data-i18n="workbenchTitle">Start with the result you need</h3><p data-i18n="workbenchBody">Ask a question or describe a change. Follow the current work, inspect the result and continue from the same place.</p><button type="button" class="tour-next" data-open-module="pipelines" data-i18n="workbenchNext">Inspect its workflow →</button></div>
+          <div class="tour-visual outcome-example"><span class="mini-section-label" data-i18n="outcomeLabel">Outcome</span><strong class="mini-outcome" data-i18n="outcomeExample">Keep the English and Chinese demo aligned when switching languages.</strong><div class="mini-outcome-row"><span class="mini-check" aria-hidden="true">✓</span><span data-i18n="workbenchEvidence">Both language checks recorded</span></div><div class="mini-decision"><span class="decision-mark" aria-hidden="true">◇</span><div><strong data-i18n="decisionTitle">Review delivery</strong><span data-i18n="decisionBody">Prepared change and check evidence</span></div></div></div>
+        </div>
+        <div class="tour-panel" role="tabpanel" id="panel-pipelines" aria-labelledby="tab-pipelines" tabindex="0" hidden>
+          <div class="tour-panel-copy"><span class="tour-number">03 / 05</span><h3 data-i18n="pipelinesTitle">See the handoffs, checks and return paths</h3><p data-i18n="pipelinesBody">Reusable workflows connect responsible roles. Dependencies can split into parallel checks, join at a review, or return a finding for bounded rework.</p><button type="button" class="tour-next" data-open-module="team" data-i18n="pipelinesNext">Meet the responsible roles →</button></div>
+          <div class="tour-visual pipeline-example"><span class="mini-section-label" data-i18n="workflowLabel">Example workflow</span><ol class="mini-pipeline"><li class="flow-source"><span aria-hidden="true">✓</span><strong data-i18n="prepareStage">Prepare content</strong><small data-i18n="roleDevelopment">Development</small></li><li class="flow-check"><span aria-hidden="true">✓</span><strong data-i18n="checkEnglish">Check English</strong><small>QA</small></li><li class="flow-check"><span aria-hidden="true">✓</span><strong data-i18n="checkChinese">Check Chinese</strong><small>QA</small></li><li class="flow-review"><span aria-hidden="true">◇</span><strong data-i18n="decisionTitle">Review delivery</strong><small data-i18n="roleOwner">Owner</small></li></ol><div class="flow-return"><span aria-hidden="true">↶</span><span data-i18n="returnFinding">A failed check returns its finding to Development.</span></div></div>
+        </div>
+        <div class="tour-panel" role="tabpanel" id="panel-team" aria-labelledby="tab-team" tabindex="0" hidden>
+          <div class="tour-panel-copy"><span class="tour-number">04 / 05</span><h3 data-i18n="teamTitle">Give each role a clear responsibility</h3><p data-i18n="teamBody">Choose the agents, skills and tools behind the roles. Runs retain the role revision they started with.</p><button type="button" class="tour-next" data-open-module="knowledge" data-i18n="teamNext">See what the team draws on →</button></div>
+          <div class="tour-visual team-example"><span class="mini-section-label" data-i18n="teamForProject">Team for this project</span><div class="mini-role"><span class="mini-avatar" aria-hidden="true">D</span><div><strong data-i18n="roleDevelopment">Development</strong><span data-i18n="developmentResponsibility">Prepare the shared demo content</span></div><span class="role-tag">Codex</span></div><div class="mini-role"><span class="mini-avatar" aria-hidden="true">Q</span><div><strong>QA</strong><span data-i18n="qaResponsibility">Check both languages independently</span></div><span class="role-tag">Codex</span></div><div class="mini-role"><span class="mini-avatar neutral" aria-hidden="true">O</span><div><strong data-i18n="roleOwner">Owner</strong><span data-i18n="ownerResponsibility">Inspect evidence and accept delivery</span></div><span class="role-tag" data-i18n="humanLabel">Human</span></div></div>
+        </div>
+        <div class="tour-panel" role="tabpanel" id="panel-knowledge" aria-labelledby="tab-knowledge" tabindex="0" hidden>
+          <div class="tour-panel-copy"><span class="tour-number">05 / 05</span><h3 data-i18n="knowledgeTitle">Keep context that helps the next change</h3><p data-i18n="knowledgeBody">Select project documents, memory sections and verified lessons. Current role-relevant excerpts enter new work; earlier runs keep their frozen context.</p><button type="button" class="tour-next" data-open-module="workbench" data-i18n="knowledgeNext">Continue in the workbench →</button></div>
+          <div class="tour-visual knowledge-example"><span class="mini-section-label" data-i18n="knowledgeInput">Selected project context</span><div class="mini-document"><span class="document-symbol" aria-hidden="true">≡</span><div><strong data-i18n="sourceTitle">Website requirements</strong><span data-i18n="sourceMetadata">Project document · current source</span></div></div><div class="knowledge-connector" aria-hidden="true">↓</div><div class="mini-lesson"><span class="mini-section-label" data-i18n="lessonLabel">Reviewed lesson</span><strong data-i18n="lessonBody">Switch language without switching the example.</strong><span data-i18n="lessonMetadata">Linked to the check and source work</span></div></div>
+        </div>
+        <div class="tour-footer"><span data-i18n="tourSettings">Settings holds project bindings. Team and Knowledge own their configuration.</span><a href="https://github.com/samar1tan/GW-Iterator/blob/main/docs/operating-guide.md" data-i18n="tourGuide">Read the operating guide →</a></div>
+      </div>
+    </section>
+
     <section id="comparison" class="comparison-section" aria-labelledby="comparison-heading">
       <div class="comparison-heading"><p class="eyebrow" data-i18n="comparisonEyebrow">CHOOSING A WORKFLOW</p><h2 id="comparison-heading" data-i18n="comparisonTitle">Codex directly or through GWI</h2><p data-i18n="comparisonIntro">Codex already supports goals, skills, review and subagents. It provides the reasoning and tools in both routes; GWI adds project-level workflow configuration, supervision and records.</p></div>
       <table class="comparison-table">
@@ -47,41 +82,6 @@
       </table>
       <p class="comparison-fit" data-i18n="comparisonFit">Use Codex directly for a focused fix or exploration with less setup. Choose GWI when repeatable work needs several handoffs or regular human review. GWI requires local GWI/Multica services and adds coordination/context overhead; faster or cheaper completion still needs measurement.</p>
       <p class="comparison-references"><span data-i18n="comparisonReferences">Native capability references:</span> <a href="https://learn.chatgpt.com/docs/app-server#api-overview" data-i18n="comparisonNativeDocs">Goals, review and skills</a><span aria-hidden="true"> · </span><a href="https://learn.chatgpt.com/docs/agent-configuration/subagents" data-i18n="comparisonSubagents">Subagents</a></p>
-    </section>
-
-    <section id="workflow" class="workflow-section" aria-labelledby="workflow-heading">
-      <div class="section-heading"><div><p class="eyebrow" data-i18n="exampleLabel">ILLUSTRATIVE EXAMPLE</p><h2 id="workflow-heading" data-i18n="exampleTitle">A website fix, from request to review</h2></div><p data-i18n="exampleNote">An authored example of the workflow.<br>No project or run data is included.</p></div>
-      <div class="workbench-example">
-        <div class="example-topbar"><span><img src="./brand/gwi-mark.svg" width="22" height="22" alt=""><b data-i18n="exampleProject">Project website</b><span class="slash">/</span><span data-i18n="exampleWork">Language parity</span></span><span class="example-badge" data-i18n="exampleState">Ready for review</span></div>
-        <div class="example-request"><span class="request-icon" aria-hidden="true">↳</span><p data-i18n="request">“Keep the English and Chinese demo aligned when I switch languages.”</p></div>
-        <div class="example-body">
-          <ol class="example-stages" aria-label="Example workflow" data-i18n-aria="workflowLabel" id="example-stages">
-            <li><span class="stage-icon done" aria-hidden="true">✓</span><div><b data-i18n="stage1">Understand the mismatch</b><span data-i18n="stage1sub">Product · scope and expected result</span></div></li>
-            <li><span class="stage-icon done" aria-hidden="true">✓</span><div><b data-i18n="stage2">Prepare the change</b><span data-i18n="stage2sub">Development · shared demo content</span></div></li>
-            <li><span class="stage-icon done" aria-hidden="true">✓</span><div><b data-i18n="stage3">Check both languages</b><span data-i18n="stage3sub">QA · behavior, copy and layout</span></div></li>
-            <li class="current"><span class="stage-icon review" aria-hidden="true">4</span><div><b data-i18n="stage4">Review delivery</b><span data-i18n="stage4sub">Owner · inspect the result</span></div></li>
-          </ol>
-          <div class="example-detail">
-            <div class="detail-title"><span class="small-label" data-i18n="prepared">PREPARED CHANGE</span><span class="file-label">website / demo</span></div>
-            <h3 data-i18n="changeTitle">One case. Two languages.</h3>
-            <p data-i18n="changeBody">Both pages use the same example, commands and evidence. Only the displayed language changes.</p>
-            <div class="parity"><div><span lang="en">English</span><b data-i18n="caseEn">Compare two historical states</b><code>compare A B</code></div><div><span lang="zh-CN">简体中文</span><b data-i18n="caseZh">比较两个历史状态</b><code>compare A B</code></div></div>
-            <ul class="example-checks"><li data-i18n="check1">Equivalent content and interactions</li><li data-i18n="check2">Language switch preserves the investigation</li><li data-i18n="check3">Changed pages checked at desktop and narrow widths</li></ul>
-            <div class="example-artifact"><span aria-hidden="true">↗</span><span data-i18n="artifact">Change preview · Check results · Delivery record</span></div>
-          </div>
-        </div>
-        <div class="example-footer"><span class="timeline-dot"></span><span data-i18n="exampleFooter">If a check fails, return the finding to its owner and continue from that step.</span></div>
-      </div>
-    </section>
-
-    <section class="principles" aria-labelledby="work-heading">
-      <div><p class="eyebrow" data-i18n="workEyebrow">FROM PROJECT TO DELIVERED WORK</p><h2 id="work-heading" data-i18n="workTitle">Use the workbench.<br>Adjust the process when it matters.</h2></div>
-      <dl>
-        <div><dt><span>01</span><b data-i18n="point1">Start with the outcome</b></dt><dd data-i18n="point1body">Describe the work or select a reusable pipeline. State the concrete result before execution starts.</dd></div>
-        <div><dt><span>02</span><b data-i18n="point2">Follow work across roles</b></dt><dd data-i18n="point2body">Inspect stages, handoffs, changes and checks. People and agents use the same recorded work.</dd></div>
-        <div><dt><span>03</span><b data-i18n="point3">Continue with context</b></dt><dd data-i18n="point3body">Keep completed work and earlier attempts. Continue using Codex account availability and observed task trends, without estimating a token quota.</dd></div>
-        <div><dt><span>04</span><b data-i18n="point4">Keep the useful knowledge</b></dt><dd data-i18n="point4body">Connect selected project documents and reviewed lessons. Pipeline and role revisions remain inspectable.</dd></div>
-      </dl>
     </section>
 
     <section id="start" class="start-section" aria-labelledby="start-heading">

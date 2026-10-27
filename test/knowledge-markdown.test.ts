@@ -110,4 +110,22 @@ A note with a footnote.[^evidence]
     assert.ok(html.includes('>Explicit image reference</a>'));
     assert.ok(html.includes('>Local diagram</span>'));
   });
+
+  await t.test('multiple result readers keep heading and footnote identities inside their own namespace',()=>{
+    const body='## Shared evidence\n\n[Read evidence](#shared-evidence). A finding.[^source]\n\n[^source]: Synthetic source.';
+    const documentHref='#/projects?project=synthetic&goal=synthetic-result';
+    const html=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n('en')},createElement('div',null,...['first-','second-'].map(idPrefix=>createElement(KnowledgeMarkdown,{key:idPrefix,content:body,documentHref,idPrefix})))));
+    const ids=[...html.matchAll(/\sid="([^"]+)"/g)].map(match=>match[1]);
+    assert.equal(new Set(ids).size,ids.length,'Repeated document text cannot create duplicate IDs.');
+    const readers=[...html.matchAll(/<div class="knowledge-text knowledge-markdown">([\s\S]*?)<\/div>/g)].map(match=>match[1]);
+    assert.equal(readers.length,2);
+    for(const [index,reader] of readers.entries()){
+      const prefix=index===0?'first-':'second-',ownIds=new Set([...reader.matchAll(/\sid="([^"]+)"/g)].map(match=>match[1]));
+      assert.ok([...ownIds].every(id=>id.startsWith(prefix)));
+      assert.ok(ownIds.has(prefix+'gwi-knowledge-shared-evidence'));assert.ok(ownIds.has(prefix+'user-content-fn-source'));assert.ok(ownIds.has(prefix+'user-content-fnref-source'));
+      for(const match of reader.matchAll(/aria-describedby="([^"]+)"/g))for(const id of match[1].split(/\s+/))assert.ok(ownIds.has(id));
+      assert.ok(reader.includes('href="#/projects?project=synthetic&amp;goal=synthetic-result"'));
+      assert.ok(!reader.includes('href="#shared-evidence"'));
+    }
+  });
 });

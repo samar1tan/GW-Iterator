@@ -42,6 +42,83 @@ test('same-router recovery receipts survive an old GET and are acknowledged by t
   assert.equal(result,next);assert.equal(recorded,1);assert.equal(observationErrors,1);
 });
 
+test('advanced goal retry records the acknowledged execution before a failed refresh and never resubmits for observation',async t=>{
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{submitGoalRetry}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx'),{api}=await vite.ssrLoadModule('/web/api.ts');
+  const{goal,detail}=fixtures(),next:Intake={...goal,status:'routing',updatedAt:later,routerRunId:'synthetic-next-router',supervisorRunIds:[goal.routerRunId,'synthetic-next-router'],canRetry:false,retryBlockedCode:'EXECUTION_ACTIVE'};
+  const terminal:Intake={...next,status:'completed',updatedAt:'2026-01-01T00:00:02Z'};
+  let current=detail,pending:CreatedWork[]=[],writes=0,reads=0,observationErrors=0,closed=false;
+  const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});
+  globalThis.fetch=async(input,init)=>{
+    if(init?.method==='POST'){
+      writes++;assert.equal(input,`/api/intakes/${goal.id}/retry`);assert.deepEqual(JSON.parse(String(init.body)),{recoveryKey:'synthetic-captured-key',policy:{maxRounds:3}});
+      return Response.json(next);
+    }
+    reads++;assert.equal(input,`/api/projects/${goal.projectId}`);
+    assert.equal(current.intakes[0].routerRunId,next.routerRunId,'The receipt is consumed before attempting observation.');
+    if(reads===1)return Response.json({error:{code:'SYNTHETIC_UNAVAILABLE',message:'Synthetic observation failed.'}},{status:503});
+    return Response.json(reads===2?detail:{...detail,intakes:[terminal]});
+  };
+  const observe=async()=>{const incoming=await api(`/api/projects/${goal.projectId}`),result=observeProjectWork(current,incoming,pending);current=result.detail;pending=result.pending;};
+  const result=await submitGoalRetry(goal,{recoveryKey:'synthetic-captured-key',policy:{maxRounds:3}},{
+    record:(value:Intake)=>{const receipt:CreatedWork={kind:'continued-intake',value,previous:goal};pending.push(receipt);current=withCreatedWork(current,receipt);},
+    observe,onObservationError:()=>{observationErrors++;},onRun(){assert.fail('A coordinator continuation must not open an unrelated step.');},
+  });
+  closed=true;
+  assert.equal(closed,true);assert.equal(result.routerRunId,next.routerRunId);assert.equal(writes,1);assert.equal(reads,1);assert.equal(observationErrors,1);assert.equal(pending.length,1);
+  assert.equal(recoveryReceiptObserved(goal,next),false,'The previous execution is not an observation of the new receipt.');
+  await observe();assert.equal(current.intakes[0].routerRunId,next.routerRunId);assert.equal(pending.length,1);
+  await observe();assert.equal(current.intakes[0].status,'completed');assert.equal(pending.length,0);assert.equal(writes,1,'Refresh retries only the GET.');
+  assert.equal(recoveryReceiptObserved(terminal,next),true,'A terminal observation must release the routing receipt.');
+  const stopped={...next,status:'stopped' as const,controlRevision:1};
+  assert.equal(recoveryReceiptObserved(stopped,next),true);assert.equal(withCreatedWork({...detail,intakes:[stopped]},{kind:'continued-intake',value:next,previous:goal}).intakes[0].status,'stopped');
+});
+
+test('advanced goal retry preserves same-router policy approvals and rejected writes remain retryable',async t=>{
+  const{goal,detail}=fixtures(),next:Intake={...goal,policy:{...goal.policy,maxRounds:3},limitRevisions:[{revision:1,previousPolicy:goal.policy,policy:{...goal.policy,maxRounds:3},note:'Synthetic finite approval.',actor:'Synthetic owner',at:later}]};
+  const receipt:CreatedWork={kind:'continued-intake',value:next,previous:goal};
+  assert.equal(recoveryReceiptObserved(goal,next),false,'Equal timestamps and router IDs cannot acknowledge an unseen policy approval.');
+  const before=withCreatedWork(detail,receipt),old=observeProjectWork(before,detail,[receipt]);
+  assert.equal(old.pending.length,1);assert.equal(old.detail.intakes[0].policy.maxRounds,3);
+  assert.equal(observeProjectWork(old.detail,{...detail,intakes:[next]},old.pending).pending.length,0);
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{submitGoalRetry}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx');
+  const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});
+  let observations=0,receipts=0;
+  globalThis.fetch=async()=>Response.json({error:{code:'RECOVERY_CONFLICT',message:'Synthetic stale recovery key.'}},{status:409});
+  await assert.rejects(submitGoalRetry(goal,{recoveryKey:'synthetic-old-key'},{record:()=>{receipts++;},observe:async()=>{observations++;},onObservationError(){assert.fail('The write failed before observation.');},onRun(){assert.fail('No retry was accepted.');}}),{code:'RECOVERY_CONFLICT'});
+  assert.equal(receipts,0);assert.equal(observations,0);
+});
+
+test('an advanced retry receipt remains recorded when delayed observation outlives its navigation authority',async t=>{
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{submitGoalRetry}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx'),{goal}=fixtures(),receipt:Intake={...goal,retryBlockedScope:{kind:'run',id:'synthetic-child'},retryBlockedStageId:'inspect'};
+  const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});
+  let writes=0;globalThis.fetch=async()=>{writes++;return Response.json(receipt);};
+  for(const current of [false,true]){
+    let resolveObservation!:()=>void,resolveRecorded!:()=>void,recorded:Intake|undefined,navigations=0,active=true;
+    const observation=new Promise<void>(resolve=>{resolveObservation=resolve;}),received=new Promise<void>(resolve=>{resolveRecorded=resolve;});
+    const pending=submitGoalRetry(goal,{}, {record:(value:Intake)=>{recorded=value;resolveRecorded();},observe:()=>observation,onObservationError(){assert.fail('Synthetic observation succeeds.');},onRun:(id:string,stageId:string)=>{navigations++;assert.equal(id,'synthetic-child');assert.equal(stageId,'inspect');},isCurrent:()=>active});
+    await received;assert.deepEqual(recorded,receipt);active=current;resolveObservation();await pending;
+    assert.equal(navigations,current?1:0,'Leaving the view during observation cannot invoke its captured navigation callback.');
+  }
+  assert.equal(writes,2);
+});
+
+test('goal outcome and rationale use the Markdown reader while empty result messages remain plain',async t=>{
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{I18nContext,makeI18n}=await vite.ssrLoadModule('/web/i18n.tsx'),{GoalWorkspace}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx');
+  const{goal,detail}=fixtures();
+  for(const locale of ['en','zh-CN'])for(const field of ['outcome','rationale']){
+    const observed={...goal,status:'completed',canRetry:false,[field]:'## Evidence\n\n**Synthetic result**\n\n- Inspect retained work.\n\n[Read evidence](#evidence)'};
+    const markup=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(GoalWorkspace,{goal:observed,detail:{...detail,intakes:[observed]},models:[],documentHref:'#/synthetic-goal-reader',onRun(){},onBack(){},onChanged:async()=>{}})));
+    assert.ok(markup.includes('<strong>Synthetic result</strong>'));assert.ok(markup.includes('<ul>'));assert.ok(!markup.includes('**Synthetic result**'));
+    const heading=markup.match(/<h2 id="([^"]+evidence)"/);assert.ok(heading);assert.notEqual(heading[1],'gwi-knowledge-evidence');assert.ok(markup.includes('<a href="#/synthetic-goal-reader">Read evidence</a>'),'Document fragments preserve the current route.');
+  }
+  const empty=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n('en')},createElement(GoalWorkspace,{goal:{...goal,status:'completed'},detail,models:[],onRun(){},onBack(){},onChanged:async()=>{}})));
+  assert.ok(empty.includes('No accepted result is recorded.'));assert.ok(!empty.includes('knowledge-markdown'));
+});
+
 test('global recovery receipts stay current until summary observation and need-input does not become a result',()=>{
   const{goal,detail,record}=fixtures(),next={...goal,updatedAt:later,workRecoveryHistory:[record]},receipt:CreatedWork={kind:'continued-intake',value:next,previous:goal};
   const projects=[{id:goal.projectId,name:detail.project.name,repository:detail.project.repository,revision:1,pipelineCount:1}];

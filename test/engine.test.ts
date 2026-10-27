@@ -121,6 +121,57 @@ function start(h: Fixture, project: Project, pipeline: Pipeline, extra: Partial<
 const state = (run: Run, id: string) => run.stages.find(stage => stage.stageId === id)!;
 const errorCode = (code: string) => (error: unknown) => error instanceof AppError && error.code === code;
 
+test('lesson archive and restore preserve evidence, frozen work and source entries while new current context excludes archived lessons',async t=>{
+  const h=await fixture(t);let p=await project(h);
+  await writeFile(path.join(h.workspace,'README.md'),'Synthetic registered source evidence.');
+  p=await h.engine.updateProject(p.id,p.revision,{...p,knowledgeSources:[{id:'synthetic-source',path:path.join(h.workspace,'README.md'),kind:'document',roles:[]}]},OWNER);
+  const indexed=await h.engine.sync(p.id,OWNER),source=indexed.entries[0],flow=pipeline(h,p,[stage('accept',[],{executor:'manual'})]);
+  const origin=start(h,p,flow),lesson=h.engine.lesson(p.id,{title:'Synthetic retained finding',content:'Preserve confirmed receipts.',roles:[],runId:origin.id},OWNER),before=structuredClone(lesson);
+  const frozen=start(h,p,flow),snapshot=structuredClone(frozen.snapshot);
+  const synchronization=h.engine.sync(p.id,OWNER),archived=h.engine.setLessonLifecycle(p.id,lesson.id,{expectedRevision:lesson.revision,expectedLifecycleRevision:0,archived:true},OWNER);
+  const{lifecycleRevision,...retained}=archived;assert.deepEqual({...retained,status:'current'},before);assert.equal(lifecycleRevision,1);
+  assert.deepEqual(h.engine.store.get('knowledge',source.id),source,'Archiving a lesson does not alter source entries.');
+  const synced=await synchronization;assert.equal(synced.entries.find(entry=>entry.id===lesson.id)?.status,'archived');assert.equal(h.engine.store.get<KnowledgeEntry>('knowledge',lesson.id)?.status,'archived');
+  assert.deepEqual(h.engine.search(p.id,'receipt'),[]);assert.equal(h.engine.search(p.id,'receipt',undefined,undefined,'archived')[0].id,lesson.id);
+  const fresh=start(h,p,flow,{knowledgeIds:[lesson.id]});assert.equal(fresh.snapshot.knowledge.length,0,'Explicit IDs cannot reintroduce an archived current-context entry.');
+  assert.deepEqual(h.engine.run(frozen.id).snapshot,snapshot);
+  const continued=h.engine.startRun({projectId:p.id,pipelineId:flow.id,goal:'Continue the already frozen synthetic context.',baseline:'Synthetic prior basis.',idempotencyKey:randomUUID()},OWNER,frozen.snapshot);
+  assert.deepEqual(continued.snapshot.knowledge,snapshot.knowledge,'An existing frozen basis retains its original context.');
+  const restored=h.engine.setLessonLifecycle(p.id,lesson.id,{expectedRevision:lesson.revision,expectedLifecycleRevision:1,archived:false},OWNER);
+  assert.equal(restored.status,'current');assert.equal(restored.lifecycleRevision,2);assert.equal(restored.revision,before.revision);assert.equal(restored.hash,before.hash);assert.equal(restored.content,before.content);assert.equal(restored.originRunId,before.originRunId);
+  assert.equal(start(h,p,flow).snapshot.knowledge.some(entry=>entry.id===lesson.id),true);assert.deepEqual(h.engine.run(frozen.id).snapshot,snapshot);
+  const transitions=h.engine.detail(p.id,OWNER).events.filter(event=>event.type==='knowledge.lesson_archived'||event.type==='knowledge.lesson_restored');
+  assert.deepEqual(transitions.map(event=>[event.type,(event.data as {lifecycleRevision:number}).lifecycleRevision]),[['knowledge.lesson_archived',1],['knowledge.lesson_restored',2]]);
+  assert.equal(h.codex.calls.length,0);
+});
+
+test('lesson lifecycle rejects stale, cross-project, scoped-worker and source mutations and remains durable across restart',async t=>{
+  const h=await fixture(t),p=await project(h),other=await project(h),lesson=h.engine.lesson(p.id,{title:'Synthetic durable lesson',content:'Keep the original evidence.'},OWNER);
+  const input={expectedRevision:lesson.revision,expectedLifecycleRevision:0,archived:true};
+  const source:KnowledgeEntry={...lesson,id:'synthetic-source-entry',kind:'document'};h.engine.store.put('knowledge',source);
+  assert.throws(()=>h.engine.setLessonLifecycle(other.id,lesson.id,input,OWNER),errorCode('KNOWLEDGE_NOT_FOUND'));
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,source.id,input,OWNER),errorCode('LESSON_REQUIRED'));
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,lesson.id,input,{name:'Synthetic worker',kind:'agent',projectId:p.id,tools:['knowledge.write']}),errorCode('OWNER_REQUIRED'));
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,lesson.id,{...input,expectedRevision:2},OWNER),errorCode('REVISION_CONFLICT'));
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,lesson.id,{...input,content:'Unexpected source edit.'} as typeof input,OWNER),errorCode('INVALID_LESSON_LIFECYCLE'));
+  const archived=h.engine.setLessonLifecycle(p.id,lesson.id,input,OWNER);
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,lesson.id,{...input,archived:false},OWNER),errorCode('REVISION_CONFLICT'));
+  const synchronization=h.engine.sync(p.id,OWNER),restored=h.engine.setLessonLifecycle(p.id,lesson.id,{...input,expectedLifecycleRevision:1,archived:false},OWNER);
+  await synchronization;assert.deepEqual(h.engine.store.get('knowledge',lesson.id),restored,'A source read started before restore cannot overwrite it with an archived copy.');
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,lesson.id,{...input,expectedLifecycleRevision:1},OWNER),errorCode('REVISION_CONFLICT'),'Archive→restore must not make an old lifecycle approval current again.');
+  const final=h.engine.setLessonLifecycle(p.id,lesson.id,{...input,expectedLifecycleRevision:2},OWNER);assert.equal(final.revision,archived.revision);
+  await h.engine.close();h.engine=new Engine(new Store(h.stateDirectory),h.codex,h.github);
+  assert.deepEqual(h.engine.store.get('knowledge',lesson.id),final);assert.deepEqual(h.engine.search(p.id,''),[]);assert.equal(h.codex.calls.length,0);
+});
+
+test('new knowledge templates propose an owner-reviewed lesson without changing role permissions or earlier definitions',async t=>{
+  const h=await fixture(t),p=await project(h),before=structuredClone(h.engine.detail(p.id,OWNER).pipelines),roles=structuredClone(p.roles);
+  const flow=h.engine.createPipeline({projectId:p.id,roleId:'qa',template:'knowledge'},OWNER),proposal=flow.stages.find(item=>item.id==='lesson')!;
+  assert.equal(proposal.name,'Propose and review a reusable lesson');assert.match(proposal.prompt,/owner can use Knowledge → Add lesson/);assert.equal(proposal.review,true);
+  assert.deepEqual(h.engine.project(p.id).roles,roles);assert.equal(roles.find(role=>role.id==='qa')?.tools.includes('knowledge.write'),false);
+  for(const original of before)assert.deepEqual(h.engine.pipeline(original.id),original);assert.equal(h.codex.calls.length,0);
+});
+
 test('run-specific owner approval freezes its allowance without editing the saved workflow',async t=>{
   const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('delivery',[],{executor:'manual'})]);
   const key=randomUUID(),run=start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:2000,timeoutSeconds:60}});
@@ -818,6 +869,16 @@ test('development server blocks synthetic private files through direct, raw, enc
   assert.equal(readiness.workspace.code,'GIT_REPOSITORY_REQUIRED');assert.equal(readiness.knowledge.status,'not_configured');
   const bindings=await localJSON('/api/projects/'+project.id+'/bindings','PATCH',{expectedRevision:project.revision,bindings:{name:'Synthetic renamed API project',description:project.description,workspace:project.workspace,repository:project.repository}}) as Project;
   assert.deepEqual(bindings.roles,project.roles);assert.deepEqual(bindings.knowledgeSources,project.knowledgeSources);
+  const lesson=await localJSON(`/api/projects/${project.id}/knowledge/lessons`,'POST',{title:'Synthetic lifecycle evidence',content:'Retain the confirmed source text.'}) as KnowledgeEntry;
+  const lessonPath=`/api/projects/${project.id}/knowledge/lessons/${lesson.id}`,archived=await localJSON(lessonPath,'PATCH',{expectedRevision:lesson.revision,expectedLifecycleRevision:0,archived:true}) as KnowledgeEntry;
+  assert.equal(archived.status,'archived');assert.equal(archived.lifecycleRevision,1);assert.equal(archived.revision,lesson.revision);assert.equal(archived.content,lesson.content);
+  assert.deepEqual((await localJSON(`/api/projects/${project.id}/knowledge`)).entries,[]);
+  assert.deepEqual((await localJSON(`/api/projects/${project.id}/knowledge?status=archived`)).entries,[archived]);
+  const staleLesson=await fetch(origin+lessonPath,{method:'PATCH',headers:{cookie,origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:lesson.revision,expectedLifecycleRevision:0,archived:false})});
+  assert.equal(staleLesson.status,409);assert.equal((await staleLesson.json()).error.code,'REVISION_CONFLICT');
+  assert.equal((await fetch(origin+lessonPath,{method:'PATCH',headers:{origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:lesson.revision,expectedLifecycleRevision:1,archived:false})})).status,401);
+  const restored=await localJSON(lessonPath,'PATCH',{expectedRevision:lesson.revision,expectedLifecycleRevision:1,archived:false}) as KnowledgeEntry;
+  assert.equal(restored.status,'current');assert.equal(restored.lifecycleRevision,2);assert.deepEqual((await localJSON(`/api/projects/${project.id}/knowledge`)).entries,[restored]);
   for(const request of [
     {route:'/api/projects/'+project.id+'/bindings',method:'PATCH',body:{expectedRevision:bindings.revision,bindings:{name:'Expanded write',roles:[]}},code:'INVALID_PROJECT_BINDINGS'},
     {route:'/api/projects/'+project.id+'/bindings',method:'PATCH',body:{expectedRevision:project.revision,bindings:{name:'Stale write'}},code:'REVISION_CONFLICT'},

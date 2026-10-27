@@ -393,3 +393,15 @@ test('search filters roles and kinds, excludes stale entries and supports Englis
   assert.deepEqual(searchKnowledge(entries, '', 'developer', 'unknown'), []);
   assert.deepEqual(entries.map(entry => entry.id), ['shared', 'developer', 'reviewer', 'stale', 'missing']);
 });
+
+test('archived lessons retain their evidence through synchronization and only explicit management search includes them',async()=>{
+  await fixture(async workspace=>{
+    const archived=lesson({id:'archived-lesson',status:'archived',lifecycleRevision:3}),current=lesson({id:'current-lesson'}),sourceEntry=lesson({id:'synthetic-source-entry',kind:'document',status:'archived'}),before=structuredClone(archived);
+    const result=await syncKnowledge(project(workspace,[]),[archived,current]);
+    assert.deepEqual(result.entries.find(entry=>entry.id===archived.id),before);assert.deepEqual(archived,before);
+    assert.deepEqual(searchKnowledge(result.entries,'').map(entry=>entry.id),[current.id]);
+    assert.deepEqual(searchKnowledge([...result.entries,sourceEntry],'review',undefined,undefined,'archived').map(entry=>entry.id),[archived.id]);
+    assert.deepEqual(searchKnowledge(result.entries,'限制',undefined,'lesson','archived').map(entry=>entry.id),[archived.id]);
+    assert.deepEqual(searchKnowledge(result.entries,'',undefined,'document','archived'),[]);
+  });
+});
