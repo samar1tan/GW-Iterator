@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useId, useRef, useState} from 'react';
 import type {Project, ProjectBindings} from '../src/contracts';
 import {EFFORT_LABELS} from '../src/contracts';
 import {APIError, api} from './api';
@@ -19,6 +19,7 @@ export function ConfigurationView({project, onChanged, onDirtyChange, onTeam, on
   onKnowledge?: () => void;
 }) {
   const {t, date} = useI18n(), {p} = useCopy();
+  const formId = useId();
   const [draft, setDraft] = useState(() => projectBindings(project));
   const [basis, setBasis] = useState(project);
   const [clean, setClean] = useState(() => JSON.stringify(projectBindings(project)));
@@ -52,18 +53,16 @@ export function ConfigurationView({project, onChanged, onDirtyChange, onTeam, on
     } catch (error) {setError(error);} finally {setBusy(false);}
   };
   return <div className="surface configuration-surface">
-    <form inert={busy} aria-busy={busy || undefined} onSubmit={event => void save(event)}>
-      <div className="page-heading">
+    <div className="page-heading pf-view-header">
         <div><h1>{p('settings')}</h1><p className="muted">{t('projectSettingsDescription')}</p></div>
-        <div className="actions">
+        <div className="pf-settings-actions"><div className="actions">
           <Button disabled={busy} onClick={() => dirty ? setConfirmReload(true) : reload()}>{t('reloadLatest')}</Button>
-          <Button tone="primary" type="submit" disabled={busy || !dirty}>{t(busy ? 'saving' : 'save')}</Button>
-        </div>
+          <Button tone="primary" type="submit" form={formId} disabled={busy || !dirty}>{t(busy ? 'saving' : 'save')}</Button>
+        </div><p className="configuration-meta muted small">{t('projectRevision', {revision: basis.revision})} · {t('updatedAt', {date: date(basis.updatedAt)})}</p></div>
       </div>
       <ErrorNotice error={error}/>{message && <Notice tone="success">{message}</Notice>}
       {dirty && basis.revision !== project.revision && !(error instanceof APIError && error.code === 'REVISION_CONFLICT') && <Notice tone="warning">{t('revisionChanged')}</Notice>}
-      <p className="configuration-meta muted small">{t('projectRevision', {revision: basis.revision})} · {t('updatedAt', {date: date(basis.updatedAt)})}</p>
-      <section className="panel config-bindings">
+      <div className="pf-settings-columns"><form id={formId} inert={busy} aria-busy={busy || undefined} onSubmit={event=>void save(event)}><section className="panel config-bindings">
         <SectionTitle title={t('projectBindings')}/>
         <div className="form-grid">
           <Field label={t('projectName')}><input required value={draft.name} onChange={event => setDraft({...draft, name: event.target.value})}/></Field>
@@ -73,7 +72,7 @@ export function ConfigurationView({project, onChanged, onDirtyChange, onTeam, on
         </div>
       </section>
     </form>
-    <section className="pf-defaults-overview">
+    <aside className="pf-settings-aside"><section className="pf-defaults-overview">
       <SectionTitle title={p('defaultOverview')}>{onTeam && <Button onClick={() => onTeam()}>{t('manageTeam')}</Button>}</SectionTitle>
       <div className="pf-defaults-list">{project.roles.filter(role => !role.retired).map(role => <div className="pf-defaults-row" key={role.id}>
         <strong>{onTeam ? <button className="pf-text-button" onClick={() => onTeam(role.id)}>{role.name}</button> : role.name}</strong>
@@ -82,6 +81,7 @@ export function ConfigurationView({project, onChanged, onDirtyChange, onTeam, on
       </div>)}</div>
     </section>
     {onKnowledge && <div className="row-between settings-knowledge-link"><span className="muted">{t('sourceManagementLocation')}</span><Button onClick={onKnowledge}>{t('manageKnowledge')}</Button></div>}
+    </aside></div>
     {confirmReload && <Modal title={p('unsavedChanges')} busy={busy} onClose={() => setConfirmReload(false)}>
       <div className="form-stack"><p>{p('settingsReloadHelp')}</p><div className="form-actions">
         <Button disabled={busy} onClick={() => setConfirmReload(false)}>{p('keepEditing')}</Button>
