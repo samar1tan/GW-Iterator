@@ -2,7 +2,7 @@
 
 Current allowance revision: [Account-aware execution allowance](account-allowance-prd.md). Ordinary allowance decisions use Codex account availability and observed task trends; raw token counters are technical diagnostics.
 
-Current interaction revision: [Human workbench](human-workbench-prd.md). It supersedes the earlier default-canvas, exposed-configuration and separate manual-top-up interactions. Historical execution/configuration bases remain intact.
+Current interaction revision: [Human workbench](human-workbench-prd.md), extended by the [global workbench](global-workbench-prd.md). It supersedes the earlier default-canvas, exposed-configuration and separate manual-top-up interactions. Historical execution/configuration bases remain intact.
 
 Status: product baseline with implemented local browser workflows and connected runtime integration. Complete-product acceptance remains open. The experience refinement below aligns existing entry points and feedback; it does not declare the full requested product complete.
 
@@ -26,7 +26,7 @@ A focused task can remain in native Codex when it benefits from a direct convers
 
 | Surface | User outcome |
 | --- | --- |
-| Projects | Choose where to work; see active outcomes, waiting decisions and delivery health. Projects are not hardcoded demo content. |
+| Projects / global workbench | Observe projects together, submit project-scoped requests and handle work/results in place. Dedicated project workspaces remain optional focused destinations. |
 | Workbench | Understand current work, responsibility, blockers and pending decisions; start an outcome or known pipeline. |
 | Pipelines | Create, compose, edit and publish reusable workflows; supervise and compare executions. |
 | Team | Configure working roles and their actual agents, assignments, skills, tools, context, permissions and availability. |

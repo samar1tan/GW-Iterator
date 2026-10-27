@@ -2,6 +2,7 @@ import type {AllowanceAssessment} from './account-allowance-types.ts';
 export const EXECUTORS = ['manual', 'codex', 'github', 'pipeline'] as const;
 export type Executor = typeof EXECUTORS[number];
 export type WorkStatus = 'queued' | 'running' | 'waiting' | 'review' | 'paused' | 'skipped' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+export const currentWorkStatuses:ReadonlySet<string>=new Set(['routing','dispatched','retry_wait','clarification','queued','running','waiting','review','paused']);
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export type Effort = typeof EFFORTS[number];
 export const DEFAULT_EFFORT: Effort = 'max';
@@ -99,6 +100,9 @@ export type ModelInfo = {id: string; name: string; efforts: string[]; isDefault?
 export type CodexInfo = {available: boolean; connected: boolean; authenticated?: boolean; version?: string; models: ModelInfo[]; error?: string; dynamicTools?: boolean};
 export type IntegrationInfo = {codex: CodexInfo; github: {available: boolean; authenticated: boolean; error?: string};multica?:{available:boolean;authenticated:boolean;connected:boolean;serverVersion?:string;error?:unknown}};
 export type ProjectOverview = Project & {runCount: number; activeRuns: number; waitingRuns: number; knowledgeCount: number; pipelineCount: number};
+export type WorkspaceWork = {id:string;projectId:string;kind:'goal'|'run';title:string;status:Intake['status']|WorkStatus;updatedAt:string;resultKind?:'answer';pipelineName?:string;stageName?:string;attention?:boolean;waitingForInput?:boolean;routerRunId?:string;controlRevision?:number};
+export type WorkspaceDecision = {id:string;projectId:string;kind:'clarification'|'review'|'manual'|'account';title:string;request:string;intakeId?:string;runId?:string;stageId?:string;workKind:'goal'|'run';workId:string};
+export type WorkspaceSummary = {projects:Pick<ProjectOverview,'id'|'name'|'repository'|'revision'|'pipelineCount'>[];work:WorkspaceWork[];decisions:WorkspaceDecision[];sequence:number;observedAt:string};
 export type IntakeConversation = {rootIntakeId:string;turns:{intakeId:string;request:string;response:string;resultKind:'answer'|'delivery';at:string;basisRevision:number;sourceRunId:string;clarifications?:{question:string;response:string}[];omittedClarifications?:number;truncated?:boolean}[];omittedTurns:number};
 export type Intake = {
   id: string; projectId: string; request: string; baseline: string;

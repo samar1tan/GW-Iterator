@@ -9,6 +9,7 @@ The server resolves its Codex executable from `GWI_CODEX_BIN`, then `codexBinary
 | Method and route | Input and result |
 | --- | --- |
 | `GET /api/overview` | `{projects: ProjectOverview[], integrations: IntegrationInfo, events: AuditEvent[]}` |
+| `GET /api/workspace` | Lightweight authorized project identities, root work, exact human decisions, audit sequence and observation time; excludes configuration/knowledge snapshots. |
 | `POST /api/projects` | `{name,description,workspace,repository}` → `Project` with initial role/workflow templates |
 | `GET /api/projects/:id` | `ProjectDetail` |
 | `PUT /api/projects/:id` | `{expectedRevision,project:Project}` → next `Project` revision |
@@ -151,3 +152,12 @@ Role `effort` and connected-agent `thinking_level` accept `low`, `medium`, `high
 A coordinator can return `IntakeDecision` with `action:"answer"`, an empty `tasks` array and a nonempty `response` of at most 16,000 characters, alongside the usual concise `rationale` and `expectedGain`. This is a read-only informational result, not artifact delivery. It is rejected after any recorded dispatch/retry or actual ordinary delegated execution in the durable run family, including a child omitted from the target list. Current execution scope, Stop and authoritative completion/cleanup checks still apply. Native and connected planners use the same decision boundary.
 
 After verified execution termination, the request has `status:"completed"`, `resultKind:"answer"` and its response in `outcome`; the final event is `goal.answered`. Existing requests and delegated `complete` decisions retain their prior semantics and acceptance checks. Viewing a completed coordinator's retained output on a failed historical request changes no persisted state and starts no model work.
+
+
+## Global workbench projection
+
+`GET /api/workspace` returns `WorkspaceSummary`. Project identities are restricted to the caller's authorized project list. Work is keyed by project, kind and ID; outcomes and independent executions are roots, while owned coordinator/child runs are not repeated. Every pending clarification, review, manual handoff and allowance decision retains its exact project/run/stage target. Roots entirely waiting on those decisions are marked `waitingForInput`; parallel active work remains visible. Goal router/control identities let clients distinguish an earlier observation from a continuation receipt.
+
+The projection invokes no model or runtime discovery. Existing project-scoped request, run, recovery and review endpoints remain the mutation interface. Full detail is fetched only for the selected project. Global routes use `#/projects?project=PROJECT_ID&goal=INTAKE_ID` or `&run=RUN_ID&stage=STAGE_ID`; optional `filter=PROJECT_ID` controls observation only. Dedicated project routes retain their existing meaning.
+
+Global summary and detail observations acknowledge their own receipts independently. Before the first successful summary, locally acknowledged work remains available with an explicit unavailable-summary state and no invented empty counts or observation timestamp. Late starts do not navigate after a newer interaction, including an A-to-B-to-A target switch or leaving the global shell.

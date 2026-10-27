@@ -8,6 +8,7 @@ import {Engine} from './engine.ts';
 import {AccountAllowanceService} from './account-allowance.ts';
 import type {AllowanceTarget} from './account-allowance-types.ts';
 import {IntakeService} from './intake.ts';
+import {workspaceSummary} from './workspace.ts';
 import {AdoptionService,type AdoptionInput} from './adoption.ts';
 import {pipelineNeedsModel,projectReadiness} from './project-readiness.ts';
 import {requireWorkspaceReady} from './workspaces.ts';
@@ -19,7 +20,7 @@ import {ControlMcp} from './control-mcp.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
-import type {Actor,ContinueRunInput,IntegrationInfo,IntakeRetryInput,Pipeline,Project,StartRunInput,TaskOutput} from './contracts.ts';
+import type {Actor,ContinueRunInput,IntegrationInfo,IntakeRetryInput,Pipeline,Project,Run,StartRunInput,TaskOutput} from './contracts.ts';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
@@ -87,6 +88,7 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     json(response,await engine.accountAllowances!.assess(target,{refresh:method==='POST'&&input.refresh===true}));return;
   }
   if(route==='/api/overview'&&method==='GET'){json(response,{projects:engine.overview(actor),integrations:await integrations(),events:engine.store.events({limit:50})});return;}
+  if(route==='/api/workspace'&&method==='GET'){const projects=engine.overview(actor);json(response,workspaceSummary(projects,engine.store.list<Run>('run'),projects.flatMap(project=>intakeService.list(project.id)),engine.store.events({projectId:actor.projectId,limit:1})[0]?.seq??0));return;}
   if(route==='/api/integrations'&&method==='GET'){json(response,await integrations());return;}
   if(route==='/api/platform'&&method==='GET'){json(response,platform?await platform.connection():{connected:false,available:false,authenticated:false,error:{code:'MULTICA_NOT_CONFIGURED',message:'Connect the local Multica service.'}});return;}
   if(route==='/api/adoptions'&&method==='GET'){json(response,{adoptions:adoptionService.list(actor)});return;}
