@@ -581,6 +581,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-execution-activity.is-quiet { border-color: var(--line); }
 .pf-execution-activity.is-quiet .pf-execution-operation { color: var(--muted); }
 .pf-request-composer { min-width: 0; }
+.pf-request-keys { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .pf-conversation-link { display: flex; align-items: center; gap: 7px; min-width: 0; margin: -12px 0 18px; color: var(--muted); font-size: 13px; }
 .pf-conversation-link > .ui-icon { flex-shrink: 0; }
 .pf-conversation-link .pf-text-button { min-width: 0; text-align: left; overflow-wrap: anywhere; }
