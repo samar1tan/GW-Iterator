@@ -1,6 +1,6 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import type { Attempt, AuditEvent, ControlTool, Executor, IntegrationInfo, RoleProfile, WorkStatus } from '../src/contracts';
+import type { Attempt, ControlTool, Executor, RoleProfile, WorkStatus } from '../src/contracts';
 import { APIError, errorText } from './api';
 import { useI18n } from './i18n';
 import type { MessageKey } from './locales/en';
@@ -64,15 +64,8 @@ export function NativeGoalInfo({ attempt, showThread = true }: { attempt: Attemp
 }
 export const toolKeys: Record<ControlTool, MessageKey> = { 'context.read': 'toolReadContext', 'knowledge.search': 'toolSearchKnowledge', 'knowledge.write': 'toolWriteKnowledge', 'pipeline.read': 'toolReadPipeline', 'pipeline.propose': 'toolProposePipeline', 'pipeline.write': 'toolWritePipeline', 'run.read': 'toolReadRun', 'run.start': 'toolStartRun', 'intake.route': 'toolRouteIntake', 'project.bootstrap': 'toolBootstrapProject' };
 export function RoleTags({ roles, profiles }: { roles: string[]; profiles: RoleProfile[] }) {
-  const { t } = useI18n(); return <div className="tags">{roles.length ? roles.map(role => <span key={role} className="tag">{profiles.find(profile => profile.id === role)?.name ?? role}</span>) : <span className="muted small">{t('noRoleTags')}</span>}</div>;
+  const { t } = useI18n(); return <div className="tags">{roles.length ? roles.map(role => <span key={role} className="tag">{profiles.find(profile => profile.id === role)?.name ?? role}</span>) : <span className="muted small">{t('allRoles')}</span>}</div>;
 }
 export function RoleChecks({ roles, selected, onChange }: { roles: RoleProfile[]; selected: string[]; onChange: (value: string[]) => void }) {
   return <div className="check-grid">{roles.map(role => <label className="check" key={role.id}><input type="checkbox" checked={selected.includes(role.id)} onChange={event => onChange(event.target.checked ? [...selected, role.id] : selected.filter(id => id !== role.id))} /><span>{role.name}</span></label>)}</div>;
-}
-export function EventTrail({ events }: { events: AuditEvent[] }) {
-  const { t, date } = useI18n(); const [all, setAll] = useState(false); const sorted = [...events].sort((a, b) => b.seq - a.seq); const shown = all ? sorted : sorted.slice(0, 15);
-  return <section className="event-section"><SectionTitle title={t('eventTrail')}>{events.length > 15 && <Button tone="quiet" onClick={() => setAll(!all)}>{all ? t('showRecentEvents') : t('showAllEvents', { count: events.length })}</Button>}</SectionTitle>{!events.length ? <Empty>{t('noEvents')}</Empty> : <ol className="event-list">{shown.map(event => <li key={event.seq}><div className="event-marker" /><div className="event-body"><div className="event-meta"><code>{event.type}</code><span>{t('eventsActor', { actor: event.actor, date: date(event.at) })}</span></div><p>{event.message}</p>{event.stageId && <code className="muted small">{event.stageId}</code>}{event.data !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(event.data, null, 2)}</pre></details>}</div></li>)}</ol>}</section>;
-}
-export function Integrations({ value }: { value: IntegrationInfo }) {
-  const { t } = useI18n(); return <div className="integration-row"><div><span className={`connection-dot ${value.codex.connected && value.codex.authenticated !== false ? 'ok' : ''}`} /><strong>{t('codex')}</strong><span>{value.codex.authenticated === false ? t('unauthenticated') : value.codex.connected ? t('connected') : value.codex.available ? t('available') : t('unavailable')}</span>{value.codex.version && <code>{value.codex.version}</code>}{value.codex.error && <span className="integration-error">{value.codex.error}</span>}</div><div><span className={`connection-dot ${value.github.authenticated ? 'ok' : ''}`} /><strong>{t('github')}</strong><span>{value.github.authenticated ? t('connected') : value.github.available ? t('unauthenticated') : t('unavailable')}</span>{value.github.error && <span className="integration-error">{value.github.error}</span>}</div></div>;
 }

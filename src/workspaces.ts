@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {constants} from 'node:fs';
 import {mkdir,readFile,stat,realpath,lstat,readlink,symlink,writeFile,chmod,rm,open} from 'node:fs/promises';
 import path from 'node:path';
-import type {Project} from './contracts.ts';
+import type {Project,WorkspaceReadiness} from './contracts.ts';
 import {Store} from './store.ts';
 import {demand,AppError} from './validation.ts';
 
@@ -19,6 +19,25 @@ const within=(root:string,filename:string)=>filename.startsWith(root+path.sep);
 const privatePath=(relative:string)=>relative.split('/').some(part=>['.git','.local','node_modules','.cache','.gwi-verification'].includes(part)||part.startsWith('.env')&&!['.env.example','.env.sample','.env.template'].includes(part));
 const safeRelative=(relative:string)=>relative.length>0&&!path.isAbsolute(relative)&&!relative.includes('\\')&&!relative.split('/').some(part=>!part||part==='.'||part==='..');
 const gitOptions={timeout:10000,maxBuffer:8*1024*1024,env:{...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'}};
+
+/** Observe the selected repository without initializing, committing or running hooks. */
+export async function inspectWorkspace(workspace:string):Promise<WorkspaceReadiness>{
+  const root=await realpath(workspace).catch(()=>null);
+  if(!root||!(await stat(root).catch(()=>null))?.isDirectory())return{status:'blocked',code:'WORKSPACE_UNAVAILABLE'};
+  const args=['-C',root,'-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null'];
+  let top:string;
+  try{top=(await execute('git',[...args,'rev-parse','--show-toplevel'],gitOptions)).stdout.trim();}
+  catch(error){const code=(error as NodeJS.ErrnoException).code;return code==='ENOENT'?{status:'unavailable',code:'GIT_UNAVAILABLE'}:typeof code==='number'?{status:'blocked',code:'GIT_REPOSITORY_REQUIRED'}:{status:'unavailable',code:'GIT_INSPECTION_FAILED'};}
+  if(await realpath(top).catch(()=>null)!==root)return{status:'blocked',code:'GIT_ROOT_MISMATCH'};
+  try{const sourceCommit=(await execute('git',[...args,'rev-parse','--verify','HEAD^{commit}'],gitOptions)).stdout.trim();return /^[a-f0-9]{40,64}$/.test(sourceCommit)?{status:'ready',code:'READY',sourceCommit}:{status:'blocked',code:'GIT_COMMIT_REQUIRED'};}
+  catch{return{status:'blocked',code:'GIT_COMMIT_REQUIRED'};}
+}
+
+export async function requireWorkspaceReady(project:Pick<Project,'workspace'>):Promise<WorkspaceReadiness>{
+  const result=await inspectWorkspace(project.workspace);
+  if(result.status!=='ready')throw new AppError(result.code,'Use the root of a Git repository with a committed HEAD before starting model-backed work.',409,{workspace:result});
+  return result;
+}
 
 /** Check out committed input without copying private, ignored runtime state. */
 export class Workspaces {
@@ -63,9 +82,7 @@ export class Workspaces {
   }
   private async prepare(project:Project,runId:string):Promise<ExecutionWorkspace>{
     demand([project.id,runId].every(value=>/^[\w-]+$/.test(value)),'INVALID_EXECUTION_ID','Invalid execution identity.');
-    const sourcePath=await realpath(project.workspace);
-    const sourceCommit=(await execute('git',['-C',sourcePath,'rev-parse','HEAD'],{timeout:10000})).stdout.trim();
-    demand(/^[a-f0-9]{40,64}$/.test(sourceCommit),'INVALID_SOURCE_REVISION','A committed project revision is required.');
+    const inspected=await requireWorkspaceReady(project),sourcePath=await realpath(project.workspace),sourceCommit=inspected.sourceCommit!;
     const target=path.join(this.root,project.id,runId);await mkdir(path.dirname(target),{recursive:true,mode:0o700});
     await execute('git',['-c','core.hooksPath=/dev/null','clone','--no-local','--no-checkout','--',sourcePath,target],{timeout:60000,maxBuffer:1024*1024});
     await execute('git',['-C',target,'-c','core.hooksPath=/dev/null','checkout','--detach',sourceCommit],{timeout:30000});

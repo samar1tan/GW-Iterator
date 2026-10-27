@@ -97,3 +97,10 @@
 }
 
 .pf-platform .source-item .issue-dot.missing { background: var(--attention); }
+
+.settings-knowledge-link { margin: 24px 0; flex-wrap: wrap; }
+.source-actions { margin-top: 8px; justify-content: flex-start; }
+.project-readiness .actions { justify-content: flex-start; }
+
+/* Navigation focus announces the page without styling its heading as a control. */
+.pf-platform h1[tabindex="-1"]:focus { outline: none; }

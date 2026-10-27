@@ -78,7 +78,7 @@ Empty states name the absent object and one relevant existing action. Distinguis
 
 Team defaults to working roles, responsibilities, current model/effort and effective capabilities. Role editing surfaces responsibility and model choices first. Native templates, skills, MCP tools, permission mechanics and import/export remain advanced and truthful. Do not require editing permanent permissions to run a routine check.
 
-Knowledge uses a readable source/list/detail structure with provenance and current/stale status. Source entry explains project-relative paths and supported formats; the registered effective path remains inspectable. Settings groups general project bindings, execution defaults, integrations and advanced controls. Keep the ordinary page short; avoid duplicating an entire role editor as the first view. Six effort labels stay English; surrounding explanation follows the locale.
+Knowledge uses a readable source/list/detail structure with provenance and current/stale status. Source entry explains project-relative paths and supported formats; the registered effective path remains inspectable. Settings groups project bindings and read-only default/integration summaries. Team owns all role edits and Knowledge owns source management. Six effort labels stay English; surrounding explanation follows the locale.
 
 ## Public website and README
 
@@ -87,3 +87,15 @@ Lead with what a person does and the work they can inspect. Use the own mark, a 
 ## Rendered review
 
 Review all destinations and transient states after a meaningful batch. Check button wrapping, aligned actions, long requests/events, live-state stability, keyboard/modal focus, both locales and a narrow viewport. Record observed failures and fix structural issues before adding decoration.
+
+## Ownership and first-work continuity
+
+Settings starts with the four project-binding fields and Save/Reload. Team defaults are a read-only summary with a link to the responsible role; sources are managed in Knowledge. Do not retain a hidden second role/source editor. Preserve real unsaved binding edits on navigation/conflict and avoid submitting unchanged roles/sources with a binding-only action.
+
+Team keeps role editing in one dialog. Advanced capability settings distinguish Multica library skills from local Codex skill paths; local discovery/bindings explain their actual execution applicability. Discovery errors preserve the existing selected paths.
+
+A Knowledge source's expanded row has Edit and Remove registration actions. Editing opens the same source form as registration, retaining its identity, roles and optional memory section. Removal explicitly explains that it removes the registration, preserves source files and historical run context, and excludes its old indexed text from future work. The current-state list shows an actionable stale/missing explanation until a valid sync. Confirmed mutations are distinct from refresh failures and cannot be accidentally resubmitted.
+
+A new adoption's Apply action includes local source synchronization before entering Workbench. If indexing has a gap, show the created project and a Knowledge action. Setup history records the actual indexing result; existing setup records remain unchanged.
+
+Workbench and model-backed launch display one concise readiness notice only when the Git baseline is unavailable or registered sources need attention. Offer Check again and the relevant Settings/Knowledge destination; no required new fields or setup dashboard. A committed baseline is a source prerequisite, not a requirement to have a clean working tree or proof of a configured runtime. Human-only launch does not inherit the model-source gate. Automatic observations and manual refresh never start a model task.

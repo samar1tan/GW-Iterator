@@ -1,6 +1,14 @@
 import {useI18n} from '../i18n';
 
 const en = {
+  multicaLibrarySkills:'Multica skills',
+  localCodexSkills:'Local Codex skill context',
+  localCodexSkillsHelp:"GWI's native Codex execution reads these local files as skill context. Multica tasks use the separate skill-library bindings above.",
+  discoverLocalSkills:'Find local skills',
+  localSkillsNotChecked:'Local skills have not been checked.',
+  noLocalSkills:'No local skills were found in this workspace.',
+  localSkillsReadFailed:'Could not read local skills. Existing selections are retained.',
+  savedLocalSkillUnconfirmed:'Saved selection; availability has not been confirmed.',
   missingSourceHelp:'This source path is unavailable. Check the path or restore the file, then synchronize again.',
   knowledgeSourceHelp:'Paths are relative to this project; absolute paths also work. Index Markdown, text or reStructuredText. Register workflow YAML as a single artifact file.',
   openSourceExecution:'Open source execution',
@@ -88,6 +96,14 @@ const en = {
 } as const;
 type Key = keyof typeof en;
 const zh: Record<Key,string> = {
+  multicaLibrarySkills:'Multica 技能',
+  localCodexSkills:'本地 Codex 技能上下文',
+  localCodexSkillsHelp:'GWI 的原生 Codex 执行使用这些本地文件作为技能上下文。Multica 任务使用上方独立的技能库绑定。',
+  discoverLocalSkills:'查找本地技能',
+  localSkillsNotChecked:'尚未检查本地技能。',
+  noLocalSkills:'此项目目录未发现本地技能。',
+  localSkillsReadFailed:'无法读取本地技能，已保留原有选择。',
+  savedLocalSkillUnconfirmed:'已保存的选择，尚未确认此文件可用。',
   missingSourceHelp:'暂时找不到这个来源。请确认路径或恢复文件，再次同步。',
   knowledgeSourceHelp:'相对路径以当前项目目录为起点，也可输入绝对路径。支持 Markdown、文本和 reStructuredText；工作流 YAML 须以单个产物说明文件登记。',
   openSourceExecution:'查看来源执行',

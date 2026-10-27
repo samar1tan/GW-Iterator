@@ -9,6 +9,8 @@ import {AccountAllowanceService} from './account-allowance.ts';
 import type {AllowanceTarget} from './account-allowance-types.ts';
 import {IntakeService} from './intake.ts';
 import {AdoptionService,type AdoptionInput} from './adoption.ts';
+import {pipelineNeedsModel,projectReadiness} from './project-readiness.ts';
+import {requireWorkspaceReady} from './workspaces.ts';
 import {createCodexAdapter} from './adapters/codex.ts';
 import {createGithubAdapter} from './adapters/github.ts';
 import {loadPlatform} from './platform.ts';
@@ -33,6 +35,7 @@ let runtime:{codexBinary?:string;defaultModel?:string}={};
 try{const parsed:unknown=JSON.parse(await readFile(path.join(dataDirectory,'runtime.json'),'utf8'));demand(isObject(parsed)&&Object.keys(parsed).every(key=>key==='codexBinary'||key==='defaultModel')&&(parsed.codexBinary===undefined||(typeof parsed.codexBinary==='string'&&path.isAbsolute(parsed.codexBinary)&&parsed.codexBinary.length<=4096)),'INVALID_RUNTIME_CONFIG','Check the local runtime executable and default model.');demand(parsed.defaultModel===undefined||(typeof parsed.defaultModel==='string'&&parsed.defaultModel.length>0&&parsed.defaultModel.length<=160),'INVALID_RUNTIME_MODEL','Choose a model ID from the installed Codex catalog.');runtime=parsed;}
 catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
 const engine=new Engine(new Store(dataDirectory),createCodexAdapter({binary:process.env.GWI_CODEX_BIN??runtime.codexBinary,defaultModel:process.env.GWI_CODEX_MODEL??runtime.defaultModel}),createGithubAdapter());
+engine.executionReadiness=requireWorkspaceReady;
 engine.accountAllowances=new AccountAllowanceService(engine.store,{readAccountAllowance:()=>engine.codex.readAccountAllowance!()});
 const controls=new ControlMcp(`http://127.0.0.1:${port}`);
 const platform=process.env.GWI_MULTICA_CONNECTION?await loadPlatform(engine,dataDirectory,process.env.GWI_MULTICA_CONNECTION,process.env.GWI_CODEX_MODEL??runtime.defaultModel):await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel)??await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica-runtime/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel);
@@ -113,13 +116,15 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     }
     if(!resource&&method==='GET'){json(response,{...engine.detail(id,actor),intakes:intakeService.list(id)});return;}
     if(!resource&&method==='PUT'){json(response,await engine.updateProject(id,Number(input.expectedRevision),input.project as Project,actor));return;}
+    if(resource==='readiness'&&method==='GET'){engine.detail(id,actor);json(response,await projectReadiness(engine.project(id),engine.store));return;}
+    if(resource==='bindings'&&method==='PATCH'){demand(Object.keys(input).every(key=>key==='expectedRevision'||key==='bindings'),'INVALID_PROJECT_BINDINGS','Send the project revision and bindings only.');json(response,await engine.updateBindings(id,Number(input.expectedRevision),input.bindings as never,actor));return;}
     if(resource==='skills'&&method==='GET'){json(response,{skills:await engine.codex.skills(engine.project(id).workspace)});return;}
     if(resource==='knowledge/sync'&&method==='POST'){json(response,await engine.sync(id,actor));return;}
     if(resource==='knowledge'&&method==='GET'){engine.project(id);json(response,{entries:engine.search(id,url.searchParams.get('q')??'',url.searchParams.get('role')??undefined,url.searchParams.get('kind')??undefined)});return;}
     if(resource==='knowledge/lessons'&&method==='POST'){json(response,engine.lesson(id,input as {title:string;content:string;roles?:string[];runId?:string},actor),201);return;}
     if(resource==='revisions'&&method==='GET'){engine.project(id);json(response,{project:engine.store.list<{id:string;projectId:string}>('project-revision').filter(item=>item.projectId===id),pipelines:engine.store.list<{id:string;projectId:string}>('pipeline-revision').filter(item=>item.projectId===id)});return;}
     if(resource==='intakes'&&method==='GET'){json(response,{intakes:intakeService.list(id)});return;}
-    if(resource==='intakes'&&method==='POST'){json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
+    if(resource==='intakes'&&method==='POST'){engine.detail(id,actor);await engine.ensureExecutionReady(engine.project(id));json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
   }
   if(route==='/api/pipelines'&&method==='POST'){json(response,engine.createPipeline(input as {projectId:string;roleId:string;name?:string;description?:string;template?:string},actor),201);return;}
   const pipeline=route.match(/^\/api\/pipelines\/([^/]+)(?:\/(proposals))?$/);
@@ -127,6 +132,8 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   const proposal=route.match(/^\/api\/proposals\/([^/]+)\/apply$/);if(proposal&&method==='POST'){json(response,engine.applyProposal(proposal[1],actor));return;}
   if(route==='/api/runs'&&method==='POST'){
     const project=engine.detail(String(input.projectId),actor).project;
+    const selected=engine.pipeline(String(input.pipelineId));demand(selected.projectId===project.id,'PROJECT_SCOPE','Choose a pipeline in this project.',403);
+    if(pipelineNeedsModel(selected,engine.detail(project.id,actor).pipelines))await engine.ensureExecutionReady(project);
     if(typeof input.baseline!=='string'||!input.baseline.trim()){
       let revision='';try{revision=(await promisify(execFile)('git',['-C',project.workspace,'rev-parse','HEAD'],{timeout:5000})).stdout.trim();}catch{}
       input.baseline=revision?`${project.repository||project.name} @ ${revision}`:`${project.name} · configuration ${project.revision}`;
