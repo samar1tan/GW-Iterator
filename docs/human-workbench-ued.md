@@ -127,3 +127,7 @@ Workbench history expands in place to all recorded outcomes and direct execution
 Project sidebar destinations open their project-wide scope. A selected Team role is not an implicit Pipelines or Knowledge filter; contextual role links and browser history still preserve their explicit selection and return context.
 
 The prepared-change preview and provider-backed owner delivery step explicitly identify the execution-workspace boundary: acceptance does not write back to the original project directory or establish integration/publication. Do not let a successful task state imply those effects.
+
+Knowledge keeps the Sources heading outside a bounded, vertically scrollable source list. Expanded source paths and status details scroll within that region; Entries begins below it and must not overlap. Use the same containment at desktop, intermediate and narrow widths, including enlarged text and long names.
+
+The workbench's index notice names the actual gap: local content without a verified source receipt, unsynchronized registrations, or counts of missing/error entries. Use a quiet informational treatment for unverified existing content and warnings for recorded problems. Synchronize sources performs the existing local indexing operation without a model; afterward the notice follows the refreshed authoritative status. A refresh failure offers Check again rather than repeating a confirmed sync. Keep source inspection available in Knowledge and preserve the current outcome draft.

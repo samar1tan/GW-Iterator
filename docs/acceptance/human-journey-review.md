@@ -36,3 +36,11 @@ Prepared changes live in the execution workspace. Acceptance does not automatica
 This pass did not rerun live model-capacity exhaustion/fallback, real GitHub dispatch/publication, remote native cancellation, every native runtime installation or other operating systems/browsers. Existing automated coverage is separate from those live checks. Browser operation was on the local macOS in-app browser. No comparative speed, cost or autonomous-improvement claim follows from this review.
 
 Reduced-motion behavior was not exercised live. The macOS accessibility preference was left unchanged; source or automated coverage does not establish a live reduced-motion pass.
+
+## Knowledge list and index notice regression
+
+The source list now contains overflowing rows within its own scroll region. Live local browser checks used eleven registered sources, expanded a long-path source and selected an entry afterward. English and Simplified Chinese layouts were inspected at desktop and narrow widths; checked viewport widths were 700, 1024, 1280 and 1440 CSS pixels, with no page-level horizontal overflow. Browser zoom and operating-system accessibility settings were not changed in this pass.
+
+Workbench now distinguishes an unconfirmed source index from an initial synchronization, changed source settings and recorded missing/error entries. The existing synchronization operation is available directly from the notice. A live eleven-source synchronization refreshed the authoritative index status, removed the notice and retained the unsent intake draft. A separate synthetic two-source project retained a missing-source warning after a successful HTTP response; restoring the synthetic file and retrying cleared the warning. These checks dispatched no model work and changed no production source registration, role permissions or run snapshots.
+
+Focused UI/readiness tests passed. The full suite reported 462 tests: 461 passed and one existing test skipped. Type checking and the production build passed. The existing build size and third-party module-directive warnings remain. Private screenshots, fixture configuration and local audit details are excluded from publication.
