@@ -161,3 +161,10 @@ After verified execution termination, the request has `status:"completed"`, `res
 The projection invokes no model or runtime discovery. Existing project-scoped request, run, recovery and review endpoints remain the mutation interface. Full detail is fetched only for the selected project. Global routes use `#/projects?project=PROJECT_ID&goal=INTAKE_ID` or `&run=RUN_ID&stage=STAGE_ID`; optional `filter=PROJECT_ID` controls observation only. Dedicated project routes retain their existing meaning.
 
 Global summary and detail observations acknowledge their own receipts independently. Before the first successful summary, locally acknowledged work remains available with an explicit unavailable-summary state and no invented empty counts or observation timestamp. Late starts do not navigate after a newer interaction, including an A-to-B-to-A target switch or leaving the global shell.
+
+
+### Work recovery
+
+`POST /api/intakes/:id/resume` (local owner, empty body) records or reuses one pending work recovery and returns the Intake receipt immediately. It does not wait for cleanup or report a retry as completed. Observe `workRecoveryHistory` through the existing project/global detail refresh. Each record includes the exact run/stage/attempt, trigger, phase, cause code, counters, absolute confirmation deadline, next check and eventual retry/end timestamps. Earlier records remain immutable audit evidence except for their own lifecycle completion.
+
+New Intake policies set `smartRetry:true`; absence on an older stored policy does not opt it into unattended work. Confirmation and retry use the same backend path and preserve source/account/permission checks. Pending recovery can be cancelled through the existing task Stop endpoint. Retry never extends an execution policy; limit changes remain explicit existing owner operations.

@@ -139,7 +139,9 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       const distinctError='Example permission check failed.';
       const distinctRun={...blockedRun,stopReason:distinctError,stages:[{...blockedRun.stages[0],attempts:[{...blockedRun.stages[0].attempts[0],error:distinctError}]},blockedRun.stages[1]]};
       const distinct=render(createElement(RunWorkspace,{run:distinctRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
-      assert.equal((distinct.match(/notice error/g)??[]).length,1);
+      assert.equal((distinct.match(/notice error/g)??[]).length,0);
+      assert.ok(distinct.includes('class="pf-stage-error-details"'));
+      assert.ok(distinct.includes('<p class="pre-wrap">'+distinctError+'</p>'));
       assert.ok(!distinct.includes('notice warning'));
       const completed=render(createElement(RunWorkspace,{run:{...run,status:'completed',stopReason:'All stages completed.'},events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
       assert.ok(!completed.includes('notice warning'));

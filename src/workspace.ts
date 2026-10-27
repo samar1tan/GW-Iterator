@@ -1,5 +1,5 @@
 import type {Intake,ProjectOverview,Run,WorkspaceSummary,WorkspaceWork} from './contracts.ts';
-import {currentWorkStatuses} from './contracts.ts';
+import {currentWorkStatuses,activeRecoveryPhases} from './contracts.ts';
 
 /** Project membership is supplied by the caller's authorized project list. Never expose snapshots here. */
 export function workspaceSummary(projects:ProjectOverview[],allRuns:Run[],allIntakes:Intake[],sequence:number):WorkspaceSummary {
@@ -17,8 +17,8 @@ export function workspaceSummary(projects:ProjectOverview[],allRuns:Run[],allInt
   }
   const work:WorkspaceWork[]=intakes.map(goal=>{
     const execution=runs.find(run=>run.id===goal.routerRunId),action=runs.find(run=>goal.targetRunIds.includes(run.id)&&currentWorkStatuses.has(run.status)),current=goal.status==='dispatched'?action:execution;
-    const stage=current?.stages.find(stage=>['running','waiting','review'].includes(stage.status));
-    return{id:goal.id,projectId:goal.projectId,kind:'goal',title:goal.request,status:goal.status,updatedAt:goal.updatedAt,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision,...(goal.resultKind?{resultKind:goal.resultKind}:{}),...(stage&&goal.status==='dispatched'?{stageName:current!.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.name}:{}),...(goal.status==='failed'?{attention:true}:{})};
+    const stage=current?.stages.find(stage=>['running','waiting','review'].includes(stage.status)),recovery=goal.workRecoveryHistory?.at(-1),recovering=activeRecoveryPhases.has(recovery?.phase??'');
+    return{id:goal.id,projectId:goal.projectId,kind:'goal',title:goal.request,status:goal.status,updatedAt:goal.updatedAt,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision,...(recovery?{recoveryPhase:recovery.phase,recoveryId:recovery.id}:{}),...(goal.resultKind?{resultKind:goal.resultKind}:{}),...(stage&&goal.status==='dispatched'?{stageName:current!.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.name}:{}),...(goal.status==='failed'&&!recovering?{attention:true}:{})};
   });
   for(const run of runs.filter(run=>!run.parentRunId&&!run.executionKind&&!owned.has(runKey(run.projectId,run.id)))){
     const stage=run.stages.find(stage=>['running','waiting','review'].includes(stage.status));

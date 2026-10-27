@@ -422,19 +422,19 @@ test('reconciliation repairs historical and current issue metadata without overw
   });
 });
 
-test('read-only reconciliation rejects mismatched task identity and never dispatches a replacement operation', async t => {
+test('terminal proof survives message failures and reconciliation rejects mismatched task identity without replacement', async t => {
   const h = await fixture(t); h.state.taskMessageError = true;
   h.engine.agentExecutor = h.execution.agent;
   const initial = h.engine.createPipeline({projectId: h.project.id, roleId: 'development', name: 'Synthetic scoped observation'}, OWNER), flow = h.engine.updatePipeline(initial.id, initial.revision, {...initial, stages: [{id: 'work', name: 'Observe a synthetic provider result', executor: 'codex', roleId: 'development', prompt: 'Perform only the synthetic check.', review: false, dependsOn: []}]}, OWNER);
   const run = h.engine.startRun({projectId: h.project.id, pipelineId: flow.id, goal: 'Preserve scoped synthetic execution facts.', baseline: 'Synthetic committed input.', idempotencyKey: 'synthetic-scoped-observation'}, OWNER);
-  await eventually(() => h.engine.run(run.id).status === 'failed', 'the scoped task observation failure');
+  await eventually(() => h.engine.run(run.id).status === 'completed', 'the scoped terminal result despite optional message failure');
   assert.deepEqual(h.engine.run(run.id).stages[0].attempts[0].usage, {input: 420, output: 20, cachedInput: 300, total: 440}, 'Known task usage survives failure to read optional message details.');
   const before = h.execution.records(run.id)[0], original = structuredClone(h.state.tasks.get(before.issueId!)![0]);
-  assert.equal(before.cleanupConfirmed, false); assert.equal(before.taskId, original.id);
+  assert.equal(before.cleanupConfirmed, true); assert.equal(before.taskId, original.id);
   for (const mismatch of [{issue_id: 'another-synthetic-issue'}, {agent_id: 'another-synthetic-agent'}, {runtime_id: 'another-synthetic-runtime'}]) {
     h.state.tasks.set(before.issueId!, [{...original, ...mismatch}]);
     await assert.rejects(h.execution.reconcile(run.id, 'work'), error => error instanceof AppError);
-    assert.equal(h.execution.records(run.id)[0].cleanupConfirmed, false);
+    assert.equal(h.execution.records(run.id)[0].cleanupConfirmed, true, 'A rejected observation cannot erase the earlier exact terminal proof.');
   }
   h.state.tasks.set(before.issueId!, [original]); const reconciled = await h.execution.reconcile(run.id, 'work');
   assert.equal(reconciled.cleanupConfirmed, true); assert.equal(reconciled.taskId, original.id); assert.equal(h.state.issuePosts, 1);
