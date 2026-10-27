@@ -11,11 +11,27 @@ import type {ControlMcp} from './control-mcp.ts';
 import type {VerificationCheck} from './workspaces.ts';
 import {AppError,demand,isObject,validateOutput} from './validation.ts';
 
-export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null};allowanceExecutionId?:string;allowanceFinishedAt?:string;allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING'};
+export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;cancelAcknowledgedAt?:string;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null};allowanceExecutionId?:string;allowanceFinishedAt?:string;allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING'};
+export type ReconcileOptions={signal?:AbortSignal;cancelIfRunning?:boolean};
+type ReconcileResult=ExecutionRecord&{canRetry:boolean};
+type Reconciliation={controller:AbortController;cancelIfRunning:boolean;promise:Promise<ReconcileResult>};
 type RemoteProject={id:string;providerProjectId:string;workspace:string;sourceCommit:string;verification?:ExecutionRecord['verification']};
 type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds:number;tokenBudget:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review';accountStageId?:string};
 const at=()=>new Date().toISOString();
-const wait=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+const wait=(ms:number,signal?:AbortSignal)=>new Promise<void>((resolve,reject)=>{
+  checkSignal(signal);
+  const abort=()=>{clearTimeout(timer);reject(new AppError('EXECUTION_CHECK_ABORTED','The external execution check was cancelled or reached its deadline.',409));};
+  const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},ms);signal?.addEventListener('abort',abort,{once:true});
+});
+function checkSignal(signal?:AbortSignal):void{if(signal?.aborted)throw new AppError('EXECUTION_CHECK_ABORTED','The external execution check was cancelled or reached its deadline.',409);}
+function observed<T>(operation:()=>Promise<T>,signal?:AbortSignal):Promise<T>{
+  checkSignal(signal);if(!signal)return operation();
+  return new Promise<T>((resolve,reject)=>{
+    const abort=()=>reject(new AppError('EXECUTION_CHECK_ABORTED','The external execution check was cancelled or reached its deadline.',409));
+    signal.addEventListener('abort',abort,{once:true});
+    Promise.resolve().then(()=>{checkSignal(signal);return operation();}).then(value=>{signal.removeEventListener('abort',abort);try{checkSignal(signal);resolve(value);}catch(error){reject(error);}},error=>{signal.removeEventListener('abort',abort);reject(error);});
+  });
+}
 
 export function multicaUsage(value:MulticaUsage[]|undefined):Usage|undefined{
   if(!value?.length)return undefined;
@@ -38,6 +54,7 @@ export class PlatformExecution {
   private platform:Platform;
   private projects=new Map<string,Promise<RemoteProject>>();
   private accountFinishes=new Map<string,Promise<void>>();
+  private reconciliations=new Map<string,Reconciliation>();
   private controls?:ControlMcp;private closing=false;private completions=new Set<Promise<unknown>>();
   readonly agent:AgentExecutor;
   readonly planner:GoalPlanner;
@@ -45,6 +62,9 @@ export class PlatformExecution {
     this.platform=platform;this.controls=controls;
     this.agent={start:input=>this.startAgent(input),steer:(ref,text)=>this.steer(ref,text),close:()=>this.close()};
     this.planner={start:input=>this.startPlanner(input)};
+  }
+  private inspect<T>(operation:()=>Promise<T>,signal:AbortSignal):Promise<T>{
+    return observed(()=>{const pending=operation();this.completions.add(pending);void pending.then(()=>this.completions.delete(pending),()=>this.completions.delete(pending));return pending;},signal);
   }
   private async executionProject(request:Request):Promise<RemoteProject>{
     if(request.executionPurpose==='review'){
@@ -110,32 +130,39 @@ export class PlatformExecution {
     const completion=this.observe(record,request,ref).finally(()=>{lease?.revoke();this.completions.delete(completion);});this.completions.add(completion);return{ref,completion};
   }
   private async observe(record:ExecutionRecord,request:Request,ref:ExecutionRef):Promise<{text:string;usage?:Usage}>{
-    const deadline=Date.now()+request.timeoutSeconds*1000;let sequence=0,lastStatus='',cancelRequested=false;let messages:MulticaTaskMessage[]=[];
-    for(;;){
+    const deadline=Date.now()+request.timeoutSeconds*1000,total=new AbortController(),cancellation=new AbortController(),signal=AbortSignal.any([total.signal,cancellation.signal]);
+    const totalTimer=setTimeout(()=>total.abort(),request.timeoutSeconds*1000+20000);totalTimer.unref();let cancelDeadline:number|undefined,cancelTimer:ReturnType<typeof setTimeout>|undefined;
+    const beginCancellation=()=>{if(cancelDeadline!==undefined)return;cancelDeadline=Date.now()+20000;cancelTimer=setTimeout(()=>cancellation.abort(),20000);cancelTimer.unref();};
+    request.signal.addEventListener('abort',beginCancellation,{once:true});if(request.signal.aborted)beginCancellation();
+    let sequence=0,lastStatus='',cancelRequested=false,messageFailureReported=false;let messages:MulticaTaskMessage[]=[];
+    const readMessages=async(task:MulticaTask)=>{
+      try{const added=await this.platform.client.listTaskMessages(task.id,sequence,{signal:AbortSignal.any([signal,AbortSignal.timeout(5000)])});messages.push(...added);if(messages.length>1000)messages=messages.slice(-1000);for(const row of added){sequence=Math.max(sequence,row.seq);if(row.content)request.onEvent({type:'multica.message',message:row.content.slice(0,6000),ref,data:{sequence:row.seq,type:row.type,tool:row.tool}});}}
+      catch(error){if(signal.aborted&&!record.cleanupConfirmed)throw error;if(!messageFailureReported){messageFailureReported=true;request.onEvent({type:'multica.messages_unavailable',message:'Optional execution messages could not be read; task state and reported results remain authoritative.',ref});}}
+    };
+    try{for(;;){
       if(this.closing){record.status='observation_interrupted';record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','The service stopped observing this execution. Reconcile its external state before retrying.',409);}
-      const tasks=await this.platform.client.listTaskRuns(record.issueId!);const task=record.taskId?tasks.find(item=>item.id===record.taskId):tasks.at(-1);
+      const tasks=await this.platform.client.listTaskRuns(record.issueId!,{signal});const task=record.taskId?tasks.find(item=>item.id===record.taskId):tasks.at(-1);
       if(task){
         this.taskScope(record,task);
         if(!record.taskId){record.taskId=task.id;ref.externalId=task.id;request.onEvent({type:'multica.task',message:'Multica task identity confirmed.',ref});}
         record.status=task.status;record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);
         if(lastStatus!==task.status){lastStatus=task.status;request.onEvent({type:'multica.status',message:'Agent execution: '+task.status,ref,data:{status:task.status}});}
         const usage=multicaUsage(task.usage);if(usage){this.meter(record,usage);request.onEvent({type:'usage',message:'Multica reported execution usage.',ref,usage:record.usage,data:{buckets:task.usage}});}
-        const added=await this.platform.client.listTaskMessages(task.id,sequence);messages.push(...added);if(messages.length>1000)messages=messages.slice(-1000);
-        for(const row of added){sequence=Math.max(sequence,row.seq);if(row.content)request.onEvent({type:'multica.message',message:row.content.slice(0,6000),ref,data:{sequence:row.seq,type:row.type,tool:row.tool}});}
         if(isMulticaTaskTerminal(task)){
-          if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);return{text:taskResultText(task,messages),usage:record.usage};}
-          if(!task.started_at||task.result!==undefined&&task.result!==null||await this.platform.confirmDaemonIdle(record.daemon)){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);}
-          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent);await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);}
+          if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);await readMessages(task);return{text:taskResultText(task,messages),usage:record.usage};}
+          if(!task.started_at||task.result!==undefined&&task.result!==null||await this.inspect(()=>this.platform.confirmDaemonIdle(record.daemon),signal)){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);}
+          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent,signal);await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);}
           throw new AppError(record.cleanupConfirmed?'MULTICA_TASK_FAILED':'EXTERNAL_RECONCILIATION_REQUIRED',task.error??task.failure_reason??'The external task did not deliver a verified result.',409);
         }
         if(!cancelRequested&&(request.signal.aborted||Date.now()>=deadline||(record.usage&&budgetTokens(record.usage)>request.tokenBudget))){
-          cancelRequested=true;record.status='cancel_requested';this.platform.engine.store.put('multica-execution',record);await this.platform.client.cancelTask(record.issueId!,task.id);request.onEvent({type:'multica.cancel_requested',message:'External cancellation requested; awaiting authoritative execution state.',ref});
+          beginCancellation();cancelRequested=true;record.status='cancel_requested';this.platform.engine.store.put('multica-execution',record);const acknowledged=await this.platform.client.cancelTask(record.issueId!,task.id,{signal});this.taskScope(record,acknowledged);demand(acknowledged.id===task.id,'EXTERNAL_TASK_SCOPE','Cancellation acknowledged a different task.',409);record.cancelAcknowledgedAt=at();this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'multica.cancel_requested',message:'External cancellation requested; awaiting authoritative execution state.',ref});
         }
+        if(!cancelRequested)await readMessages(task);
       }
-      if(cancelRequested&&Date.now()>deadline+20000)throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','External cancellation still needs reconciliation.',409);
+      if(cancelDeadline!==undefined&&Date.now()>=Math.min(deadline+20000,cancelDeadline))throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','External cancellation still needs reconciliation.',409);
       if(!task&&Date.now()>deadline)throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','Queued work needs external reconciliation before another dispatch.',409);
-      await wait(2000);
-    }
+      await wait(2000,signal);
+    }}finally{request.signal.removeEventListener('abort',beginCancellation);clearTimeout(totalTimer);if(cancelTimer)clearTimeout(cancelTimer);}
   }
   private async startAgent(input:AgentExecutionInput):Promise<CodexExecution>{
     const result=await this.launch({...input,prompt:input.prompt+'\n\nReturn only one final JSON object: {"outcome":"done|revise|blocked|no_change","summary":"concise actual result","artifacts":[{"label":"meaningful name","path":"optional relative artifact path","url":"optional actual URL"}],"observations":["actual check or unresolved finding"]}. Do not claim a check that was not performed.'});
@@ -154,7 +181,7 @@ export class PlatformExecution {
     const task=await this.platform.client.getTask(ref.issueId,ref.externalId);demand(task.status==='running'&&task.can_supplement,'STEER_UNAVAILABLE','The active runtime cannot receive another instruction at this point.',409);
     const receipt=await this.platform.client.appendTaskInstruction(ref.issueId,ref.externalId,text,randomUUID());return{id:receipt.id,status:receipt.supplements.find(item=>item.task_id===ref.externalId)?.status??'pending'};
   }
-  async close(){this.closing=true;await Promise.allSettled([...this.completions]);}
+  async close(){this.closing=true;for(const job of this.reconciliations.values())job.controller.abort();await Promise.allSettled([...this.completions,...[...this.reconciliations.values()].map(job=>job.promise)]);}
   private async finishAccountExecution(record:ExecutionRecord,onEvent?:(event:AdapterEvent)=>void):Promise<void>{
     if(!record.allowanceExecutionId||record.allowanceFinishedAt||!record.cleanupConfirmed||!(record.status==='not_dispatched'||isMulticaTaskTerminal(record)))return;
     const pending=this.accountFinishes.get(record.id);if(pending){await pending;const latest=this.platform.engine.store.get<ExecutionRecord>('multica-execution',record.id);if(latest){record.allowanceFinishedAt=latest.allowanceFinishedAt;record.allowanceFinishError=latest.allowanceFinishError;}return;}
@@ -174,11 +201,12 @@ export class PlatformExecution {
     demand(check.unchanged,'VERIFICATION_SOURCE_MUTATED','The verification task changed prepared source. Its result was rejected; retry independent verification or return the change to implementation.',409);
   }
   private async finishIssue(id:string,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void){const record=this.platform.engine.store.get<ExecutionRecord>('multica-execution',id);if(record)await this.syncIssue(record,state,onEvent);}
-  private async syncIssue(record:ExecutionRecord,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void){
+  private async syncIssue(record:ExecutionRecord,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void,signal?:AbortSignal){
+    checkSignal(signal);
     if(!record.issueId||!record.cleanupConfirmed||record.issueState===state)return;
     record.issueDesiredState=state;this.platform.engine.store.put('multica-execution',record);
-    try{await this.platform.client.updateIssue(record.issueId,{status:state});record.issueState=state;delete record.issueSyncError;}
-    catch(error){record.issueSyncError=error instanceof Error?error.message:'Issue metadata could not be synchronized.';onEvent?.({type:'multica.issue_sync_pending',message:'Execution ended; issue metadata synchronization needs another check.',data:{issueId:record.issueId}});}
+    try{await this.platform.client.updateIssue(record.issueId,{status:state},{signal});checkSignal(signal);record.issueState=state;delete record.issueSyncError;}
+    catch(error){checkSignal(signal);record.issueSyncError=error instanceof Error?error.message:'Issue metadata could not be synchronized.';onEvent?.({type:'multica.issue_sync_pending',message:'Execution ended; issue metadata synchronization needs another check.',data:{issueId:record.issueId}});}
     record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);
   }
   records(runId:string){return this.platform.engine.store.list<ExecutionRecord>('multica-execution').filter(row=>row.runId===runId);}
@@ -192,7 +220,18 @@ export class PlatformExecution {
     });
   }
   private taskScope(record:ExecutionRecord,task:MulticaTask){demand(task.issue_id===record.issueId&&task.agent_id===record.agentId&&(!record.runtimeId||task.runtime_id===record.runtimeId),'EXTERNAL_TASK_SCOPE','The observed task does not belong to this recorded assignment and runtime.',409);}
-  async reconcile(runId:string,stageId:string){
+  async reconcile(runId:string,stageId:string,options:ReconcileOptions={}):Promise<ReconcileResult>{
+    checkSignal(options.signal);demand(!this.closing,'EXECUTION_CLOSING','The execution service is stopping.',409);
+    const run=this.platform.engine.run(runId),item=stageId==='supervise'&&run.executionKind==='agent-goal'?this.platform.engine.store.list<Intake>('intake').find(value=>value.projectId===run.projectId&&(value.routerRunId===runId||value.supervisorRunIds?.includes(runId))):undefined;
+    const canonical=item?'decision-'+(item.rounds.find(round=>round.routerRunId===runId)?.number??item.rounds.length+1):stageId,key=JSON.stringify([runId,canonical]);
+    const pending=this.reconciliations.get(key);if(pending){pending.cancelIfRunning||=options.cancelIfRunning===true;return observed(()=>pending.promise,options.signal);}
+    const controller=new AbortController(),signal=options.signal?AbortSignal.any([controller.signal,options.signal]):controller.signal;
+    const job:Reconciliation={controller,cancelIfRunning:options.cancelIfRunning===true,promise:Promise.resolve().then(()=>this.reconcileOwned(runId,stageId,signal,job)).finally(()=>{if(this.reconciliations.get(key)===job)this.reconciliations.delete(key);})};
+    this.reconciliations.set(key,job);
+    return observed(()=>job.promise,options.signal);
+  }
+  private async reconcileOwned(runId:string,stageId:string,signal:AbortSignal,job:Reconciliation):Promise<ReconcileResult>{
+    checkSignal(signal);
     const run=this.platform.engine.run(runId),attempt=run.stages[0]?.attempts.at(-1);
     if(stageId==='supervise'&&run.executionKind==='agent-goal'){
       const item=this.platform.engine.store.list<Intake>('intake').find(item=>item.projectId===run.projectId&&(item.routerRunId===runId||item.supervisorRunIds?.includes(runId)));demand(item,'EXECUTION_NOT_FOUND','This coordinator has no owning outcome.',404);
@@ -202,32 +241,34 @@ export class PlatformExecution {
         this.platform.engine.store.event({projectId:run.projectId,runId,stageId,type:'multica.preparation_reconciled',actor:'local-owner',message:'Local preparation ended before any external assignment intent. No worker was dispatched.'});
       }
     }
-    const record=this.records(runId).filter(row=>row.stageId===stageId).at(-1);demand(record,'EXECUTION_NOT_FOUND','This stage has no recorded external execution.',404);
-    for(const previous of this.records(runId).filter(previous=>previous.id!==record.id&&previous.stageId===stageId&&previous.cleanupConfirmed)){await this.finishAccountExecution(previous);if(previous.issueDesiredState&&previous.issueSyncError)await this.syncIssue(previous,previous.issueDesiredState);else if(['failed','cancelled','aborted','timeout'].includes(previous.status))await this.syncIssue(previous,'cancelled');}
-    if(record.issueDesiredState&&record.issueSyncError)await this.syncIssue(record,record.issueDesiredState);
-    if(record.status==='not_dispatched'&&record.cleanupConfirmed&&!record.issueId&&!record.taskId){await this.finishAccountExecution(record);return{...record,canRetry:true};}
+    const record=this.records(runId).filter(row=>row.stageId===stageId).at(-1);demand(record,'EXECUTION_NOT_FOUND','This stage has no recorded external execution.',404);demand(record.projectId===run.projectId,'EXTERNAL_TASK_SCOPE','The recorded assignment belongs to another project.',409);
+    for(const previous of this.records(runId).filter(previous=>previous.id!==record.id&&previous.stageId===stageId&&previous.cleanupConfirmed)){await this.inspect(()=>this.finishAccountExecution(previous),signal);if(previous.issueDesiredState&&previous.issueSyncError)await this.syncIssue(previous,previous.issueDesiredState,undefined,signal);else if(['failed','cancelled','aborted','timeout'].includes(previous.status))await this.syncIssue(previous,'cancelled',undefined,signal);}
+    if(record.issueDesiredState&&record.issueSyncError)await this.syncIssue(record,record.issueDesiredState,undefined,signal);
+    if(record.status==='not_dispatched'&&record.cleanupConfirmed&&!record.issueId&&!record.taskId){await this.inspect(()=>this.finishAccountExecution(record),signal);return{...record,canRetry:true};}
     if(!record.issueId&&record.agentId){
       const space=record.verification?this.platform.engine.store.get<RemoteProject>('multica-verification-project',record.id):this.platform.engine.store.get<RemoteProject>('multica-run-project',runId),matches:{task:MulticaTask;issueId:string}[]=[];
-      for(const task of await this.platform.client.listAgentTasks(record.agentId)){
+      for(const task of await this.platform.client.listAgentTasks(record.agentId,{signal})){
         if(!task.issue_id||task.agent_id!==record.agentId||record.runtimeId&&task.runtime_id!==record.runtimeId)continue;
-        const issue=await this.platform.client.getIssue(task.issue_id);
+        const issue=await this.platform.client.getIssue(task.issue_id,{signal});
         if(space&&issue.project_id===space.providerProjectId&&issue.description?.includes('\nGWI execution identity: '+record.id+'\n'))matches.push({task,issueId:issue.id});
       }
-      if(matches.length===1){record.issueId=matches[0].issueId;record.taskId=matches[0].task.id;this.platform.engine.store.put('multica-execution',record);
+      checkSignal(signal);if(matches.length===1){record.issueId=matches[0].issueId;record.taskId=matches[0].task.id;this.platform.engine.store.put('multica-execution',record);
         const current=this.platform.engine.run(runId),state=current.stages.find(state=>state.stageId===stageId)??(current.executionKind==='agent-goal'?current.stages.find(state=>state.stageId==='supervise'):undefined),attempt=state?.attempts.at(-1);
         if(attempt&&!attempt.ref?.issueId&&!attempt.ref?.externalId){attempt.provider='multica';attempt.ref={provider:'multica',issueId:record.issueId,externalId:record.taskId,agentId:record.agentId,runtimeId:record.runtimeId};current.updatedAt=at();this.platform.engine.store.put('run',current);}
       }
     }
     demand(record.issueId,'EXTERNAL_CREATION_UNCERTAIN','The assignment response was lost. Inspect the recorded execution identity in Multica before another dispatch.',409);
-    const tasks=await this.platform.client.listTaskRuns(record.issueId);const task=record.taskId?tasks.find(task=>task.id===record.taskId):tasks.length===1?tasks[0]:undefined;
+    const tasks=await this.platform.client.listTaskRuns(record.issueId,{signal});const task=record.taskId?tasks.find(task=>task.id===record.taskId):tasks.length===1?tasks[0]:undefined;
     demand(task,'EXTERNAL_TASK_UNCONFIRMED','The provider has not confirmed an unambiguous task for this assignment.',409);
     this.taskScope(record,task);
-    record.taskId=task.id;record.status=task.status;record.updatedAt=at();
+    checkSignal(signal);record.taskId=task.id;record.status=task.status;if(!isMulticaTaskTerminal(task))record.cleanupConfirmed=false;record.updatedAt=at();
     const usage=multicaUsage(task.usage);if(usage)this.meter(record,usage);
-    if(isMulticaTaskTerminal(task)&&(!task.started_at||task.result!==undefined&&task.result!==null||await this.platform.confirmDaemonIdle(record.daemon)))record.cleanupConfirmed=true;
+    if(isMulticaTaskTerminal(task)&&(!task.started_at||task.result!==undefined&&task.result!==null||await this.inspect(()=>this.platform.confirmDaemonIdle(record.daemon),signal)))record.cleanupConfirmed=true;
+    checkSignal(signal);
     this.platform.engine.store.put('multica-execution',record);
-    if(record.cleanupConfirmed){await this.finishAccountExecution(record);await this.checkVerification(record);}
-    if(record.cleanupConfirmed&&task.status!=='completed')await this.syncIssue(record,'cancelled');
+    if(!isMulticaTaskTerminal(task)&&job.cancelIfRunning&&!record.cancelAcknowledgedAt){record.status='cancel_requested';record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);const acknowledged=await this.platform.client.cancelTask(record.issueId,task.id,{signal});checkSignal(signal);this.taskScope(record,acknowledged);demand(acknowledged.id===task.id,'EXTERNAL_TASK_SCOPE','Cancellation acknowledged a different task.',409);record.cancelAcknowledgedAt=at();this.platform.engine.store.put('multica-execution',record);}
+    if(record.cleanupConfirmed){await this.inspect(()=>this.finishAccountExecution(record),signal);await this.inspect(()=>this.checkVerification(record),signal);}
+    if(record.cleanupConfirmed&&task.status!=='completed')await this.syncIssue(record,'cancelled',undefined,signal);
     this.platform.engine.store.event({projectId:record.projectId,runId,stageId,type:'multica.reconciled',actor:'local-owner',message:record.cleanupConfirmed?'External task termination confirmed; prior results remain available for review.':'External task state observed; termination is not yet confirmed.',data:{taskId:task.id,status:task.status,cleanupConfirmed:record.cleanupConfirmed}});
     return{...record,canRetry:record.cleanupConfirmed};
   }

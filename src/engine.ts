@@ -24,6 +24,7 @@ const system:Actor={name:'scheduler',kind:'agent'};
 type Active={controller:AbortController;runId:string;stageId:string;attemptId:string};
 
 export class Engine {
+  reconcileExternal?:(runId:string,stageId:string,options:{signal:AbortSignal;cancelIfRunning:boolean})=>Promise<{cleanupConfirmed:boolean;status:string}>;
   readonly store:Store; readonly codex:CodexAdapter; readonly github:GithubAdapter;
   agentExecutor?:AgentExecutor; goalPlanner?:GoalPlanner; accountAllowances?:AccountAllowanceService; accountModelResolver?:(project:Project,role:Project['roles'][number])=>Promise<string|null>;
   executionReadiness?:(project:Project)=>Promise<unknown>;

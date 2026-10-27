@@ -1,6 +1,11 @@
-import type {WorkspaceSummary,WorkspaceWork} from '../../src/contracts';
+import type {WorkspaceSummary,WorkspaceWork} from '../../src/contracts.ts';
+import {activeRecoveryPhases,currentWorkStatuses} from '../../src/contracts.ts';
 import type {Route} from './route';
 import type {CreatedWork} from './workObservations';
+import {newRecoveryReceipt,recoveryPhaseObserved} from './workRecovery.ts';
+
+export const workspaceWorkCurrent=(item:WorkspaceWork)=>currentWorkStatuses.has(item.status)||activeRecoveryPhases.has(item.recoveryPhase??'');
+export const workspaceWorkNeedsInput=(item:WorkspaceWork)=>!activeRecoveryPhases.has(item.recoveryPhase??'')&&(!!item.attention||item.recoveryPhase==='needs_input');
 
 export function globalWorkRoute(route:Route,projectId:string,kind:'goal'|'run',id:string,stageId?:string):Route {
   return{surface:'workbench',role:'',projectFilter:route.projectFilter,contextProjectId:projectId,...(kind==='goal'?{intakeId:id}:{runId:id,stageId})};
@@ -16,6 +21,7 @@ export function unobservedWorkspaceReceipts(summary:WorkspaceSummary,pending:rea
     const current=summary.work.find(item=>item.projectId===receipt.value.projectId&&item.kind===(receipt.kind==='run'?'run':'goal')&&item.id===receipt.value.id);
     if(!current)return true;
     if(receipt.kind!=='continued-intake')return false;
+    if(newRecoveryReceipt(receipt.value,receipt.previous)){const record=receipt.value.workRecoveryHistory!.at(-1)!;if((current.controlRevision??0)>(receipt.value.controlRevision??0))return false;if(current.recoveryId===record.id)return !recoveryPhaseObserved(current.recoveryPhase,record.phase);return Date.parse(current.updatedAt)<=Date.parse(receipt.value.updatedAt);}
     if(current.routerRunId===receipt.value.routerRunId||(current.controlRevision??0)>(receipt.previous.controlRevision??0))return false;
     if(current.routerRunId===receipt.previous.routerRunId||receipt.value.supervisorRunIds?.includes(current.routerRunId??''))return true;
     return Date.parse(current.updatedAt)<=Date.parse(receipt.value.updatedAt);
@@ -35,9 +41,9 @@ export function workspaceWithReceipts(summary:WorkspaceSummary,pending:readonly 
   for(const receipt of pending){
     if(!projects.has(receipt.value.projectId))continue;
     const kind=receipt.kind==='run'?'run':'goal',index=work.findIndex(item=>item.projectId===receipt.value.projectId&&item.kind===kind&&item.id===receipt.value.id);
-    if(index>=0&&!(receipt.kind==='continued-intake'&&work[index].status===receipt.previous.status&&Date.parse(work[index].updatedAt)<=Date.parse(receipt.previous.updatedAt)))continue;
+    if(index>=0&&!(receipt.kind==='continued-intake'&&(newRecoveryReceipt(receipt.value,receipt.previous)?(work[index].controlRevision??0)<=(receipt.value.controlRevision??0)&&Date.parse(work[index].updatedAt)<=Date.parse(receipt.value.updatedAt)&&unobservedWorkspaceReceipts({...summary,work:[work[index]]},[receipt]).length>0:work[index].status===receipt.previous.status&&Date.parse(work[index].updatedAt)<=Date.parse(receipt.previous.updatedAt))))continue;
     if(receipt.kind==='continued-intake'&&receipt.value.status!=='clarification')answeredQuestions.add(JSON.stringify([receipt.value.projectId,receipt.value.id]));
-    const item:WorkspaceWork={id:receipt.value.id,projectId:receipt.value.projectId,kind,title:receipt.kind==='run'?receipt.value.goal:receipt.value.request,status:receipt.value.status,updatedAt:receipt.value.updatedAt,...(receipt.kind!=='run'?{routerRunId:receipt.value.routerRunId,controlRevision:receipt.value.controlRevision,...(receipt.value.resultKind?{resultKind:receipt.value.resultKind}:{})}:{})};
+    const item:WorkspaceWork={id:receipt.value.id,projectId:receipt.value.projectId,kind,title:receipt.kind==='run'?receipt.value.goal:receipt.value.request,status:receipt.value.status,updatedAt:receipt.value.updatedAt,...(receipt.value.status==='failed'?{attention:true}:{}),...(receipt.kind!=='run'?{routerRunId:receipt.value.routerRunId,controlRevision:receipt.value.controlRevision,recoveryPhase:receipt.value.workRecoveryHistory?.at(-1)?.phase,recoveryId:receipt.value.workRecoveryHistory?.at(-1)?.id,...(receipt.value.resultKind?{resultKind:receipt.value.resultKind}:{})}:{})};
     if(index<0)work.unshift(item);else work[index]=item;
   }
   return{...summary,work,decisions:summary.decisions.filter(item=>!item.intakeId||!answeredQuestions.has(JSON.stringify([item.projectId,item.intakeId])))};

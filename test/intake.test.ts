@@ -78,7 +78,7 @@ async function fixture(t: TestContext) {
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const current = (h: Fixture, item: Intake) => h.intake.list(item.projectId).find(value => value.id === item.id)!;
 function create(h: Fixture, policy: Partial<Intake['policy']> = {}) {
-  return h.intake.create(h.project.id, {request: 'Resolve the bounded synthetic mismatch with evidence.', idempotencyKey: randomUUID(), policy: {maxRounds: 4, maxParallel: 2, maxTotalTokens: 10000, maxElapsedSeconds: 300, ...policy}}, OWNER);
+  return h.intake.create(h.project.id, {request: 'Resolve the bounded synthetic mismatch with evidence.', idempotencyKey: randomUUID(), policy: {maxRounds: 4, maxParallel: 2, maxTotalTokens: 10000, maxElapsedSeconds: 300, smartRetry:false, ...policy}}, OWNER);
 }
 const decision = (action: 'dispatch' | 'complete' | 'stop' | 'clarify', tasks: {pipelineId: string; goal: string}[] = []) => ({action, rationale: 'The synthetic evidence supports this next action.', expectedGain: 'Resolve one specific synthetic uncertainty.', tasks});
 const task = (pipeline: Pipeline, goal = 'Inspect the assigned synthetic artifact.') => ({pipelineId: pipeline.id, goal});
@@ -258,7 +258,7 @@ async function capacityFailure(h:Fixture,item:Intake,usage?:{input:number;output
   await pump(h,()=>['failed','retry_wait'].includes(current(h,item).status),'a confirmed native capacity failure');
 }
 
-test('capacity classification is narrow and automatic recovery is off by default', async t=>{
+test('capacity classification is narrow and explicit manual-only policy disables automatic recovery', async t=>{
   assert.equal(isNativeCapacityFailure(CAPACITY),true);
   assert.equal(isNativeCapacityFailure('Native turn failed: '+CAPACITY),true);
   assert.equal(isNativeCapacityFailure('A native error.','model_capacity_exceeded'),true);
@@ -945,4 +945,26 @@ test('a stopped native answer and an unconfirmed connected task cannot acquire a
     const item=create(h);h.planner.calls[0].completion.resolve({decision:directAnswer()});
     await pump(h,()=>current(h,item).status==='failed','unconfirmed external answer rejection');assert.equal(current(h,item).resultKind,undefined);assert.deepEqual(current(h,item).rounds,[]);
   });
+});
+
+
+test('new outcomes enable bounded smart retry while stored legacy policies remain unchanged',async t=>{
+  const h=await fixture(t),item=h.intake.create(h.project.id,{request:'Inspect the independently authored synthetic input.',idempotencyKey:'new-smart-default'},OWNER);
+  assert.equal(item.policy.smartRetry,true);
+  const stored=h.engine.store.get<Intake>('intake',item.id)!;delete stored.policy.smartRetry;h.engine.store.put('intake',stored);
+  assert.equal(current(h,item).policy.smartRetry,undefined);
+});
+
+
+test('smart retry caps combined automatic recoveries while explicit legacy policy remains independent',async t=>{
+  const h=await fixture(t),item=create(h,{smartRetry:true,recovery:{autoRetry:true,maxAttempts:5,backoffSeconds:1,allowedFallbackModels:[]}});
+  const stored=h.engine.store.get<Intake>('intake',item.id)!;stored.workRecoveryHistory=[0,1].map(n=>({id:'synthetic-prior-retry-'+n,trigger:'automatic',phase:'completed',runId:'synthetic-prior-run',stageId:'work',routerRunId:item.routerRunId,controlRevision:0,startedAt:item.createdAt,deadlineAt:item.createdAt,nextAt:item.createdAt,checks:1,code:'RECOVERY_COMPLETED',retriedAt:item.createdAt,endedAt:item.createdAt}));h.engine.store.put('intake',stored);
+  await capacityFailure(h,item);assert.equal(current(h,item).status,'failed');assert.equal(current(h,item).nextRetryAt,undefined);assert.equal(h.codex.goals.length,1);
+});
+
+test('explicit work recovery replaces scheduled capacity retry before a later handoff',async t=>{
+  const h=await fixture(t),item=create(h,{recovery:{autoRetry:true,maxAttempts:2,backoffSeconds:30,allowedFallbackModels:[]}});await capacityFailure(h,item);
+  h.intake.continueWork(item.id,OWNER);await immediate();
+  const value=current(h,item);assert.equal(value.recoveryHistory?.find(row=>row.status==='scheduled'),undefined);assert.equal(value.nextRetryAt,undefined);
+  assert.notEqual(value.status,'retry_wait');
 });

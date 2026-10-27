@@ -37,7 +37,8 @@ test('questions show answers and retained failed results without inventing deliv
     assert.deepEqual({failed,coordinator},before);
     const noOutput={...coordinator,stages:[{stageId:'supervise',status:'failed' as const,attempts:[]}]};
     const empty=render(locale,GoalWorkspace,{...props,goal:failed,detail:detail(failed,noOutput)});
-    assert.ok(empty.includes(locale==='en'?'No action was dispatched.':'本次没有派发任务。'));
+    assert.ok(empty.includes(locale==='en'?'Retry task':'重试任务'));
+    assert.ok(empty.includes('class="pf-work-recovery"'));
     assert.ok(!empty.includes(locale==='en'?'Determining the work scope':'正在确定工作范围'));
   }
   assert.equal(activityTitle('goal.answered'),'eventAnswered');

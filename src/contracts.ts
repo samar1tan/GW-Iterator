@@ -100,7 +100,8 @@ export type ModelInfo = {id: string; name: string; efforts: string[]; isDefault?
 export type CodexInfo = {available: boolean; connected: boolean; authenticated?: boolean; version?: string; models: ModelInfo[]; error?: string; dynamicTools?: boolean};
 export type IntegrationInfo = {codex: CodexInfo; github: {available: boolean; authenticated: boolean; error?: string};multica?:{available:boolean;authenticated:boolean;connected:boolean;serverVersion?:string;error?:unknown}};
 export type ProjectOverview = Project & {runCount: number; activeRuns: number; waitingRuns: number; knowledgeCount: number; pipelineCount: number};
-export type WorkspaceWork = {id:string;projectId:string;kind:'goal'|'run';title:string;status:Intake['status']|WorkStatus;updatedAt:string;resultKind?:'answer';pipelineName?:string;stageName?:string;attention?:boolean;waitingForInput?:boolean;routerRunId?:string;controlRevision?:number};
+export type WorkspaceWork = {id:string;projectId:string;kind:'goal'|'run';title:string;status:Intake['status']|WorkStatus;updatedAt:string;resultKind?:'answer';pipelineName?:string;stageName?:string;attention?:boolean;waitingForInput?:boolean;routerRunId?:string;controlRevision?:number;recoveryPhase?:WorkRecoveryRecord['phase'];recoveryId?:string};
+export const activeRecoveryPhases:ReadonlySet<string>=new Set(['checking','backoff','retrying','resuming']);
 export type WorkspaceDecision = {id:string;projectId:string;kind:'clarification'|'review'|'manual'|'account';title:string;request:string;intakeId?:string;runId?:string;stageId?:string;workKind:'goal'|'run';workId:string};
 export type WorkspaceSummary = {projects:Pick<ProjectOverview,'id'|'name'|'repository'|'revision'|'pipelineCount'>[];work:WorkspaceWork[];decisions:WorkspaceDecision[];sequence:number;observedAt:string};
 export type IntakeConversation = {rootIntakeId:string;turns:{intakeId:string;request:string;response:string;resultKind:'answer'|'delivery';at:string;basisRevision:number;sourceRunId:string;clarifications?:{question:string;response:string}[];omittedClarifications?:number;truncated?:boolean}[];omittedTurns:number};
@@ -117,9 +118,15 @@ export type Intake = {
   recoveryKey?:string;recoveryRecommendation?:GoalContinuationRecommendation;limitReached?:'rounds';controlRevision?:number;
   limitRevisions?:{revision:number;previousPolicy:IntakePolicy;policy:IntakePolicy;note:string;actor:string;at:string;approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation}}[];
   executionTimeMeter?:'active-windows-v1'; executionTime?:{usedSeconds:number; remainingSeconds:number; totalElapsedSeconds:number};
+  workRecoveryHistory?:WorkRecoveryRecord[];
+};
+export type WorkRecoveryRecord = {
+  id:string;trigger:'manual'|'automatic';phase:'checking'|'backoff'|'retrying'|'resuming'|'completed'|'needs_input'|'cancelled';
+  runId:string;stageId:string;attemptId?:string;routerRunId:string;controlRevision:number;runControlRevision?:number;
+  startedAt:string;deadlineAt:string;nextAt:string;checks:number;code:string;error?:string;retriedAt?:string;endedAt?:string;
 };
 export type GoalRecoveryPolicy = {autoRetry:boolean; maxAttempts:number; backoffSeconds:number; allowedFallbackModels:string[]};
-export type IntakePolicy = {maxRounds: number; maxParallel: number; maxTotalTokens: number; maxElapsedSeconds: number; recovery?:GoalRecoveryPolicy};
+export type IntakePolicy = {maxRounds: number; maxParallel: number; maxTotalTokens: number; maxElapsedSeconds: number; recovery?:GoalRecoveryPolicy;smartRetry?:boolean};
 export type GoalContinuationRecommendation = {policy:Partial<Pick<IntakePolicy,'maxRounds'|'maxTotalTokens'|'maxElapsedSeconds'>>;basis:{usedTokens:number;reservedTokens:number;usedSeconds:number;actionRounds:number;previousPolicy:IntakePolicy};purpose:'one-focused-continuation'};
 export type GoalFailure = {kind:'capacity'|'other'; message:string; code?:string; at:string; runId:string; native:boolean};
 export type GoalRecoveryRecord = {
@@ -128,6 +135,7 @@ export type GoalRecoveryRecord = {
   previousRef?:ExecutionRef; newRef?:ExecutionRef; basisRevision:number; previousBasisRevision:number;
   refreshConfiguration:boolean; previousPolicy?:IntakePolicy; newPolicy?:IntakePolicy; error?:string;
   replyToQuestion?:string;
+  workRecoveryId?:string;
   startedAt?:string; endedAt?:string;
   approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation};
 };

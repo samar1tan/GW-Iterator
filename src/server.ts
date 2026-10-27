@@ -41,7 +41,7 @@ engine.accountAllowances=new AccountAllowanceService(engine.store,{readAccountAl
 const controls=new ControlMcp(`http://127.0.0.1:${port}`);
 const platform=process.env.GWI_MULTICA_CONNECTION?await loadPlatform(engine,dataDirectory,process.env.GWI_MULTICA_CONNECTION,process.env.GWI_CODEX_MODEL??runtime.defaultModel):await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel)??await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica-runtime/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel);
 const execution=platform?new PlatformExecution(platform,controls):undefined;
-if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.planner;}
+if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.planner;engine.reconcileExternal=(runId,stageId,options)=>execution.reconcile(runId,stageId,options);}
 engine.accountModelResolver=async(project,role)=>platform?platform.effectiveRoleModel(project,role):role.model??process.env.GWI_CODEX_MODEL??runtime.defaultModel??(await engine.codex.info()).models.find(model=>model.isDefault)?.id??null;
 const intakeService=new IntakeService(engine);
 const adoptionService=new AdoptionService(engine);adoptionService.recover();
@@ -143,8 +143,8 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     const approval=input.approveAccountStep===true?await engine.approveAccountStep(await accountTarget({projectId:project.id,pipelineId:String(input.pipelineId)},actor),typeof input.accountAssessmentKey==='string'?input.accountAssessmentKey:undefined,actor):undefined;
     json(response,engine.startRun(input as StartRunInput,actor,undefined,undefined,approval),201);return;
   }
-  const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry)$/);
-  if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
+  const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry|resume)$/);
+  if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='resume'?intakeService.continueWork(id,actor):intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
   if(run&&run[2]==='recovery'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.recoveryWithAccount(id,url.searchParams.get('stageId')??undefined,actor,url.searchParams.get('resourceMode')==='account'));return;}
   if(run&&run[2]==='continue'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.continueWithAccount(id,input as ContinueRunInput,actor));return;}

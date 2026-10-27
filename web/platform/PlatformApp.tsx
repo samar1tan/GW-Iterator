@@ -47,7 +47,7 @@ function PlatformWorkspace({locale,onLocale}:{locale:Locale;onLocale:()=>void}){
  const current=detail?.project.id===route.projectId?detail:null,project=current?.project;
  const openRun=(id:string,stageId?:string)=>navigate({...route,runId:id,stageId,editing:false});
  const createdGoal=(goal:Intake)=>{recordCreated({kind:'intake',value:goal});if(projectScope.current===goal.projectId&&interactionScope.current.generation===interactionGeneration)openGoal(goal.id);};
- const continuedGoal=(goal:Intake,previous:Intake)=>{recordCreated({kind:'continued-intake',value:goal,previous:{routerRunId:previous.routerRunId,status:previous.status,updatedAt:previous.updatedAt,controlRevision:previous.controlRevision}});if(projectScope.current===goal.projectId&&interactionScope.current.generation===interactionGeneration)openGoal(goal.id);};
+ const continuedGoal=(goal:Intake,previous:Intake)=>{recordCreated({kind:'continued-intake',value:goal,previous:{routerRunId:previous.routerRunId,status:previous.status,updatedAt:previous.updatedAt,controlRevision:previous.controlRevision,workRecoveryHistory:previous.workRecoveryHistory}});if(projectScope.current===goal.projectId&&interactionScope.current.generation===interactionGeneration)openGoal(goal.id);};
  const openGoal=(id:string)=>navigate({...route,surface:'workbench',runId:undefined,pipelineId:undefined,intakeId:id,stageId:undefined,editing:false});
  const goWorkbench=()=>navigate({projectId:route.projectId,surface:'workbench',role:''});
  const startPipeline=useCallback(async(pipeline:Pipeline):Promise<void>=>{setLaunchOrigin(route);setLaunching(pipeline)},[route]);

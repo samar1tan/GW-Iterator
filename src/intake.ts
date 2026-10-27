@@ -10,11 +10,15 @@ import {validatePlannerDecision} from './goal-planner.ts';
 import type {GoalPlannerObservation} from './goal-planner.ts';
 import type {AllowanceAssessment,AllowanceExecution,AllowanceTarget} from './account-allowance-types.ts';
 import {CONVERSATION_DATA_RULE,followUpContext} from './intake-context.ts';
+import {isNativeCapacityFailure} from './execution-failures.ts';
+export {isNativeCapacityFailure} from './execution-failures.ts';
+import {WorkRecovery,currentWorkRecovery,workRecoveryPending} from './work-recovery.ts';
+import type {WorkRecoveryRecord} from './contracts.ts';
 
 const at=()=>new Date().toISOString();
 const terminal=(run:Run)=>['completed','failed','interrupted','cancelled'].includes(run.status);
 const recoveryDefaults:GoalRecoveryPolicy={autoRetry:false,maxAttempts:2,backoffSeconds:30,allowedFallbackModels:[]};
-const defaults:IntakePolicy={maxRounds:4,maxParallel:2,maxTotalTokens:600000,maxElapsedSeconds:3600};
+const defaults:IntakePolicy={maxRounds:4,maxParallel:2,maxTotalTokens:600000,maxElapsedSeconds:3600,smartRetry:true};
 type Basis={id:string;revision?:number;project:Project;pipelines:Pipeline[];knowledge:Run['snapshot']['knowledge'];conversation?:Intake['conversation']};
 type Active={runId:string;controller:AbortController;wake?: (result:unknown)=>void;finished?:Promise<void>;planner?:boolean};
 type PlannerExecutionRecord={id:string;projectId:string;runId:string;stageId:string;taskId?:string;issueId?:string;status:string;cleanupConfirmed:boolean};
@@ -22,22 +26,39 @@ type RetryBlock={code:string;reason:string;scope:RecoveryScope;stageId?:string};
 
 function validateGoalPolicy(value:IntakePolicy):IntakePolicy {
   const result=structuredClone(value);
+  demand(result.smartRetry===undefined||typeof result.smartRetry==='boolean','INVALID_RECOVERY_POLICY','Choose whether smart retry is enabled.');
   for(const[key,min,max]of [['maxRounds',1,10],['maxParallel',1,2],['maxTotalTokens',1000,1000000],['maxElapsedSeconds',30,7200]] as const)demand(Number.isInteger(result[key])&&result[key]>=min&&result[key]<=max,'INVALID_GOAL_POLICY',`Check ${key}: ${min}–${max}.`);
   if(result.recovery!==undefined){const r=result.recovery;demand(isObject(r)&&typeof r.autoRetry==='boolean'&&Number.isInteger(r.maxAttempts)&&r.maxAttempts>=1&&r.maxAttempts<=5&&Number.isInteger(r.backoffSeconds)&&r.backoffSeconds>=1&&r.backoffSeconds<=3600&&Array.isArray(r.allowedFallbackModels)&&r.allowedFallbackModels.length<=10&&r.allowedFallbackModels.every(model=>text(model,160))&&new Set(r.allowedFallbackModels).size===r.allowedFallbackModels.length,'INVALID_RECOVERY_POLICY','Choose bounded recovery attempts, backoff and an explicit model pool.');}
   return result;
-}
-
-export function isNativeCapacityFailure(message:unknown,code?:unknown):boolean {
-  const nativeCodes=new Set(['model_at_capacity','model_capacity_exceeded','modelatcapacity','modelcapacityexceeded']);
-  if(typeof code==='string'&&nativeCodes.has(code.trim().toLowerCase()))return true;
-  return typeof message==='string'&&message.replace(/\s+/g,' ').toLowerCase().includes('selected model is at capacity. please try a different model.');
 }
 
 /** Persist supervision decisions and wait for authoritative work without reasoning polls. */
 export class IntakeService {
   private engine:Engine; private active=new Map<string,Active>(); private reconciling=false; private dispatching=new Set<string>();
   private recovering=new Set<string>(); private scheduled=new Set<string>(); private closed=false;
-  constructor(engine:Engine){this.engine=engine;engine.intake={route:(runId,stageId,args)=>this.route(runId,stageId,args),reconcile:()=>this.reconcile(),allowance:runId=>this.allowanceForRun(runId),cancelRun:(id,note)=>this.cancelRun(id,note),close:()=>this.close()};}
+  private work:WorkRecovery;
+  constructor(engine:Engine){
+    this.engine=engine;
+    this.work=new WorkRecovery({engine,get:id=>this.get(id),all:()=>engine.store.list<Intake>('intake'),family:goal=>this.family(goal),
+      save:(goal,event)=>{this.save(goal);const record=currentWorkRecovery(goal)!;engine.store.event({projectId:goal.projectId,runId:record.runId,stageId:record.stageId,type:event,actor:'work-recovery',message:record.code,data:{intakeId:goal.id,recoveryId:record.id,phase:record.phase,checks:record.checks}});},
+      active:id=>this.active.has(id),pause:goal=>{if(['routing','dispatched','retry_wait'].includes(goal.status)){this.discardScheduled(goal,'Work recovery needs owner input.');goal.status='failed';this.save(goal);this.active.get(goal.id)?.controller.abort();}},
+      resume:(goal,record)=>this.resumeWork(goal,record),remaining:goal=>this.remaining(goal),confirmed:run=>this.cleanupConfirmed(run,run.stages[0]?.attempts.at(-1))});
+    engine.intake={route:(runId,stageId,args)=>this.route(runId,stageId,args),reconcile:()=>this.reconcile(),allowance:runId=>this.allowanceForRun(runId),cancelRun:(id,note)=>this.cancelRun(id,note),close:()=>this.close()};
+  }
+  private discardScheduled(goal:Intake,reason:string){
+    for(const row of goal.recoveryHistory??[])if(row.status==='scheduled'){row.status='cancelled';row.endedAt=at();row.error=reason;}
+    this.scheduled.delete(goal.id);delete goal.nextRetryAt;
+  }
+  continueWork(id:string,actor:Actor):Intake{
+    const goal=this.get(id);this.engine.detail(goal.projectId,actor);demand(!actor.projectId,'OWNER_REQUIRED','Only the local owner may request task recovery.',403);
+    if(goal.status==='retry_wait'){this.discardScheduled(goal,'Replaced by explicit work recovery.');goal.controlRevision=(goal.controlRevision??0)+1;goal.status='failed';this.save(goal);}
+    this.work.begin(id,'manual');this.work.tick();return this.decorate(this.get(id));
+  }
+  private async resumeWork(goal:Intake,record:WorkRecoveryRecord):Promise<void>{
+    if(goal.status==='dispatched'){goal.status='failed';this.save(goal);}
+    await this.recover(goal.id,{note:'Resume coordination from retained outcomes after confirmed work recovery.'},{name:record.trigger==='automatic'?'smart-recovery':'local-owner',kind:record.trigger==='automatic'?'agent':'human'},record.trigger,undefined,undefined,undefined,record.id);
+    const current=this.get(goal.id),row=current.workRecoveryHistory?.find(row=>row.id===record.id);if(row){row.phase='completed';row.code='RECOVERY_COMPLETED';row.endedAt=at();this.save(current);}
+  }
   private accountMode(item:Intake):boolean{return item.resourceMode==='account'||(!!this.engine.accountAllowances&&item.resourceMode!=='tokens');}
   private tokenExhausted(item:Intake):boolean{return !this.accountMode(item)&&this.tokens(item)>=item.policy.maxTotalTokens;}
   async accountTarget(projectId:string,intakeId?:string,model?:string):Promise<AllowanceTarget>{
@@ -58,6 +79,7 @@ export class IntakeService {
   private retryBlock(item:Intake,ignoreLock=false):RetryBlock|undefined {
     const scope:RecoveryScope={kind:'goal',id:item.id},blocked=(code:string,reason:string):RetryBlock=>({code,reason,scope});
     if(item.status==='completed')return blocked('GOAL_COMPLETED','This goal is already completed.');
+    if(!ignoreLock&&workRecoveryPending(item))return blocked('RECOVERY_IN_PROGRESS','The previous execution is being checked before retry.');
     if(this.active.has(item.id)||(!ignoreLock&&this.recovering.has(item.id))||['routing','dispatched'].includes(item.status))return blocked('EXECUTION_ACTIVE','Wait for the current native execution to end.');
     const run=this.engine.run(item.routerRunId),attempt=run.stages[0].attempts.at(-1);
     if(!terminal(run))return blocked('EXECUTION_ACTIVE','Inspect the previous native execution before recovery.');
@@ -169,6 +191,7 @@ export class IntakeService {
         if(Number.isFinite(start)&&Number.isFinite(end)&&end>=start)intervals.push([start,end]);
       }
     }
+    for(const record of item.workRecoveryHistory??[]){const start=Date.parse(record.startedAt),end=record.endedAt?Date.parse(record.endedAt):Date.now();if(Number.isFinite(start)&&Number.isFinite(end)&&end>=start)intervals.push([start,end]);}
     // Scheduled automatic recovery backoff is an explicit allowance window; stopped idle time is not.
     for(const recovery of item.recoveryHistory??[])if(recovery.trigger==='automatic'){
       const start=Date.parse(recovery.at),end=recovery.startedAt?Date.parse(recovery.startedAt):recovery.endedAt?Date.parse(recovery.endedAt):recovery.status==='scheduled'?now:start;
@@ -324,11 +347,12 @@ export class IntakeService {
     return model;
   }
   private scheduleRecovery(item:Intake):void {
-    const config=item.policy.recovery??recoveryDefaults;
+    const config=item.policy.recovery??{...recoveryDefaults,autoRetry:item.policy.smartRetry===true};
     if(!config.autoRetry||item.lastFailure?.kind!=='capacity'||!item.lastFailure.native)return;
     const run=this.engine.run(item.routerRunId);if(!this.cleanupConfirmed(run,run.stages[0].attempts.at(-1)))return;
-    const count=item.recoveryHistory!.filter(value=>value.trigger==='automatic'&&value.newRunId).length;
-    if(count>=config.maxAttempts){this.engine.store.event({projectId:item.projectId,runId:item.routerRunId,stageId:null,type:'goal.recovery_limit',actor:'goal-supervisor',message:'Automatic capacity recovery attempt limit reached.',data:{intakeId:item.id,attempts:count}});return;}
+    const count=item.recoveryHistory!.filter(value=>value.trigger==='automatic'&&value.newRunId&&!value.workRecoveryId).length+(item.workRecoveryHistory??[]).filter(value=>value.trigger==='automatic'&&value.retriedAt).length;
+    const maximum=item.policy.smartRetry===true?Math.min(2,config.maxAttempts):config.maxAttempts;
+    if(count>=maximum){this.engine.store.event({projectId:item.projectId,runId:item.routerRunId,stageId:null,type:'goal.recovery_limit',actor:'goal-supervisor',message:'Automatic capacity recovery attempt limit reached.',data:{intakeId:item.id,attempts:count}});return;}
     const current=this.previousModel(item);if(!current)return;
     const remaining=this.remaining(item);if(remaining.tokens<1000||remaining.seconds<=config.backoffSeconds)return;
     const pool=[current,...config.allowedFallbackModels.filter(model=>model!==current)],model=pool[Math.min(count,pool.length-1)];
@@ -341,7 +365,7 @@ export class IntakeService {
     return this.decorate(this.get(id));
   }
   private async retryPrepared(id:string,input:IntakeRetryInput,actor:Actor):Promise<Intake> {
-    const item=this.get(id);demand(!actor.projectId||actor.projectId===item.projectId,'PROJECT_SCOPE','Choose the current project.',403);demand(!actor.tools||actor.tools.includes('run.start'),'TOOL_NOT_ALLOWED','This role cannot recover a goal.',403);
+    const item=this.get(id);demand(!workRecoveryPending(item),'RECOVERY_IN_PROGRESS','Recovery is already checking this task.',409);demand(!actor.projectId||actor.projectId===item.projectId,'PROJECT_SCOPE','Choose the current project.',403);demand(!actor.tools||actor.tools.includes('run.start'),'TOOL_NOT_ALLOWED','This role cannot recover a goal.',403);
     demand(!this.closed,'SUPERVISOR_CLOSED','The supervisor is stopping.',409);
     demand((input.approveRecommendation===undefined||typeof input.approveRecommendation==='boolean')&&(input.refreshConfiguration===undefined||typeof input.refreshConfiguration==='boolean')&&(input.recoveryKey===undefined||text(input.recoveryKey,160)),'INVALID_CONTINUATION','Provide an explicit recommendation approval and a valid recovery basis.');
     demand(input.note===undefined||text(input.note,2000),'RECOVERY_NOTE_REQUIRED','Keep the optional continuation note within 2,000 characters.');
@@ -379,26 +403,28 @@ export class IntakeService {
     demand(next.maxRounds>=item.policy.maxRounds&&next.maxTotalTokens>=item.policy.maxTotalTokens&&next.maxElapsedSeconds>=item.policy.maxElapsedSeconds,'INVALID_POLICY_EXTENSION','Recovery cannot silently replace or shrink the recorded total bounds.');
     return next;
   }
-  private async recover(id:string,input:IntakeRetryInput,actor:Actor,trigger:'manual'|'automatic',scheduledId?:string,approval?:GoalRecoveryRecord['approvedRecommendation'],accountApproval?:AccountStepApproval):Promise<Intake> {
+  private async recover(id:string,input:IntakeRetryInput,actor:Actor,trigger:'manual'|'automatic',scheduledId?:string,approval?:GoalRecoveryRecord['approvedRecommendation'],accountApproval?:AccountStepApproval,workRecoveryId?:string):Promise<Intake> {
     let item=this.get(id);const previousRunId=item.routerRunId,previousStatus=item.status,previousUpdatedAt=item.updatedAt,previousControlRevision=item.controlRevision??0,previousBasis=this.basis(id),previousPolicy=structuredClone(item.policy),replacingWait=item.status==='retry_wait'?item.recoveryHistory?.findLast(value=>value.status==='scheduled')?.id:undefined;
     demand(!this.closed,'SUPERVISOR_CLOSED','The supervisor is stopping.',409);
     const desiredResourceMode=input.resourceMode??(this.accountMode(item)?'account':'tokens');
     const nextPolicy=this.recoveryPolicy(item,input),note=input.note??'Continue this outcome from its retained evidence within the approved finite allowance.';
     if(trigger==='automatic')demand(!input.refreshConfiguration&&!input.policy,'AUTOMATIC_RECOVERY_SCOPE','Automatic recovery cannot change configuration or limits.',403);
     const model=await this.validateModel(input.model??this.previousModel(item),input.policy?.recovery);
-    item=this.get(id);demand(item.routerRunId===previousRunId,'RECOVERY_CONFLICT','Another recovery changed this goal.',409);
+    item=this.get(id);demand(!workRecoveryPending(item)||currentWorkRecovery(item)?.id===workRecoveryId,'RECOVERY_IN_PROGRESS','Another recovery is checking this task.',409);demand(item.routerRunId===previousRunId,'RECOVERY_CONFLICT','Another recovery changed this goal.',409);
     if(trigger==='manual')demand((item.controlRevision??0)===previousControlRevision&&item.status===previousStatus&&item.updatedAt===previousUpdatedAt,'RECOVERY_CANCELLED','The outcome changed or was stopped while its continuation was being checked. Refresh before continuing.',409);
     if(approval)demand(approval.key===this.recoveryKey(item),'RECOVERY_CONFLICT','The outcome changed while validating its continuation. Refresh the recommendation.',409);
     if(trigger==='manual'&&replacingWait)demand(item.status==='retry_wait'&&item.recoveryHistory?.some(value=>value.id===replacingWait&&value.status==='scheduled'),'RECOVERY_CANCELLED','The waiting recovery was stopped during model validation.',409);
-    if(trigger==='automatic')demand(item.status==='retry_wait'&&this.scheduled.has(id)&&item.recoveryHistory?.some(value=>value.id===scheduledId&&value.status==='scheduled'),'RECOVERY_CANCELLED','The scheduled recovery is no longer active.',409);
+    if(workRecoveryId)demand(currentWorkRecovery(item)?.id===workRecoveryId&&currentWorkRecovery(item)?.phase==='resuming'&&(this.engine.run(currentWorkRecovery(item)!.runId).controlRevision??0)===(currentWorkRecovery(item)!.runControlRevision??0),'RECOVERY_CANCELLED','Work recovery was stopped or superseded.',409);
+    if(trigger==='automatic'&&!workRecoveryId)demand(item.status==='retry_wait'&&this.scheduled.has(id)&&item.recoveryHistory?.some(value=>value.id===scheduledId&&value.status==='scheduled'),'RECOVERY_CANCELLED','The scheduled recovery is no longer active.',409);
     const blocked=this.retryReason({...item,resourceMode:desiredResourceMode,policy:nextPolicy},true);demand(!blocked,'RECOVERY_NOT_READY',blocked??'Recovery is not ready.',409);
     const projected={...item,resourceMode:desiredResourceMode,policy:nextPolicy},remaining=this.remaining(projected);demand(remaining.tokens>=1000&&remaining.seconds>0,'GOAL_BOUNDARY','Extend the total budget or elapsed limit explicitly before recovery.',409);
     const basis=input.refreshConfiguration?(()=>{const detail=this.engine.detail(item.projectId,actor);return{id,revision:(previousBasis.revision??1)+1,project:detail.project,pipelines:detail.pipelines,knowledge:detail.knowledge.filter(entry=>entry.status==='current'),...(previousBasis.conversation?{conversation:previousBasis.conversation}:{})};})():previousBasis;
-    const previousRun=this.engine.run(previousRunId),record:GoalRecoveryRecord=trigger==='automatic'?item.recoveryHistory!.find(value=>value.id===scheduledId)!:{id:newId(),trigger,status:'started',at:at(),reason:item.lastFailure?.message??item.error??item.outcome??'Manual recovery requested.',...(previousStatus==='clarification'&&item.question?{replyToQuestion:item.question}:{}),note,model,previousRunId,previousRef:previousRun.stages[0].attempts.at(-1)?.ref,basisRevision:basis.revision??1,previousBasisRevision:previousBasis.revision??1,refreshConfiguration:input.refreshConfiguration===true,...(approval?{approvedRecommendation:approval}:{})};
+    const previousRun=this.engine.run(previousRunId),record:GoalRecoveryRecord=trigger==='automatic'&&!workRecoveryId?item.recoveryHistory!.find(value=>value.id===scheduledId)!:{id:newId(),trigger,status:'started',at:at(),reason:item.lastFailure?.message??item.error??item.outcome??'Manual recovery requested.',...(previousStatus==='clarification'&&item.question?{replyToQuestion:item.question}:{}),note,model,previousRunId,previousRef:previousRun.stages[0].attempts.at(-1)?.ref,basisRevision:basis.revision??1,previousBasisRevision:previousBasis.revision??1,refreshConfiguration:input.refreshConfiguration===true,...(workRecoveryId?{workRecoveryId}:{}),...(approval?{approvedRecommendation:approval}:{})};
     if(trigger==='manual')for(const pending of item.recoveryHistory!)if(pending.status==='scheduled'){pending.status='cancelled';pending.endedAt=at();pending.error='Replaced by an explicit manual recovery.';}
     record.status='started';record.startedAt=at();record.model=model;record.newRunId=newId();
     if(input.policy){record.previousPolicy=previousPolicy;record.newPolicy=structuredClone(nextPolicy);}
-    const migrateTime=item.executionTimeMeter===undefined;item.executionTimeMeter='active-windows-v1';item.policy=nextPolicy;item.resourceMode=desiredResourceMode;item.routerRunId=record.newRunId;item.supervisorRunIds!.push(record.newRunId);item.basisRevision=basis.revision??1;if(trigger==='manual')item.recoveryHistory!.push(record);item.status='routing';delete item.nextRetryAt;delete item.error;delete item.outcome;delete item.question;delete item.lastFailure;delete item.limitReached;this.scheduled.delete(id);
+    const oldWork=currentWorkRecovery(item);if(!workRecoveryId&&oldWork?.phase==='needs_input'){oldWork.phase='cancelled';oldWork.code='RECOVERY_SUPERSEDED';oldWork.endedAt=at();}
+    const migrateTime=item.executionTimeMeter===undefined;item.executionTimeMeter='active-windows-v1';item.policy=nextPolicy;item.resourceMode=desiredResourceMode;item.routerRunId=record.newRunId;item.supervisorRunIds!.push(record.newRunId);item.basisRevision=basis.revision??1;if(trigger==='manual'||workRecoveryId)item.recoveryHistory!.push(record);item.status='routing';delete item.nextRetryAt;delete item.error;delete item.outcome;delete item.question;delete item.lastFailure;delete item.limitReached;this.scheduled.delete(id);
     this.engine.store.transaction(()=>{this.putBasis(previousBasis);this.putBasis(basis);this.registerRun(item,basis,actor,model,previousRunId,undefined,accountApproval);this.save(item,'goal.recovery_started');if(migrateTime)this.engine.store.event({projectId:item.projectId,runId:item.routerRunId,stageId:null,type:'goal.execution_time_meter_migrated',actor:actor.name,message:'Execution time uses cumulative active windows; stopped idle time is excluded.',data:{intakeId:id,meter:'active-windows-v1',usedSeconds:this.elapsed(item)}});if(input.policy)this.engine.store.event({projectId:item.projectId,runId:item.routerRunId,stageId:null,type:'goal.policy_extended',actor:actor.name,message:note,data:{intakeId:id,previous:previousPolicy,current:nextPolicy}});});
     this.startExecution(item,basis);return this.decorate(this.get(id));
   }
@@ -456,10 +482,11 @@ export class IntakeService {
     item.status='dispatched';this.save(item,'goal.dispatched');return new Promise(resolve=>{active.wake=resolve;this.reconcile();});
   }
   reconcile():void{
-    if(this.closed||this.reconciling)return;this.reconciling=true;
+    if(this.closed||this.reconciling)return;this.work.tick();this.reconciling=true;
     try{for(const stored of this.engine.store.list<Intake>('intake').filter(value=>['routing','dispatched','retry_wait','clarification'].includes(value.status))){
       const item=this.normalize(stored);
       if(this.dispatching.has(item.id))continue;
+      if(workRecoveryPending(item)){if(this.elapsed(item)>=item.policy.maxElapsedSeconds||this.tokenExhausted(item))this.stop(item,'Goal execution boundary reached.');continue;}
       if(item.status==='clarification'){
         if(this.elapsed(item)>=item.policy.maxElapsedSeconds||this.tokenExhausted(item))this.stop(item,'Goal execution boundary reached.');
         continue;
@@ -485,8 +512,8 @@ export class IntakeService {
     }}finally{this.reconciling=false;}
   }
   private cancelActions(item:Intake,note:string):void{for(const run of this.family(item))if(run.id!==item.routerRunId&&!terminal(run))void this.engine.cancel(run.id,note,{name:'goal-supervisor',kind:'agent'}).catch(()=>undefined);}
-  private stop(item:Intake,note:string):Intake{for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=note;}item.controlRevision=(item.controlRevision??0)+1;item.status='stopped';item.outcome=note;delete item.nextRetryAt;this.scheduled.delete(item.id);this.save(item,'goal.stopped');this.active.get(item.id)?.controller.abort();this.cancelActions(item,note);return item;}
+  private stop(item:Intake,note:string):Intake{this.work.cancel(item);for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=note;}item.controlRevision=(item.controlRevision??0)+1;item.status='stopped';item.outcome=note;delete item.nextRetryAt;this.scheduled.delete(item.id);this.save(item,'goal.stopped');this.active.get(item.id)?.controller.abort();this.cancelActions(item,note);return item;}
   async cancelRun(runId:string,note:string):Promise<void>{const item=this.engine.store.list<Intake>('intake').find(value=>value.routerRunId===runId);demand(item,'INTAKE_NOT_FOUND','Goal not found.',404);this.stop(item,note);}
-  cancel(id:string,note:string,actor:Actor):Intake{const item=this.get(id);demand(!actor.projectId||actor.projectId===item.projectId,'PROJECT_SCOPE','Choose the current project.',403);demand(text(note,2000),'NOTE_REQUIRED','Record why this goal is stopping.');demand(this.recovering.has(id)||!['completed','failed','stopped'].includes(item.status),'GOAL_CLOSED','This goal is already closed.',409);return this.stop(item,note);}
-  async close():Promise<void>{if(this.closed)return;this.closed=true;for(const item of this.engine.store.list<Intake>('intake').filter(value=>value.status==='retry_wait')){item.status='failed';item.error='Supervisor stopped; scheduled recovery requires manual inspection.';delete item.nextRetryAt;for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=item.error;}this.save(item,'goal.recovery_interrupted');}this.scheduled.clear();const pending:Promise<void>[]=[];for(const[id,active]of this.active){const item=this.get(id);if(item.status==='routing'||item.status==='dispatched'){item.status='failed';item.error='Supervisor stopped; inspect native execution before a new goal.';this.save(item,'goal.interrupted');}active.controller.abort();if(active.finished)pending.push(active.finished);}await Promise.allSettled(pending);}
+  cancel(id:string,note:string,actor:Actor):Intake{const item=this.get(id);demand(!actor.projectId||actor.projectId===item.projectId,'PROJECT_SCOPE','Choose the current project.',403);demand(text(note,2000),'NOTE_REQUIRED','Record why this goal is stopping.');demand(workRecoveryPending(item)||this.recovering.has(id)||!['completed','failed','stopped'].includes(item.status),'GOAL_CLOSED','This goal is already closed.',409);return this.stop(item,note);}
+  async close():Promise<void>{if(this.closed)return;this.closed=true;this.work.close();for(const item of this.engine.store.list<Intake>('intake').filter(value=>value.status==='retry_wait')){item.status='failed';item.error='Supervisor stopped; scheduled recovery requires manual inspection.';delete item.nextRetryAt;for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=item.error;}this.save(item,'goal.recovery_interrupted');}this.scheduled.clear();const pending:Promise<void>[]=[];for(const[id,active]of this.active){const item=this.get(id);if(item.status==='routing'||item.status==='dispatched'){item.status='failed';item.error='Supervisor stopped; inspect native execution before a new goal.';this.save(item,'goal.interrupted');}active.controller.abort();if(active.finished)pending.push(active.finished);}await Promise.allSettled(pending);}
 }
