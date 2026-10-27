@@ -900,6 +900,8 @@ test('task and goal events report effective native configuration and waiting not
     assert.ok(run.events.some(event => event.type === 'model/verification' && (event.data as {count: number}).count === 1));
     assert.ok(run.events.some(event => event.type === 'model/safetyBuffering/updated'));
     assert.ok(run.events.some(event => event.type === 'model/rerouted'));
+    h.child.notify('item/completed', {...ref, item:{id:'synthetic-public-progress',type:'agentMessage',phase:'commentary',text:'Checking the synthetic navigation.'}});
+    assert.ok(run.events.some(event=>event.type==='item/completed'&&(event.data as {phase?:string}).phase==='commentary'&&event.message==='Checking the synthetic navigation.'));
     assert.doesNotMatch(JSON.stringify(run.events), /synthetic-account|synthetic-startup-key|synthetic-private/);
     if (mode === 'task') h.child.complete(execution.ref);
     else reportGoal(h.child, execution.ref, 'blocked');

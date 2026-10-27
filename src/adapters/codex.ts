@@ -408,7 +408,7 @@ class LocalCodexAdapter implements CodexAdapter {
       const message = item.type === 'commandExecution' ? text(item.command) ?? 'Codex command execution.'
         : item.type === 'agentMessage' ? text(item.text) ?? 'Codex message.'
         : `Codex ${text(item.type) ?? 'item'} ${method === 'item/started' ? 'started' : 'completed'}.`;
-      this.emit(state, {type: method, message: message.slice(0, 16000), data: {itemId: item.id, itemType: item.type, status: item.status, exitCode: item.exitCode}});
+      this.emit(state, {type: method, message: message.slice(0, 16000), data: {itemId: item.id, itemType: item.type, status: item.status, exitCode: item.exitCode, ...(item.type==='agentMessage'?{phase:item.phase}:{})}});
     } else if (method === 'turn/completed' && turn) {
       if (turnId && ['completed', 'failed', 'interrupted'].includes(String(turn.status))) this.executionBoundary(state, 'terminal', true, true);
       if (Array.isArray(turn.items)) for (const item of turn.items) if (object(item)) this.recordMessage(state, item, true);
@@ -658,7 +658,7 @@ class LocalCodexAdapter implements CodexAdapter {
       const item = params.item;
       const message = item.type === 'agentMessage' ? text(item.text) : item.type === 'commandExecution' ? text(item.command) : undefined;
       if (method === 'item/completed' && item.type === 'agentMessage' && typeof item.text === 'string' && item.phase !== 'commentary') state.summary = item.text.slice(0, 32768);
-      this.emit(state, {type: method, message: message?.slice(0, 16000) || `Native goal ${text(item.type) ?? 'item'} ${method === 'item/started' ? 'started' : 'completed'}.`, data: {itemId: item.id, itemType: item.type, status: item.status}});
+      this.emit(state, {type: method, message: message?.slice(0, 16000) || `Native goal ${text(item.type) ?? 'item'} ${method === 'item/started' ? 'started' : 'completed'}.`, data: {itemId: item.id, itemType: item.type, status: item.status, ...(item.type==='agentMessage'?{phase:item.phase}:{})}});
     } else if (['item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/fileChange/outputDelta', 'item/reasoning/summaryTextDelta'].includes(method) && typeof params.delta === 'string') {
       this.emit(state, {type: method, message: params.delta.slice(0, 16000), data: {itemId: params.itemId}});
     } else if (method === 'error') {

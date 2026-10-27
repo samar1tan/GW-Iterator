@@ -193,7 +193,7 @@ export class IntakeService {
       else if(event.type==='turn/completed'&&data.status==='completed')delete item.lastFailure;
     }
     this.save(item);
-    this.engine.store.event({projectId:item.projectId,runId,stageId:'supervise',type:event.type,actor:'codex-native-goal',message:event.message,data:{...(event.ref?{ref:event.ref}:{}),...(event.usage?{usage:event.usage}:{}),...(event.data===undefined?{}:{detail:event.data})}});
+    this.engine.store.event({projectId:item.projectId,runId,stageId:'supervise',type:event.type,actor:'codex-native-goal',message:event.message,data:{attemptId,...(event.ref?{ref:event.ref}:{}),...(event.usage?{usage:event.usage}:{}),...(event.data===undefined?{}:{detail:event.data})}});
   }
   private finishDecision(item:Intake,decision:IntakeDecision):void {
     item.status='completed';item.outcome=decision.action==='answer'?decision.response!:decision.rationale;
@@ -207,7 +207,8 @@ export class IntakeService {
     const item=this.get(id);
     this.changeRun(item,(run,attempt)=>{attempt.provider='multica';if(event.ref)attempt.ref={...attempt.ref,...event.ref};if(event.usage)attempt.usage=event.usage;if(!terminal(run))run.status=run.stages[0].status=attempt.status='running';},runId);
     const recovery=item.recoveryHistory?.find(value=>value.newRunId===runId);if(recovery&&event.ref){recovery.newRef={...recovery.newRef,...event.ref};this.save(item);}
-    this.engine.store.event({projectId:item.projectId,runId,stageId:'supervise',type:event.type,actor:'goal-planner',message:event.message,data:{...(event.ref?{ref:event.ref}:{}),...(event.usage?{usage:event.usage}:{}),...(event.data===undefined?{}:{detail:event.data})}});
+    const attemptId=this.engine.run(runId).stages[0].attempts.at(-1)?.id;
+    this.engine.store.event({projectId:item.projectId,runId,stageId:'supervise',type:event.type,actor:'goal-planner',message:event.message,data:{attemptId,...(event.ref?{ref:event.ref}:{}),...(event.usage?{usage:event.usage}:{}),...(event.data===undefined?{}:{detail:event.data})}});
   }
   private async waitForAction(active:Active,action:Promise<unknown>):Promise<unknown>{
     void action.catch(()=>{});
