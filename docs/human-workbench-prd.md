@@ -174,3 +174,10 @@ Preserve unsent text by project and parent/clarification execution. A confirmed 
 The shared request composer on project/global workbenches, result follow-ups and clarification replies sends with Enter and inserts a line break with Shift+Enter. Existing Command/Ctrl+Enter remains supported. Show the ordinary shortcut in both UI locales. Handle the shortcut only in the message textarea; buttons and other controls retain their native keyboard behavior.
 
 Input-method composition/candidate confirmation must not submit. Suppress held-key repetition and retain all existing empty-input, pending, source/account, idempotency and receipt guards. This correction adds no configuration or execution behavior. Verify ordinary Enter, multiline input, composition/repeat guards and disabled submission, with actual model-free browser operation separate from OS input-method validation.
+
+
+## Compact request identity
+
+Goal details, execution details and their project/global list entries share a bounded request preview for identification. Use the first text-bearing request line and its first sentence, skipping empty list/heading markers and bounded to 64 grapheme clusters with an ellipsis when shortened. Preserve word boundaries where possible. For delegated execution envelopes, retain the original user outcome rather than the delegation wrapper. This is a literal preview, not an inferred title or a model-generated summary. No new model call, configuration, identifier or persisted title is introduced.
+
+Keep the exact original input in the existing Full request disclosure, collapsed on entry. The compact detail heading occupies at most two lines; reading the full request is an explicit action. Status, project/workflow identity and execution controls keep their existing meaning. Verify long unpunctuated Chinese/English, multiline requests, long unbroken text and delegated inputs, full-text fidelity and keyboard disclosure/navigation in both locales and narrow layouts.

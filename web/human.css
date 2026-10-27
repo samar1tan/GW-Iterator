@@ -203,10 +203,10 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 
 /* State and result: selected steps remain distinct from running steps. */
 .pf-run-grid { grid-template-columns: minmax(320px,.76fr) minmax(0,1fr); }
-.pf-platform .pf-run-heading .pf-goal-title, .pf-platform .pf-goal-title { font-size: 25px; line-height: 1.4; letter-spacing: -.65px; max-width: 1020px; }
-.pf-run-heading { gap: 12px; }
+.pf-platform .pf-run-heading .pf-goal-title { font-size: 20px; font-weight: 600; line-height: 1.45; letter-spacing: -.3px; max-width: 880px; }
+.pf-run-heading { flex: 1; gap: 10px; }
 .pf-run-heading > .button { padding: 2px 0; min-height: 24px; font-size: 12px; }
-.pf-run-workspace > .pf-view-header { margin-bottom: 16px; }
+.pf-run-workspace > .pf-view-header, .pf-goal-workspace > .pf-view-header { margin-bottom: 12px; }
 .pf-run-kicker { font-size: 12px; gap: 10px; margin: 0; }
 .pf-run-kicker > .status { padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; background: #ffffff03; }
 .pf-run-context { font-size: 12px; color: var(--muted); margin-bottom: 10px; gap: 20px; }
