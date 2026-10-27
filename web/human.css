@@ -458,3 +458,40 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 @media (prefers-reduced-motion: reduce) {
   .pf-platform *, .pf-platform *::before, .pf-platform *::after { transition: none !important; }
 }
+
+/* Knowledge documents share the workbench palette without inheriting its control spacing. */
+.knowledge-markdown { min-width: 0; white-space: normal; overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; }
+.knowledge-markdown > :first-child { margin-top: 0; }
+.knowledge-markdown > :last-child { margin-bottom: 0; }
+.knowledge-markdown :is(h1,h2,h3,h4,h5,h6) { color: var(--text); line-height: 1.35; font-weight: 600; margin: 1.6em 0 .7em; scroll-margin-top: 80px; }
+.knowledge-markdown h1 { font-size: 26px; padding-bottom: .45em; border-bottom: 1px solid var(--line); }
+.knowledge-markdown h2 { font-size: 21px; padding-bottom: .4em; border-bottom: 1px solid var(--line-subtle); }
+.knowledge-markdown h3 { font-size: 18px; }
+.knowledge-markdown h4 { font-size: 16px; }
+.knowledge-markdown :is(h5,h6) { font-size: 14px; }
+.knowledge-markdown :is(p,ul,ol,blockquote,pre,.knowledge-table) { margin: 0 0 1em; }
+.knowledge-markdown :is(ul,ol) { padding-left: 1.7em; }
+.knowledge-markdown ul { list-style: disc; }
+.knowledge-markdown ol { list-style: decimal; }
+.knowledge-markdown li + li { margin-top: .3em; }
+.knowledge-markdown li > :is(ul,ol) { margin: .35em 0 0; }
+.knowledge-markdown li > p { margin-bottom: .4em; }
+.knowledge-markdown blockquote { padding: 0 1em; border-left: 3px solid var(--line); color: var(--muted); }
+.knowledge-markdown blockquote > :last-child { margin-bottom: 0; }
+.knowledge-markdown a { color: var(--blue); text-decoration: underline; text-underline-offset: .15em; }
+.knowledge-markdown a:focus-visible, .knowledge-markdown :is(pre,.knowledge-table):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.knowledge-markdown .knowledge-file-link { text-decoration: underline dotted var(--muted); text-underline-offset: .2em; }
+.knowledge-markdown :not(pre) > code { background: var(--surface-raised); padding: .15em .35em; border: 1px solid var(--line-subtle); border-radius: 4px; font-size: .9em; }
+.knowledge-markdown pre { max-width: 100%; overflow-x: auto; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); white-space: pre; overflow-wrap: normal; font-size: 12px; line-height: 1.65; }
+.knowledge-markdown pre code { padding: 0; border: 0; background: transparent; color: inherit; font-size: inherit; white-space: inherit; }
+.knowledge-markdown .knowledge-table { max-width: 100%; overflow-x: auto; }
+.knowledge-markdown table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 13px; }
+.knowledge-markdown :is(th,td) { padding: 8px 12px; border: 1px solid var(--line); max-width: 32rem; }
+.knowledge-markdown th { background: var(--surface-raised); font-weight: 600; text-align: left; }
+.knowledge-markdown tr:nth-child(even) { background: #ffffff03; }
+.knowledge-markdown hr { height: 1px; margin: 24px 0; border: 0; background: var(--line); }
+.knowledge-markdown .contains-task-list { list-style: none; padding-left: .3em; }
+.knowledge-markdown .task-list-item > input { width: auto; min-height: 0; margin: 0 .6em 0 0; vertical-align: middle; }
+.knowledge-markdown .footnotes { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+
+.knowledge-content:has(> .knowledge-markdown > .knowledge-leading-title) .knowledge-heading h2 { display: none; }

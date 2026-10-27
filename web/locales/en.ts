@@ -1,4 +1,6 @@
 export const en = {
+  markdownFootnotes:'Footnotes', markdownFootnoteBack:'Back to reference', markdownImage:'Image reference', markdownTable:'Table', markdownCodeBlock:'Code block',
+  knowledgeFileLink:'File link: {path}. Open it from the local project.',
   knowledgeIndexUnverified:'Sources with unconfirmed sync status: {count}. Existing local knowledge is available.',
   knowledgeIndexNotSynced:'Unsynchronized sources: {count}. Synchronize to add their content to project knowledge.',
   knowledgeIndexNeedsRecheck:'Sources needing synchronization again: {count}. Their settings have changed.',

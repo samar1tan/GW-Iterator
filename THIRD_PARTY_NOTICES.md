@@ -20,5 +20,8 @@ The npm lockfile pins direct and transitive packages. Installed packages retain 
 | React Flow | 12.12.0 | MIT | [xyflow](https://github.com/xyflow/xyflow) |
 | Dagre | 3.1.3 | MIT | [dagre](https://github.com/dagrejs/dagre) |
 | Model Context Protocol TypeScript SDK | 1.32.2 | MIT | [typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk) |
+| react-markdown | 10.1.0 | MIT | [react-markdown](https://github.com/remarkjs/react-markdown) |
+| remark-gfm | 4.0.1 | MIT | [remark-gfm](https://github.com/remarkjs/remark-gfm) |
+| rehype-slug | 6.0.0 | MIT | [rehype-slug](https://github.com/rehypejs/rehype-slug) |
 
 The MCP SDK implements the control-tool transport. It does not grant additional project or filesystem permissions.
