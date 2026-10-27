@@ -34,3 +34,5 @@ The changes close lost drafts, misleading start failures, hidden human instructi
 Prepared changes live in the execution workspace. Acceptance does not automatically update the original project directory, integrate a branch or publish anything. The preview and owner delivery step now state this boundary. The real review above explicitly accepted the prepared correction; it does not establish automatic source writeback.
 
 This pass did not rerun live model-capacity exhaustion/fallback, real GitHub dispatch/publication, remote native cancellation, every native runtime installation or other operating systems/browsers. Existing automated coverage is separate from those live checks. Browser operation was on the local macOS in-app browser. No comparative speed, cost or autonomous-improvement claim follows from this review.
+
+Reduced-motion behavior was not exercised live. The macOS accessibility preference was left unchanged; source or automated coverage does not establish a live reduced-motion pass.
