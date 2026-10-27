@@ -1,6 +1,13 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  knowledgeIndexUnverified:'有 {count} 个来源的同步状态尚未确认；已有本地知识仍可查看。',
+  knowledgeIndexNotSynced:'还有 {count} 个登记来源未同步。同步后，其内容会加入项目知识。',
+  knowledgeIndexNeedsRecheck:'有 {count} 个来源的设置已变更，请重新同步。',
+  knowledgeIndexIssues:'项目知识有 {missing} 条资料缺失、{errors} 条索引异常。请检查来源后重新同步。',
+  synchronizeSources:'同步来源',
+  readinessCheckFailed:'无法检查项目状态，请重试。已有本地内容仍然保留。',
+  knowledgeSyncFailed:'无法同步来源，请查看详细信息后重试。',
   processing:'正在处理…',
   unsupportedEffort:'{model} 不支持 {effort}。运行前请选择可用的强度，或改用支持该强度的模型。',
   invalidProject:'请填写项目名称，并使用本地项目目录的完整绝对路径。',

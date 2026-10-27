@@ -59,6 +59,29 @@ test('module ownership and first-work feedback remain coherent in both locales',
     }
   });
 
+  await t.test('knowledge status distinguishes unverified local content, initial sync, changed settings and actual issues',()=>{
+    const ready:ProjectReadiness={projectId:project.id,projectRevision:1,observedAt:'2026-01-01T00:00:00Z',workspace:{status:'ready',code:'READY'},knowledge:{status:'not_indexed',configuredSources:12,indexedSources:0,currentEntries:1,missingEntries:0,errorEntries:0}};
+    for(const locale of ['en','zh-CN']){
+      const props={error:null,loading:false,refresh:async()=>{},onKnowledge:()=>{}};
+      const existing=render(locale,createElement(ProjectReadinessNotice,{...props,readiness:ready}));
+      assert.ok(existing.includes('notice info'));
+      assert.ok(existing.includes(locale==='en'?'Sources with unconfirmed sync status: 12.':'有 12 个来源的同步状态尚未确认'));
+      assert.ok(existing.includes(locale==='en'?'Synchronize sources':'同步来源'));
+      assert.ok(!existing.includes(locale==='en'?'Check again':'重新检查'));
+      const fresh=render(locale,createElement(ProjectReadinessNotice,{...props,readiness:{...ready,knowledge:{...ready.knowledge,currentEntries:0}}}));
+      assert.ok(fresh.includes(locale==='en'?'Unsynchronized sources: 12.':'还有 12 个登记来源未同步'));
+      const changed=render(locale,createElement(ProjectReadinessNotice,{...props,readiness:{...ready,knowledge:{...ready.knowledge,indexedSources:11,lastSyncedAt:'2026-01-01T00:00:00Z'}}}));
+      assert.ok(changed.includes(locale==='en'?'Sources needing synchronization again: 1.':'有 1 个来源的设置已变更'));
+      const issues=render(locale,createElement(ProjectReadinessNotice,{...props,readiness:{...ready,knowledge:{...ready.knowledge,status:'issues',missingEntries:2,errorEntries:1}}}));
+      assert.ok(issues.includes('notice warning'));
+      assert.ok(issues.includes(locale==='en'?'Missing entries: 2; indexing errors: 1.':'有 2 条资料缺失、1 条索引异常'));
+      const unavailable=render(locale,createElement(ProjectReadinessNotice,{...props,readiness:null,error:new Error('Controlled unavailable observation')}));
+      assert.ok(unavailable.includes(locale==='en'?'Could not check the project status.':'无法检查项目状态'));
+      assert.ok(unavailable.includes(locale==='en'?'Check again':'重新检查'));
+      assert.ok(!unavailable.includes(locale==='en'?'Synchronize sources':'同步来源'));
+    }
+  });
+
   await t.test('an existing Markdown section remains inspectable when editing a document source',()=>{
     const source={...project.knowledgeSources[0],section:'Selected synthetic section'};
     const withSection={...project,knowledgeSources:[source]};

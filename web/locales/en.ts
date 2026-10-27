@@ -1,4 +1,11 @@
 export const en = {
+  knowledgeIndexUnverified:'Sources with unconfirmed sync status: {count}. Existing local knowledge is available.',
+  knowledgeIndexNotSynced:'Unsynchronized sources: {count}. Synchronize to add their content to project knowledge.',
+  knowledgeIndexNeedsRecheck:'Sources needing synchronization again: {count}. Their settings have changed.',
+  knowledgeIndexIssues:'Missing entries: {missing}; indexing errors: {errors}. Check the sources, then synchronize again.',
+  synchronizeSources:'Synchronize sources',
+  readinessCheckFailed:'Could not check the project status. Try checking again; existing local content is retained.',
+  knowledgeSyncFailed:'Could not synchronize sources. Inspect the details and retry.',
   processing:'Processing…',
   unsupportedEffort:'{model} does not support {effort}. Choose a supported effort or another model before running work.',
   invalidProject:'Enter a project name and the full absolute path to its local directory.',

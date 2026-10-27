@@ -313,7 +313,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-platform .library-heading { padding: 16px; }
 .pf-platform .library-heading h2 { font-size: 13px; font-weight: 600; }
 .pf-platform .source-list-section { border-color: var(--line); }
-.pf-platform .source-list { padding: 0 12px 12px; max-height: 320px; }
+.pf-platform .source-list { padding: 0 12px 12px; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
 .pf-platform .source-item { padding: 7px 4px; border: 0; border-bottom: 1px solid var(--line-subtle); border-radius: 0; background: transparent; }
 .pf-platform .source-item summary { font-size: 12px; padding: 7px 0; }
 .pf-platform .source-name { font-size: 13px; }

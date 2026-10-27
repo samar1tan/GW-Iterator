@@ -34,20 +34,36 @@ export function ProjectReadinessNotice({readiness, error, loading, refresh, onSe
   onSettings?: () => void; onKnowledge?: () => void;
 }) {
   const {t} = useI18n();
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<unknown>(null), [refreshError, setRefreshError] = useState<unknown>(null);
+  const synchronize=async()=>{
+    if(!readiness||syncing)return;
+    setSyncing(true);setSyncError(null);setRefreshError(null);
+    try{await api(`/api/projects/${encodeURIComponent(readiness.projectId)}/knowledge/sync`,{method:'POST',body:{}});}
+    catch(error){setSyncError(error);setSyncing(false);return;}
+    try{await refresh();}catch(error){setRefreshError(error);}finally{setSyncing(false);}
+  };
+  const check=()=>{setSyncError(null);setRefreshError(null);void refresh().catch(setRefreshError);};
+  const observationError=error??refreshError;
   if (!readiness && loading) return <p className="small muted" role="status">{t('checkingSourceBaseline')}</p>;
   const sourceGap = readiness && readiness.workspace.status !== 'ready';
   const knowledgeGap = readiness && ['not_indexed', 'issues'].includes(readiness.knowledge.status);
-  if (!sourceGap && !knowledgeGap && !error) return null;
+  const knowledgeIssues=readiness?.knowledge.status==='issues';
+  const syncFailure = knowledgeGap ? syncError : null;
+  const knowledgeMessage:MessageKey=knowledgeIssues?'knowledgeIndexIssues':readiness?.knowledge.lastSyncedAt?'knowledgeIndexNeedsRecheck':readiness?.knowledge.currentEntries?'knowledgeIndexUnverified':'knowledgeIndexNotSynced';
+  if (!sourceGap && !knowledgeGap && !observationError && !syncFailure) return null;
   return <div className="project-readiness">
-    <Notice tone="warning">
-      {error ? <p>{t('sourceInspectionFailed')}</p> : sourceGap && <p>{t(workspaceMessages[readiness.workspace.code])}</p>}
-      {knowledgeGap && <p>{t('projectKnowledgeNeedsSync')}</p>}
+    <Notice tone={sourceGap||knowledgeIssues||observationError||syncFailure?'warning':'info'}>
+      {observationError ? <p>{t('readinessCheckFailed')}</p> : sourceGap && <p>{t(workspaceMessages[readiness.workspace.code])}</p>}
+      {knowledgeGap && <p>{t(knowledgeMessage,{count:Math.max(0,readiness.knowledge.configuredSources-readiness.knowledge.indexedSources),missing:readiness.knowledge.missingEntries,errors:readiness.knowledge.errorEntries})}</p>}
+      {!!syncFailure&&<p>{t('knowledgeSyncFailed')}</p>}
       <div className="actions">
-        <Button disabled={loading} onClick={() => void refresh()}>{t(loading ? 'loading' : 'checkAgain')}</Button>
-        {sourceGap && onSettings && <Button onClick={onSettings}>{t('projectBindings')}</Button>}
-        {knowledgeGap && onKnowledge && <Button onClick={onKnowledge}>{t('manageKnowledge')}</Button>}
+        {!!(sourceGap||observationError)&&<Button disabled={loading||syncing} onClick={check}>{t(loading ? 'loading' : 'checkAgain')}</Button>}
+        {knowledgeGap&&!observationError&&<Button disabled={loading||syncing} onClick={()=>void synchronize()}>{t(syncing?'syncing':'synchronizeSources')}</Button>}
+        {sourceGap && onSettings && <Button disabled={syncing} onClick={onSettings}>{t('projectBindings')}</Button>}
+        {knowledgeGap && onKnowledge && <Button disabled={syncing} onClick={onKnowledge}>{t('manageKnowledge')}</Button>}
       </div>
-      {error != null && <details><summary>{t('details')}</summary><ErrorNotice error={error}/></details>}
+      {(observationError!=null||syncFailure!=null)&&<details><summary>{t('details')}</summary><ErrorNotice error={observationError??syncFailure}/></details>}
     </Notice>
   </div>;
 }

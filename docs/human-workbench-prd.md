@@ -113,3 +113,9 @@ When the discovered model explicitly excludes the current effort, explain that i
 New source registration from the project-wide Knowledge view defaults to project-wide availability, using the existing empty-role scope. Starting from a specific role keeps that explicit role. Do not enumerate today's entire team as a substitute for a project-wide default; saved source scopes remain unchanged.
 
 Acceptance covers first connection, draft continuity, author/save/reuse, manual blocking/retry/review/rework, pause/continue/stop, a bounded provider-backed outcome, knowledge registration/lookup/write receipts, settings/team edits and navigation/keyboard/layout in both locales. Record observed behavior, interventions, outstanding checks and independent review separately from automated test totals. Do not claim the human owner's product acceptance from agent-operated checks.
+
+## Knowledge list boundaries and index status
+
+Many registered sources, expanded rows and long names must remain inside the source list's own scrolling region. Source headings and the entry list stay in normal flow; source content must never paint over entry selection or reading content. Exercise more sources than fit the visible region, not only a short initial example.
+
+Readiness distinguishes existing local knowledge without a current source-check receipt, sources awaiting their first synchronization, changed registrations needing rechecking, and recorded missing/error entries. Existing entries, including lessons, are not proof that registered sources have been indexed. Show meaningful counts and offer the existing model-free synchronization directly; reserve Check again for an unavailable observation or workspace problem. A sync response does not prove readiness: reread the actual status, retain remaining errors and preserve the unsent request. No source registrations, permissions or historical context are changed by this repair.
