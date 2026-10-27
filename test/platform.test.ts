@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, rm, writeFile,readFile,lstat,chmod,realpath} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -9,16 +9,18 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import test from 'node:test';
 import type {TestContext} from 'node:test';
-import type {Actor, KnowledgeEntry, RoleProfile, TaskOutput} from '../src/contracts.ts';
+import type {Actor, KnowledgeEntry, RoleProfile, TaskOutput,Project} from '../src/contracts.ts';
 import type {AgentExecutionInput, CodexAdapter} from '../src/adapters/types.ts';
 import {MulticaClient} from '../src/adapters/multica.ts';
 import type {MulticaAgent, MulticaIssue, MulticaProject, MulticaTask} from '../src/adapters/multica.ts';
 import {ControlMcp} from '../src/control-mcp.ts';
 import {Engine} from '../src/engine.ts';
 import {IntakeService} from '../src/intake.ts';
-import {Platform} from '../src/platform.ts';
+import {Platform,probeVerificationScope,type VerificationProbeInput} from '../src/platform.ts';
 import {PlatformExecution} from '../src/platform-execution.ts';
 import {Store} from '../src/store.ts';
+import {Workspaces} from '../src/workspaces.ts';
+import {defaultRoles} from '../src/defaults.ts';
 import {AppError} from '../src/validation.ts';
 
 const OWNER: Actor = {name: 'Synthetic platform owner', kind: 'human'};
@@ -40,6 +42,7 @@ async function fixture(t: TestContext) {
     agents: new Map<string, MulticaAgent>(), projects: new Map<string, MulticaProject>(), issues: new Map<string, MulticaIssue>(), tasks: new Map<string, MulticaTask[]>(),
     requests: [] as {method: string; path: string; body: Record<string, unknown>}[], issuePosts: 0, loseIssueResponse: false, failAgentCreation: false, taskListGate: undefined as Promise<void> | undefined,
     taskResult: (_issue: string): unknown => JSON.stringify(OUTPUT), taskStatus: 'completed', taskMessageError: false, taskListError: false, issuePutError: false, issueRejection: undefined as {code: string; status: number} | undefined,
+    scopeProbes:[] as VerificationProbeInput[],scopeProbeError:undefined as AppError|undefined,
   };
   const taskGate = deferred<void>();
   let controls: ControlMcp | undefined;
@@ -85,7 +88,8 @@ async function fixture(t: TestContext) {
   const codex: CodexAdapter = {async info() {return {available: true, connected: true, authenticated: true, models: [{id: 'synthetic-model', name: 'Synthetic model', efforts: ['low']}]};}, async skills() {return [];}, async start() {throw new Error('A real native model must never run in this test.');}, async steer() {}, async interrupt() {}, async close() {}};
   const engine = new Engine(new Store(stateDirectory), codex, {async info() {return {available: true, authenticated: true};}, async observe() {return {status: 'completed', summary: 'Synthetic CI.'};}, async dispatch() {return {status: 'completed', summary: 'Synthetic CI.'};}});
   const rootsFile = path.join(directory, 'synthetic-runtime-roots.json'); await writeFile(rootsFile, '{"roots":[]}\n');
-  const client = new MulticaClient(connection), platform = new Platform(engine, connection, stateDirectory, 'synthetic-model', {runtimeId: 'synthetic-runtime', daemonId: 'synthetic-daemon', permissionEvidence: 'Synthetic permission fixture.', verified: true, permissions: {readOnly: {name: 'gwi-readonly', verified: true}, workspaceWrite: {name: 'gwi-workspace', verified: true}}, authorizedRootsFile: rootsFile}, client);
+  const guardBinary=path.join(directory,'synthetic-native-guard');await writeFile(guardBinary,'#!/bin/sh\nexit 1\n',{mode:0o700});await chmod(guardBinary,0o700);
+  const client = new MulticaClient(connection), platform = new Platform(engine, connection, stateDirectory, 'synthetic-model', {runtimeId: 'synthetic-runtime', daemonId: 'synthetic-daemon', permissionEvidence: 'Synthetic permission fixture.', verified: true, permissions: {readOnly: {name: 'gwi-readonly', verified: true}, workspaceWrite: {name: 'gwi-workspace', verified: true,network:'enabled'}}, authorizedRootsFile: rootsFile,guardBinary,scratchHome:path.join(directory,'synthetic-codex-home')}, client,async input=>{state.scopeProbes.push(input);if(state.scopeProbeError)throw state.scopeProbeError;return{checkedAt:new Date().toISOString(),profile:'gwi-workspace',copyWrite:true,executionWriteDenied:true,projectWriteDenied:true,siblingWriteDenied:true,approvalPolicy:'never',modelTurnStarted:false,readIsolation:false,network:input.network,networkDomainRestriction:false};});
   const execution = new PlatformExecution(platform, controls), project = await engine.createProject({name: 'Synthetic platform project', workspace}, OWNER);
   const input = (extra: Partial<AgentExecutionInput> = {}): AgentExecutionInput => ({project: structuredClone(project), workspace, role: {...project.roles.find(role => role.id === 'development')!, model: 'synthetic-model', tools: ['context.read']}, runId: 'synthetic-run', stageId: 'work', attemptId: 'synthetic-attempt', prompt: 'Perform only the synthetic check.', timeoutSeconds: 5, tokenBudget: 1000, signal: new AbortController().signal, onEvent() {}, onTool: async () => ({projectId: project.id}), ...extra});
   t.after(async () => {taskGate.resolve(); state.taskListGate = undefined; await execution.close(); await engine.close(); controls!.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); await rm(directory, {recursive: true, force: true});});
@@ -98,6 +102,94 @@ test('permission profile names alone never authorize execution without verified 
   const execution = new PlatformExecution(unverified);
   await assert.rejects(execution.agent.start(h.input()), code('RUNTIME_VERIFICATION_REQUIRED'));
   assert.equal(h.state.issuePosts, 0); assert.equal(h.state.agents.size, 0);
+});
+
+test('review uses actual prepared bytes in an independent task-scoped writable copy while leaving the role and originals unchanged',async t=>{
+  const h=await fixture(t),checkout=await h.platform.workspaces.ensure(h.project,'synthetic-run');
+  await writeFile(path.join(checkout.path,'tracked.txt'),'Actual prepared review bytes.\n');await writeFile(path.join(checkout.path,'new-source.ts'),'export const reviewInput = true;\n');
+  const qa={...h.project.roles.find(role=>role.id==='qa')!,model:'synthetic-model'},beforeRole=structuredClone(qa),events:{type:string;data?:unknown}[]=[];
+  h.state.taskListGate=h.taskGate.promise;
+  const started=await h.execution.agent.start(h.input({role:qa,executionPurpose:'review',onEvent:event=>events.push(event)}));
+  const record=h.execution.records('synthetic-run')[0],copy=h.platform.workspaces.verification('synthetic-attempt');
+  assert.equal(record.verification?.manifestHash,copy.manifest.sha256);assert.equal(record.verification?.scope.modelTurnStarted,false);assert.equal(record.verification?.scope.readIsolation,false);
+  assert.equal(await readFile(path.join(copy.path,'tracked.txt'),'utf8'),'Actual prepared review bytes.\n');assert.equal(await readFile(path.join(copy.path,'new-source.ts'),'utf8'),'export const reviewInput = true;\n');
+  assert.notEqual(copy.path,checkout.path);assert.notEqual(copy.path,h.project.workspace);assert.deepEqual(qa,beforeRole);assert.equal(h.engine.project(h.project.id).roles.find(role=>role.id==='qa')?.sandbox,'read-only');
+  const worker=h.state.agents.get(started.ref.agentId!)!;assert.ok(worker.custom_args?.includes('default_permissions="gwi-workspace"'));assert.match(worker.instructions!,/\.gwi-verification\//);
+  const basis=[...h.state.agents.values()].find(agent=>agent.id!==worker.id&&agent.custom_args?.includes('default_permissions="gwi-readonly"'));assert.ok(basis);
+  assert.equal(h.state.scopeProbes.length,1);assert.equal(h.state.scopeProbes[0].workspace,copy.path);assert.equal(path.dirname(h.state.scopeProbes[0].executionFile),await realpath(checkout.path));assert.equal(path.dirname(h.state.scopeProbes[0].projectFile),await realpath(h.project.workspace));
+  await mkdir(path.join(copy.path,'.gwi-verification'));await writeFile(path.join(copy.path,'.gwi-verification','scratch.txt'),'Synthetic build scratch.');
+  h.taskGate.resolve();assert.deepEqual((await started.completion).output,OUTPUT);
+  assert.equal(await lstat(copy.path).catch(()=>null),null);assert.equal(h.execution.records('synthetic-run')[0].verification?.check?.unchanged,true);assert.deepEqual(events.filter(event=>event.type.startsWith('verification.')).map(event=>event.type),['verification.prepared','verification.checked']);
+  assert.equal(await readFile(path.join(checkout.path,'tracked.txt'),'utf8'),'Actual prepared review bytes.\n');assert.equal(await readFile(path.join(h.project.workspace,'tracked.txt'),'utf8'),'Committed synthetic workspace.\n');
+  const capability=(await h.platform.team(h.project.id,OWNER)).capabilities.verification;assert.equal(capability.available,true);assert.equal(capability.requiresProbe,true);assert.equal(capability.sourceProtection,'probe-required');assert.equal(capability.readIsolation,false);assert.equal(capability.networkDomainRestriction,false);
+});
+
+test('review capability and failed scope probes stop before agent assignment without broader permission fallback',async t=>{
+  for(const variant of ['missing-capability','unsafe-scope'] as const)await t.test(variant,async sub=>{
+    const h=await fixture(sub),input=h.input({executionPurpose:'review',role:{...h.project.roles.find(role=>role.id==='qa')!,model:'synthetic-model'}});
+    const execution=variant==='missing-capability'?new PlatformExecution(new Platform(h.engine,h.connection,h.platform.dataDirectory,'synthetic-model',{runtimeId:'synthetic-runtime',daemonId:'synthetic-daemon',verified:true,permissionEvidence:'Synthetic existing setup.',permissions:{readOnly:{name:'gwi-readonly',verified:true},workspaceWrite:{name:'gwi-workspace',verified:true}}},h.client)):h.execution;
+    if(variant==='unsafe-scope')h.state.scopeProbeError=new AppError('VERIFICATION_SCOPE_UNSAFE','Synthetic probe did not deny an original source write.',409);
+    await assert.rejects(execution.agent.start(input),code(variant==='missing-capability'?'VERIFICATION_CAPABILITY_UNAVAILABLE':'VERIFICATION_SCOPE_UNSAFE'));
+    assert.equal(h.state.issuePosts,0);assert.equal(h.state.agents.size,0);assert.equal(execution.records(input.runId)[0].status,'not_dispatched');assert.equal(execution.records(input.runId)[0].cleanupConfirmed,true);
+    if(variant==='unsafe-scope'){const copy=h.platform.workspaces.verification(input.attemptId);assert.ok(copy.disposedAt);assert.equal(await lstat(copy.path).catch(()=>null),null);}
+    assert.equal(h.engine.project(h.project.id).roles.find(role=>role.id==='qa')?.sandbox,'read-only');
+  });
+});
+
+test('mutating prepared source in a verification task rejects its otherwise successful result and retains integrity evidence',async t=>{
+  const h=await fixture(t);h.state.taskListGate=h.taskGate.promise;
+  const started=await h.execution.agent.start(h.input({executionPurpose:'review'})),copy=h.platform.workspaces.verification('synthetic-attempt');
+  await writeFile(path.join(copy.path,'tracked.txt'),'Reviewer changed prepared source.\n');h.taskGate.resolve();
+  await assert.rejects(started.completion,code('VERIFICATION_SOURCE_MUTATED'));
+  const record=h.execution.records('synthetic-run')[0];assert.equal(record.cleanupConfirmed,true);assert.equal(record.issueState,'cancelled');assert.equal(record.verification?.check?.unchanged,false);assert.deepEqual(record.verification?.check?.changed,['tracked.txt']);assert.equal(await lstat(copy.path).catch(()=>null),null);
+  assert.equal(await readFile(path.join(copy.executionPath,'tracked.txt'),'utf8'),'Committed synthetic workspace.\n');assert.equal(await readFile(path.join(h.project.workspace,'tracked.txt'),'utf8'),'Committed synthetic workspace.\n');
+});
+
+test('an uncertain external review keeps its copy until authoritative reconciliation',async t=>{
+  const h=await fixture(t);h.state.taskListError=true;h.engine.agentExecutor=h.execution.agent;
+  const initial=h.engine.createPipeline({projectId:h.project.id,roleId:'qa',name:'Synthetic uncertain review'},OWNER),flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'work',name:'Review prepared source',roleId:'qa',executor:'codex',executionPurpose:'review',dependsOn:[],prompt:'Perform the bounded source review.',review:false}]},OWNER);
+  const run=h.engine.startRun({projectId:h.project.id,pipelineId:flow.id,goal:'Inspect prepared source.',baseline:'Synthetic committed source.',idempotencyKey:'synthetic-uncertain-review'},OWNER);
+  await eventually(()=>h.engine.run(run.id).status==='failed','the uncertain external review');
+  const record=h.execution.records(run.id)[0],copy=h.platform.workspaces.verification(record.id);assert.ok(await lstat(copy.path));assert.equal(record.cleanupConfirmed,false);
+  h.state.taskListError=false;const reconciled=await h.execution.reconcile(run.id,'work');assert.equal(reconciled.cleanupConfirmed,true);assert.equal(reconciled.verification?.check?.unchanged,true);assert.equal(await lstat(copy.path).catch(()=>null),null);
+});
+
+test('a lost review assignment is discovered only in its exact persisted verification project',async t=>{
+  const h=await fixture(t);h.state.loseIssueResponse=true;h.engine.agentExecutor=h.execution.agent;
+  const initial=h.engine.createPipeline({projectId:h.project.id,roleId:'qa',name:'Synthetic lost review assignment'},OWNER),flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'verify',name:'Review prepared source',roleId:'qa',executor:'codex',executionPurpose:'review',dependsOn:[],prompt:'Perform bounded review.',review:false}]},OWNER),run=h.engine.startRun({projectId:h.project.id,pipelineId:flow.id,goal:'Verify prepared source.',baseline:'Synthetic source.',idempotencyKey:'synthetic-lost-review'},OWNER);
+  await eventually(()=>h.engine.run(run.id).status==='failed','the lost review assignment');const before=h.execution.records(run.id)[0],copy=h.platform.workspaces.verification(before.id);assert.equal(before.issueId,undefined);assert.ok(await lstat(copy.path));assert.equal(h.state.issuePosts,1);
+  const reconciled=await h.execution.reconcile(run.id,'verify');assert.equal(reconciled.cleanupConfirmed,true);assert.ok(reconciled.issueId);assert.equal(reconciled.verification?.check?.unchanged,true);assert.equal(await lstat(copy.path).catch(()=>null),null);assert.equal(h.state.issuePosts,1);assert.equal(h.engine.run(run.id).stages[0].attempts[0].output,undefined);
+});
+
+test('native verification scope protocol uses command-only probes and rejects successful outside write opens',async t=>{
+  for(const unsafe of [false,true])await t.test(unsafe?'outside write allowed':'outside writes denied',async sub=>{
+    const directory=await mkdtemp(path.join(tmpdir(),'gwi-scope-protocol-')),workspace=path.join(directory,'copy'),calls=path.join(directory,'calls.jsonl'),binary=path.join(directory,'guard'),script=path.join(directory,'guard.mjs');await mkdir(workspace);
+    sub.after(()=>rm(directory,{recursive:true,force:true}));
+    const original=path.join(directory,'original.txt'),sibling=path.join(directory,'sibling.txt');await writeFile(original,'Synthetic original bytes.\n');await writeFile(sibling,'Synthetic sibling bytes.\n');
+    await writeFile(script,`import {createInterface} from 'node:readline';\nimport {appendFileSync} from 'node:fs';\nimport {execFileSync} from 'node:child_process';\nfor await(const line of createInterface({input:process.stdin})){const message=JSON.parse(line);appendFileSync(${JSON.stringify(calls)},JSON.stringify(message)+'\\n');if(message.id===undefined)continue;let result={};if(message.method==='command/exec'){const text=message.params.command[2];if(text.startsWith('printf ')){execFileSync('/bin/sh',['-c',text],{cwd:message.params.cwd});result={exitCode:0};}else result={exitCode:${unsafe?0:1}};}process.stdout.write(JSON.stringify({id:message.id,result})+'\\n');}\n`);
+    const shell=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";await writeFile(binary,'#!/bin/sh\nexec '+shell(process.execPath)+' '+shell(script)+' "$@"\n',{mode:0o700});await chmod(binary,0o700);
+    const promise=probeVerificationScope({guardBinary:binary,scratchHome:path.join(directory,'synthetic-home'),workspace,executionFile:original,projectFile:original,siblingFile:sibling,network:'enabled'});
+    if(unsafe)await assert.rejects(promise,code('VERIFICATION_SCOPE_UNSAFE'));else{const proof=await promise;assert.equal(proof.copyWrite,true);assert.equal(proof.modelTurnStarted,false);assert.equal(proof.executionWriteDenied,true);assert.equal(proof.readIsolation,false);}
+    const methods=(await readFile(calls,'utf8')).trim().split('\n').map(line=>(JSON.parse(line) as {method:string}).method);assert.ok(methods.every(method=>['initialize','initialized','command/exec'].includes(method)));assert.equal(methods.includes('turn/start'),false);assert.equal(methods.filter(method=>method==='command/exec').length,unsafe?2:4);
+    assert.equal(await readFile(original,'utf8'),'Synthetic original bytes.\n');assert.equal(await readFile(sibling,'utf8'),'Synthetic sibling bytes.\n');
+  });
+});
+
+test('live protected runtime confines a synthetic verification copy without a model turn',{skip:!process.env.GWI_VERIFICATION_PROFILE},async t=>{
+  const profileFile=path.resolve(process.env.GWI_VERIFICATION_PROFILE!),profileBytes=await readFile(profileFile),profile=JSON.parse(profileBytes.toString()) as {verified?:boolean;guardBinary:string;scratchHome:string;authorizedRootsFile:string;permissions?:{workspaceWrite?:{name:string;verified?:boolean;network?:string}}};
+  assert.equal(profile.verified,true);assert.equal(profile.permissions?.workspaceWrite?.name,'gwi-workspace');assert.equal(profile.permissions?.workspaceWrite?.verified,true);
+  const rootsBytes=await readFile(profile.authorizedRootsFile),roots=JSON.parse(rootsBytes.toString()) as {roots:string[]};assert.ok(Array.isArray(roots.roots)&&roots.roots.length>0);
+  const authorizedRoot=await realpath(roots.roots[0]),configFile=path.join(profile.scratchHome,'config.toml'),configBytes=await readFile(configFile);
+  const setupModule='../scripts/setup-multica.mjs',setup=await import(setupModule);assert.equal(setup.stripManagedSandbox(configBytes.toString()),configBytes.toString(),'The live probe requires a current seed config that the guard will not rewrite.');
+  const directory=await mkdtemp(path.join(authorizedRoot,'gwi-verification-live-')),source=path.join(directory,'source');await mkdir(source);
+  const store=new Store(path.join(directory,'state'));t.after(async()=>{store.close();await rm(directory,{recursive:true,force:true});assert.deepEqual(await readFile(profileFile),profileBytes);assert.deepEqual(await readFile(profile.authorizedRootsFile),rootsBytes);assert.deepEqual(await readFile(configFile),configBytes);});
+  await execute('git',['-C',source,'init','--template=']);await writeFile(path.join(source,'source.ts'),'export const value = 1;\n');await execute('git',['-C',source,'add','--','source.ts']);await execute('git',['-C',source,'-c','core.hooksPath=/dev/null','-c','user.name=Synthetic Test','-c','user.email=synthetic@example.invalid','commit','-m','Create synthetic scope input']);
+  const project:Project={id:'synthetic-live-project',revision:1,name:'Synthetic live scope probe',description:'',workspace:source,repository:'',roles:defaultRoles(),knowledgeSources:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},workspaces=new Workspaces(store,path.join(directory,'executions')),checkout=await workspaces.ensure(project,'synthetic-live-run');
+  await writeFile(path.join(checkout.path,'source.ts'),'export const value = 2;\n');await writeFile(path.join(checkout.path,'prepared.ts'),'export const prepared = true;\n');
+  const copy=await workspaces.prepareVerification(project,checkout.id,'synthetic-live-attempt'),siblingFile=path.join(directory,'sibling.txt');await writeFile(siblingFile,'Synthetic sibling probe.\n');
+  const proof=await probeVerificationScope({guardBinary:profile.guardBinary,scratchHome:profile.scratchHome,workspace:copy.path,executionFile:path.join(checkout.path,'source.ts'),projectFile:path.join(source,'source.ts'),siblingFile,network:profile.permissions?.workspaceWrite?.network==='enabled'?'enabled':'unknown'});
+  assert.equal(proof.copyWrite,true);assert.equal(proof.executionWriteDenied,true);assert.equal(proof.projectWriteDenied,true);assert.equal(proof.siblingWriteDenied,true);assert.equal(proof.modelTurnStarted,false);assert.equal(proof.readIsolation,false);assert.equal(proof.networkDomainRestriction,false);
+  assert.equal(await readFile(path.join(checkout.path,'source.ts'),'utf8'),'export const value = 2;\n');assert.equal(await readFile(path.join(source,'source.ts'),'utf8'),'export const value = 1;\n');assert.equal((await workspaces.checkVerification(copy.id)).unchanged,true);await workspaces.disposeVerification(copy.id);
 });
 
 test('binding a shared agent copies it, project edits are scoped and browser representations omit native credentials', async t => {
@@ -354,13 +446,13 @@ test('real HTTP planner references advance only after authoritative completion a
 
 test('new projects include the focused implement, independent QA and manual delivery path', async t => {
   const h = await fixture(t), flow = h.engine.detail(h.project.id, OWNER).pipelines.find(pipeline => pipeline.name === 'Focused change'); assert.ok(flow);
-  assert.deepEqual(flow.stages.map(stage => ({id: stage.id, role: stage.roleId, executor: stage.executor, dependsOn: stage.dependsOn})), [{id: 'implement', role: 'development', executor: 'codex', dependsOn: []}, {id: 'verify', role: 'qa', executor: 'codex', dependsOn: ['implement']}, {id: 'delivery', role: 'development', executor: 'manual', dependsOn: ['verify']}]);
+  assert.deepEqual(flow.stages.map(stage => ({id: stage.id, role: stage.roleId, executor: stage.executor, dependsOn: stage.dependsOn})), [{id: 'implement', role: 'development', executor: 'codex', dependsOn: []}, {id: 'verify', role: 'qa', executor: 'codex', dependsOn: ['implement']}, {id: 'delivery', role: 'lead', executor: 'manual', dependsOn: ['verify']}]);assert.equal(flow.stages[1].executionPurpose,'review');
   assert.equal(flow.stages[1].reworkTo, 'implement'); assert.equal(flow.stages[2].reworkTo, 'implement'); assert.equal(flow.policy.maxIterations, 1);
   h.engine.agentExecutor = h.execution.agent;
   const run = h.engine.startRun({projectId: h.project.id, pipelineId: flow.id, goal: 'Prepare one synthetic change with independent evidence.', baseline: 'Synthetic committed input.', idempotencyKey: 'synthetic-focused-default'}, OWNER);
   await eventually(() => h.engine.run(run.id).stages[2].status === 'waiting', 'the focused manual delivery gate');
   const before = h.engine.run(run.id); assert.equal(before.status, 'waiting'); assert.deepEqual(before.stages.map(stage => stage.status), ['completed', 'completed', 'waiting']); assert.equal(h.state.issuePosts, 2);
-  const agents = [...h.state.issues.values()].map(issue => h.state.agents.get(issue.assignee_id!)!); assert.ok(agents[0].custom_args?.includes('default_permissions="gwi-workspace"')); assert.ok(agents[1].custom_args?.includes('default_permissions="gwi-readonly"'));
+  const agents = [...h.state.issues.values()].map(issue => h.state.agents.get(issue.assignee_id!)!); assert.ok(agents[0].custom_args?.includes('default_permissions="gwi-workspace"')); assert.ok(agents[1].custom_args?.includes('default_permissions="gwi-workspace"'));assert.equal(h.project.roles.find(role=>role.id==='qa')?.sandbox,'read-only');assert.equal(h.state.scopeProbes.length,1);
   for (let count = 0; count < 3; count++) {await h.engine.tick(); await delay(10);} assert.equal(h.state.issuePosts, 2);
   h.engine.completeManual(run.id, 'delivery', {...OUTPUT, summary: 'The owner inspected the synthetic change and independent checks.'}, OWNER); assert.equal(h.engine.run(run.id).status, 'completed'); assert.equal(h.state.issuePosts, 2); assert.ok([...h.state.issues.values()].every(issue => issue.status === 'done'));
 });

@@ -12,6 +12,7 @@ import type {TestContext} from 'node:test';
 import {Engine} from '../src/engine.ts';
 import {Store} from '../src/store.ts';
 import {AppError} from '../src/validation.ts';
+import {runPolicy} from '../src/contracts.ts';
 import type {Actor, CodexInfo, ExecutionRef, KnowledgeEntry, Pipeline, Project, Run, Stage, StartRunInput, TaskOutput, Usage} from '../src/contracts.ts';
 import type {AgentExecutionInput, CodexAdapter, CodexExecution, CodexExecutionInput, GithubAdapter, GithubObservation} from '../src/adapters/types.ts';
 
@@ -35,15 +36,22 @@ type SyntheticCall = {
 
 class SyntheticCodex implements CodexAdapter {
   calls: SyntheticCall[] = [];
+  reportTerminalUsage = true;
   abortBehavior: 'reject' | 'defer' = 'reject';
   prefix: string;
   constructor(prefix = 'synthetic') {this.prefix = prefix;}
   async info(): Promise<CodexInfo> {return {available: true, connected: true, authenticated: true, models: []};}
   async skills() {return [];}
   async start(input: CodexExecutionInput): Promise<CodexExecution> {
+    let reported:Usage|undefined;const onEvent=input.onEvent;
+    input.onEvent=event=>{if(event.usage)reported=event.usage;onEvent(event);};
     const index = this.calls.length + 1;
     const ref = {threadId: `${this.prefix}-thread-${index}`, turnId: `${this.prefix}-turn-${index}`};
     const completion = deferred<{output: TaskOutput; usage?: Usage}>();
+    const complete=completion.resolve.bind(completion),fail=completion.reject.bind(completion);
+    // Ordinary synthetic scenarios have an explicit final meter, including zero-cost work.
+    completion.resolve=value=>complete(this.reportTerminalUsage?{...value,usage:value.usage??reported??{input:0,output:0,total:0}}:value);
+    completion.reject=error=>{if(this.reportTerminalUsage&&!reported)input.onEvent({type:'usage',message:'Synthetic final zero-cost meter.',usage:{input:0,output:0,total:0}});fail(error);};
     const call: SyntheticCall = {input, ref, aborted: false, completion,
       finish(output = OUTPUT, usage) {completion.resolve({output, ...(usage ? {usage} : {})});}};
     const abort = () => {call.aborted = true; if (this.abortBehavior === 'reject') completion.reject(new Error('Synthetic native execution interrupted.'));};
@@ -112,6 +120,88 @@ function start(h: Fixture, project: Project, pipeline: Pipeline, extra: Partial<
 }
 const state = (run: Run, id: string) => run.stages.find(stage => stage.stageId === id)!;
 const errorCode = (code: string) => (error: unknown) => error instanceof AppError && error.code === code;
+
+test('run-specific owner approval freezes its allowance without editing the saved workflow',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('delivery',[],{executor:'manual'})]);
+  const key=randomUUID(),run=start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:2000,timeoutSeconds:60}});
+  assert.equal(run.approvedPolicy?.tokenBudget,2000);assert.equal(runPolicy(run).timeoutSeconds,60);
+  assert.equal(run.snapshot.pipeline.policy.tokenBudget,1000);assert.equal(h.engine.pipeline(flow.id).policy.tokenBudget,1000);
+  assert.equal(start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:2000,timeoutSeconds:60}}).id,run.id);
+  assert.throws(()=>start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:3000}}),errorCode('IDEMPOTENCY_CONFLICT'));
+  assert.throws(()=>h.engine.startRun({projectId:p.id,pipelineId:flow.id,goal:'Scoped override.',baseline:'Synthetic',idempotencyKey:randomUUID(),limits:{tokenBudget:3000}},{name:'Synthetic role',kind:'agent',projectId:p.id,tools:['run.start']}),errorCode('OWNER_REQUIRED'));
+  assert.throws(()=>start(h,p,flow,{limits:{tokenBudget:1000001}}),errorCode('INVALID_POLICY'));
+  const historical={...run};delete historical.approvedPolicy;
+  assert.equal(runPolicy(historical).tokenBudget,1000);assert.equal(historical.approvedPolicy,undefined);
+});
+
+test('continue retries one known-ended stage with existing allowance and no mandatory note',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('prepare'),stage('verify',['prepare'])]);
+  const run=start(h,p,flow);await pump(h,()=>h.codex.calls.length===1,'preparation');
+  h.codex.calls[0].finish(result('Accepted prepared artifact.'),{input:40,output:10,total:50});
+  await pump(h,()=>h.codex.calls.length===2,'verification');h.codex.calls[1].completion.reject(new Error('Synthetic recoverable check failure.'));
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the known-ended failure');
+  const accepted=structuredClone(state(h.engine.run(run.id),'prepare')),recovery=h.engine.recovery(run.id,'verify',OWNER);
+  assert.equal(recovery.action,'retry');assert.equal(recovery.allowance.remainingTokens,950);
+  h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:recovery.recoveryKey},OWNER);
+  await pump(h,()=>h.codex.calls.length===3,'the focused continuation');
+  assert.deepEqual(state(h.engine.run(run.id),'prepare'),accepted);assert.equal(h.engine.run(run.id).limitRevisions,undefined);
+  assert.equal(h.codex.calls[2].input.tokenBudget,950);
+  assert.throws(()=>h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:recovery.recoveryKey},OWNER),errorCode('RECOVERY_CONFLICT'));
+  h.codex.calls[2].finish();await pump(h,()=>h.engine.run(run.id).status==='completed','accepted continuation');
+});
+
+test('continuation recommendations require explicit current owner approval and retain unknown executions',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('verify')],{tokenBudget:100,maxAttempts:1});
+  const run=start(h,p,flow);await pump(h,()=>h.codex.calls.length===1,'the finite original attempt');
+  h.codex.calls[0].finish(result('A finite check needs revision.','blocked'),{input:120,output:5,total:125});
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the observed boundary');
+  const recovery=h.engine.recovery(run.id,'verify',OWNER),input={stageId:'verify',recoveryKey:recovery.recoveryKey};
+  assert.equal(recovery.action,'approve');assert.equal(recovery.recommendation?.basis.previousAttemptTokens,125);
+  assert.equal(recovery.recommendation?.basis.purpose,'one-failed-stage');assert.equal(recovery.recommendation?.limits.maxAttempts,2);
+  assert.throws(()=>h.engine.continueRun(run.id,input,OWNER),errorCode('CONTINUATION_APPROVAL_REQUIRED'));
+  assert.throws(()=>h.engine.continueRun(run.id,{...input,approveRecommendation:true},{name:'Synthetic role',kind:'agent',projectId:p.id}),errorCode('OWNER_REQUIRED'));
+  assert.equal(h.codex.calls.length,1);assert.equal(state(h.engine.run(run.id),'verify').attempts.length,1);
+  h.engine.store.put('multica-execution',{id:'synthetic-uncertain',runId:run.id,cleanupConfirmed:false});
+  const unknown=h.engine.recovery(run.id,'verify',OWNER);assert.equal(unknown.action,'reconcile');
+  assert.throws(()=>h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:unknown.recoveryKey,approveRecommendation:true},OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  h.engine.store.put('multica-execution',{id:'synthetic-uncertain',runId:run.id,cleanupConfirmed:true});
+  const current=h.engine.recovery(run.id,'verify',OWNER);
+  h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:current.recoveryKey,approveRecommendation:true},OWNER);
+  await pump(h,()=>h.codex.calls.length===2,'the approved single retry');
+  const continued=h.engine.run(run.id);assert.equal(continued.snapshot.pipeline.policy.tokenBudget,100);assert.equal(continued.approvedPolicy?.tokenBudget,100);
+  assert.equal(continued.limitRevisions?.length,1);assert.equal(continued.stages[0].attempts[0].usage?.total,125);
+  assert.ok(h.codex.calls[1].input.tokenBudget>0&&h.codex.calls[1].input.tokenBudget<=1000000);
+  h.codex.calls[1].finish();
+});
+
+test('parallel workers reserve disjoint finite shares and missing final usage stays held',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('left'),stage('right'),stage('join',['left','right'])],{concurrency:2,tokenBudget:1000});
+  h.codex.reportTerminalUsage=false;const run=start(h,p,flow);
+  await pump(h,()=>h.codex.calls.length===2,'two bounded parallel workers');
+  assert.deepEqual(h.codex.calls.map(call=>call.input.tokenBudget),[500,500]);
+  h.codex.calls[0].input.onEvent({type:'usage',message:'Synthetic active meter.',usage:{input:90,output:10,total:100}});
+  let allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,100);assert.equal(allowance.reservedTokens,900);assert.equal(allowance.remainingTokens,0);
+  h.codex.calls[0].finish();h.codex.calls[1].finish();
+  await pump(h,()=>h.codex.calls.length===3,'the join using only unpromised allowance');
+  assert.equal(h.codex.calls[2].input.tokenBudget,400);
+  allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,100);assert.equal(allowance.reservedTokens,900);assert.equal(allowance.usageComplete,false);
+  h.codex.calls[2].finish(OUTPUT,{input:20,output:5,total:25});
+  await pump(h,()=>h.engine.run(run.id).status==='completed','the finite joined result');
+  allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,125);assert.equal(allowance.reservedTokens,500);assert.equal(allowance.remainingTokens,375);
+});
+
+test('existing read-only QA roles get a task-only review purpose and owner gates stay human',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('review',[],{roleId:'qa'}),stage('delivery',['review'],{executor:'manual',ownerGate:true})]);
+  let dispatched:AgentExecutionInput|undefined;
+  h.engine.agentExecutor={start:async input=>{dispatched=input;return h.codex.start(input);},steer:async()=>{}};
+  const run=start(h,p,flow);await pump(h,()=>Boolean(dispatched),'the legacy QA worker');
+  assert.equal(dispatched?.executionPurpose,'review');assert.equal(dispatched?.role.sandbox,'read-only');
+  assert.equal(h.engine.run(run.id).snapshot.pipeline.stages[0].executionPurpose,undefined);
+  assert.equal(h.engine.project(p.id).roles.find(role=>role.id==='qa')?.sandbox,'read-only');
+  h.codex.calls[0].finish();await pump(h,()=>state(h.engine.run(run.id),'delivery').status==='waiting','owner acceptance');
+  assert.throws(()=>h.engine.completeManual(run.id,'delivery',OUTPUT,{name:'Synthetic worker',kind:'agent',projectId:p.id}),errorCode('OWNER_REQUIRED'));
+  h.engine.completeManual(run.id,'delivery',OUTPUT,OWNER);await pump(h,()=>h.engine.run(run.id).status==='completed','actual owner acceptance');
+});
 
 test('manual dependencies and delivery wait for real recorded outcomes', async t => {
   const h = await fixture(t), p = await project(h);
@@ -659,7 +749,7 @@ test('development server blocks synthetic private files through direct, raw, enc
   const index = await readFile(path.join(root, 'index.html'), 'utf8');
   const entry = index.match(/<script[^>]+src="([^"]+)"/)?.[1];
   assert.ok(entry, 'The public entry script is declared.');
-  for (const route of ['/', '/@vite/client', '/src/contracts.ts', entry]) {
+  for (const route of ['/', '/@vite/client', '/src/contracts.ts', '/brand/gwi-mark.svg', entry]) {
     const response = await fetch(origin + route, {redirect: 'manual'});
     assert.equal(response.status, 200, `Public application asset remains usable: ${route}`);
     await response.text();
@@ -679,6 +769,25 @@ test('development server blocks synthetic private files through direct, raw, enc
     assert.equal(response.status, 403, 'A synthetic private route is blocked before Vite serves it.');
     assert.equal(content.includes(marker), false);
   }
+  const session=await fetch(origin+'/api/session'),cookie=session.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(cookie);
+  const localJSON=async(route:string,method='GET',body?:unknown)=>{
+    const response=await fetch(origin+route,{method,headers:{cookie,origin,'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+    assert.equal(response.status>=200&&response.status<300,true,`Local manual API request succeeds: ${method} ${route}`);
+    return await response.json();
+  };
+  const project=await localJSON('/api/projects','POST',{name:'Synthetic API project',workspace:directory}) as Project;
+  const detail=await localJSON('/api/projects/'+project.id) as {pipelines:Pipeline[]},flow=detail.pipelines[0];
+  const definition={...flow,stages:[{id:'manual-check',name:'Synthetic owner check',roleId:flow.roleId,executor:'manual',dependsOn:[],prompt:'Record the actual synthetic check.',review:false}]};
+  await localJSON('/api/pipelines/'+flow.id,'PUT',{expectedRevision:flow.revision,definition});
+  const run=await localJSON('/api/runs','POST',{projectId:project.id,pipelineId:flow.id,goal:'Verify the manual continuation API.',idempotencyKey:randomUUID(),limits:{tokenBudget:2000}}) as Run;
+  assert.ok(run.baseline);assert.equal(run.approvedPolicy?.tokenBudget,2000);assert.equal(run.snapshot.pipeline.policy.tokenBudget,flow.policy.tokenBudget);
+  await localJSON('/api/runs/'+run.id+'/stages/manual-check/complete','POST',{output:result('The synthetic check needs one correction.','blocked')});
+  const recovery=await localJSON('/api/runs/'+run.id+'/recovery?stageId=manual-check') as {action:string;recoveryKey:string};
+  assert.equal(recovery.action,'retry');
+  await localJSON('/api/runs/'+run.id+'/continue','POST',{stageId:'manual-check',recoveryKey:recovery.recoveryKey});
+  await localJSON('/api/runs/'+run.id+'/stages/manual-check/complete','POST',{output:OUTPUT});
+  assert.equal((await localJSON('/api/runs/'+run.id+'/recovery?stageId=manual-check')).code,'RUN_COMPLETED');
 });
 
 test('upstream rework invalidates a completed child even when the wrapper hits its attempt limit before relaunch', async t => {

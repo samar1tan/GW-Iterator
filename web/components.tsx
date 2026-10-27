@@ -4,6 +4,7 @@ import type { Attempt, AuditEvent, ControlTool, Executor, IntegrationInfo, RoleP
 import { APIError, errorText } from './api';
 import { useI18n } from './i18n';
 import type { MessageKey } from './locales/en';
+import {Icon, StateIcon} from './Icons';
 
 export function Button({ children, tone = 'default', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'default' | 'primary' | 'danger' | 'quiet' }) {
   return <button type="button" {...props} className={`button ${tone} ${className}`}>{children}</button>;
@@ -39,10 +40,10 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
-  }}><header className="modal-header"><h2 id={titleId}>{title}</h2><Button tone="quiet" onClick={onClose} aria-label={t('close')}>×</Button></header><div className="modal-content">{children}</div></section></div>;
+  }}><header className="modal-header"><h2 id={titleId}>{title}</h2><Button tone="quiet" onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content">{children}</div></section></div>;
 }
 export function Status({ value }: { value: WorkStatus }) {
-  const { t } = useI18n(); return <span className={`status status-${value}`}><span className="status-dot" />{t(value === 'waiting' ? 'waitingStatus' : value)}</span>;
+  const { t } = useI18n(); return <span className={`status status-${value}`}><StateIcon status={value}/>{t(value === 'waiting' ? 'waitingStatus' : value)}</span>;
 }
 const executorKeys: Record<Executor, MessageKey> = { manual: 'manual', codex: 'codexExecutor', github: 'githubExecutor', pipeline: 'pipelineExecutor' };
 export function ExecutorLabel({ value }: { value: Executor }) { const { t } = useI18n(); return <>{t(executorKeys[value])}</>; }

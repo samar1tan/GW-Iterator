@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="540" viewBox="0 0 1100 540" fill="none">
+  <rect x=".5" y=".5" width="1099" height="539" rx="12" fill="#0d1117" stroke="#3d444d"/>
+  <path d="M12 .5h1076a11.5 11.5 0 0 1 11.5 11.5v45H.5V12A11.5 11.5 0 0 1 12 .5Z" fill="#161b22"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14" fill="#f0f6fc">
+    <text x="26" y="35" font-weight="650">GW-Iterator</text><text x="153" y="35" fill="#6e7681">/</text><text x="173" y="35" fill="#b7c0ca">Project website</text>
+    <rect x="907" y="18" width="166" height="25" rx="12.5" fill="#262039" stroke="#665b99"/><text x="990" y="35" text-anchor="middle" font-size="12" fill="#d2bfff">Ready for review</text>
+    <path d="M.5 57h1099M.5 131h1099M.5 494h1099" stroke="#30363d"/>
+    <text x="26" y="88" fill="#8b949e" font-size="11" letter-spacing="1">REQUEST</text>
+    <text x="26" y="113" font-size="17">Keep the English and Chinese website demo aligned when I switch languages.</text>
+    <path d="M356 131v363" stroke="#30363d"/>
+    <path d="M38 185v219" stroke="#30363d"/>
+    <g fill="#161b22" stroke="#3d444d"><circle cx="38" cy="180" r="13"/><circle cx="38" cy="252" r="13"/><circle cx="38" cy="324" r="13"/></g>
+    <g stroke="#79c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m32 180 4 4 8-9"/><path d="m32 252 4 4 8-9"/><path d="m32 324 4 4 8-9"/></g>
+    <rect x="19" y="372" width="317" height="70" rx="6" fill="#1e2030"/><circle cx="38" cy="397" r="13" fill="#262039" stroke="#a98bfa"/><text x="38" y="402" text-anchor="middle" fill="#d2bfff" font-size="12">4</text>
+    <text x="65" y="179" font-weight="600">Understand the mismatch</text><text x="65" y="201" font-size="12" fill="#8b949e">Product · scope and expected result</text>
+    <text x="65" y="251" font-weight="600">Prepare the change</text><text x="65" y="273" font-size="12" fill="#8b949e">Development · shared demo content</text>
+    <text x="65" y="323" font-weight="600">Check both languages</text><text x="65" y="345" font-size="12" fill="#8b949e">QA · behavior, copy and layout</text>
+    <text x="65" y="396" font-weight="600">Review delivery</text><text x="65" y="418" font-size="12" fill="#8b949e">Owner · inspect the actual result</text>
+    <text x="390" y="168" fill="#8b949e" font-size="11" letter-spacing="1">PREPARED CHANGE</text><text x="390" y="205" font-size="24" font-weight="600">One case. Two languages.</text>
+    <text x="390" y="234" fill="#b7c0ca">Both pages use the same example, commands and evidence.</text>
+    <rect x="390" y="259" width="675" height="101" rx="6" stroke="#30363d"/><path d="M728 259v101" stroke="#30363d"/>
+    <text x="410" y="285" font-size="12" fill="#8b949e">English</text><text x="748" y="285" font-size="12" fill="#8b949e">Simplified Chinese</text>
+    <text x="410" y="313" font-size="15">Same historical case</text><text x="748" y="313" font-size="15">Same historical case</text>
+    <text x="410" y="339" font-size="12" fill="#79c0ff">Same commands and evidence</text><text x="748" y="339" font-size="12" fill="#79c0ff">Localized presentation</text>
+    <g font-size="13" fill="#b7c0ca"><text x="410" y="390">Equivalent content and interactions</text><text x="410" y="418">Language switch preserves the investigation</text></g>
+    <g stroke="#79c0ff" stroke-width="1.5" stroke-linecap="round"><path d="m392 385 4 4 7-8"/><path d="m392 413 4 4 7-8"/></g>
+    <text x="390" y="461" font-size="12" fill="#79c0ff">Change preview · Check results · Delivery record</text>
+    <text x="26" y="522" font-size="12" fill="#8b949e">Illustrative workflow example. Independently authored; contains no actual project configuration or run data.</text>
+  </g>
+</svg>

@@ -1,5 +1,7 @@
 # Integrated pipeline workspace
 
+Current design revision: [Human workbench UED](human-workbench-ued.md). Apply its GitHub-inspired visual system, step-first execution and progressive configuration in preference to the earlier presentation below.
+
 Status: replacement interaction baseline; implementation and user review are pending. Read with [the PRD](PRD.md). The former form-and-history layout is not the target design.
 
 ## Structure and visual system

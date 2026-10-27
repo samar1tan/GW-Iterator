@@ -5,13 +5,14 @@ import type {AgentExecutionInput,AgentExecutor,CodexExecution,AdapterEvent} from
 import type {GoalPlanner,GoalPlannerInput} from './goal-planner.ts';
 import {validatePlannerDecision} from './goal-planner.ts';
 import {isMulticaTaskTerminal,MulticaApiError,type MulticaTask,type MulticaTaskMessage,type MulticaUsage} from './adapters/multica.ts';
-import type {Platform,DaemonIdentity} from './platform.ts';
+import type {Platform,DaemonIdentity,VerificationScopeProof} from './platform.ts';
 import type {ControlMcp} from './control-mcp.ts';
+import type {VerificationCheck} from './workspaces.ts';
 import {AppError,demand,isObject,validateOutput} from './validation.ts';
 
-export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number}};
-type RemoteProject={id:string;providerProjectId:string;workspace:string;sourceCommit:string};
-type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds:number;tokenBudget:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool']};
+export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null}};
+type RemoteProject={id:string;providerProjectId:string;workspace:string;sourceCommit:string;verification?:ExecutionRecord['verification']};
+type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds:number;tokenBudget:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review'};
 const at=()=>new Date().toISOString();
 const wait=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 
@@ -44,6 +45,17 @@ export class PlatformExecution {
     this.planner={start:input=>this.startPlanner(input)};
   }
   private async executionProject(request:Request):Promise<RemoteProject>{
+    if(request.executionPurpose==='review'){
+      const capability=this.platform.verificationCapability();demand(capability.available,'VERIFICATION_CAPABILITY_UNAVAILABLE',capability.reason??'Use a protected configured verifier or owner delivery for these checks.',409);
+      const runtime=await this.platform.runtime(request.role,true);await this.platform.authorizeExecutionRoot();const copy=await this.platform.workspaces.prepareVerification(request.project,request.runId,request.attemptId);
+      try{
+        const proof=await this.platform.verifyReviewScope(copy,request.role);demand(runtime.daemon_id,'RUNTIME_IDENTITY_UNAVAILABLE','The runtime did not report its daemon identity.',409);
+        const remote=await this.platform.client.createProject({title:request.project.name+' · verify '+request.attemptId.slice(0,8),description:'GWI disposable prepared-input verification for '+request.attemptId,resources:[{resource_type:'local_directory',resource_ref:{local_path:copy.path,daemon_id:runtime.daemon_id,execution_mode:'in_place'},label:'Prepared verification copy'}]});
+        const verification={workspaceId:copy.id,manifestHash:copy.manifest.sha256,scope:proof};
+        request.onEvent({type:'verification.prepared',message:'Prepared source copied for independent verification; task-scoped scratch writes and original source protection passed a no-model probe. Filesystem read isolation and network domain restrictions are not provided.',data:{manifest:copy.manifest,scope:proof}});
+        const record={id:request.attemptId,providerProjectId:remote.id,workspace:copy.path,sourceCommit:copy.sourceCommit,verification};this.platform.engine.store.put('multica-verification-project',record);return record;
+      }catch(error){await this.platform.workspaces.disposeVerification(copy.id);throw error;}
+    }
     const known=this.platform.engine.store.get<RemoteProject>('multica-run-project',request.runId);if(known)return known;
     const pending=this.projects.get(request.runId);if(pending)return pending;
     const result=(async()=>{
@@ -57,7 +69,7 @@ export class PlatformExecution {
     try{return await this.dispatch(request);}catch(error){
       // An assignment intent is durable before POST /issues. Earlier preparation cannot start a worker.
       const pending=this.records(request.runId).some(record=>record.stageId===request.stageId&&!record.cleanupConfirmed);
-      if(!this.platform.engine.store.get('multica-execution',request.attemptId)&&!pending)this.platform.engine.store.put('multica-execution',{id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:at(),updatedAt:at(),error:error instanceof Error?error.message:'Preparation failed before assignment.'} satisfies ExecutionRecord);
+      if(!this.platform.engine.store.get('multica-execution',request.attemptId)&&!pending){this.platform.engine.store.put('multica-execution',{id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:at(),updatedAt:at(),error:error instanceof Error?error.message:'Preparation failed before assignment.'} satisfies ExecutionRecord);const copy=this.platform.engine.store.get('verification-workspace',request.attemptId);if(copy)await this.platform.workspaces.disposeVerification(request.attemptId);}
       throw error;
     }
   }
@@ -70,19 +82,19 @@ export class PlatformExecution {
     const space=await this.executionProject(request),basis=await this.platform.agent(request.project,request.role,false);
     const lease=request.onTool&&this.controls?this.controls.issue(request.role.tools,request.onTool,request.timeoutSeconds+60):undefined;
     let agent=basis;
-    if(lease){
+    if(lease||space.verification){
       const prior=isObject(basis.mcp_config)&&isObject(basis.mcp_config.mcpServers)?basis.mcp_config.mcpServers:{};
-      try{agent=await this.platform.client.createAgent({name:basis.name+' · '+request.attemptId.slice(0,8),runtime_id:basis.runtime_id,description:basis.description+'\nExecution '+request.attemptId,instructions:basis.instructions,model:basis.model,thinking_level:basis.thinking_level,service_tier:'default',visibility:'private',permission_mode:'private',max_concurrent_tasks:1,custom_args:basis.custom_args,skill_ids:basis.skills?.map(skill=>skill.id)??request.role.multica?.skillIds??[],mcp_config:{mcpServers:{...prior,...lease.config.mcpServers}}});
+      try{agent=await this.platform.client.createAgent({name:basis.name+' · '+request.attemptId.slice(0,8),runtime_id:basis.runtime_id,description:basis.description+'\nExecution '+request.attemptId,instructions:(basis.instructions??'')+(space.verification?'\nThis task verifies an independent copy of the actual prepared source. Run checks in this copy. Keep included source files, deletions and untracked prepared source unchanged; ignored build/cache output may be written here and disposable scratch belongs in .gwi-verification/. Report actual checks and pending browser/CI requirements in the final JSON observations. Reference source artifacts only; scratch artifacts are disposed after this task. Source protection is write confinement, not filesystem read isolation; network access is enabled without a domain allowlist.':''),model:basis.model,thinking_level:basis.thinking_level,service_tier:'default',visibility:'private',permission_mode:'private',max_concurrent_tasks:1,custom_args:space.verification?['-c','default_permissions="gwi-workspace"','-c','approval_policy="never"']:basis.custom_args,skill_ids:basis.skills?.map(skill=>skill.id)??request.role.multica?.skillIds??[],mcp_config:{mcpServers:{...prior,...lease?.config.mcpServers}}});
         await this.platform.client.setAgentSkills(agent.id,basis.skills?.map(skill=>skill.id)??request.role.multica?.skillIds??[]);
         for(const server of await this.platform.client.listAgentMcpServers(basis.id))if(server.enabled!==false)await this.platform.client.addAgentMcpServer(agent.id,server.id);
-      }catch(error){lease.revoke();throw error;}
+      }catch(error){lease?.revoke();throw error;}
     }
     if(request.signal.aborted||this.closing){lease?.revoke();throw new AppError('EXECUTION_CANCELLED','Execution was cancelled before assignment.',409);}
-    const record:ExecutionRecord={id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'creating',cleanupConfirmed:false,createdAt:at(),updatedAt:at(),agentId:agent.id,runtimeId:agent.runtime_id,daemon:this.platform.executionIdentity()};
+    const record:ExecutionRecord={id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'creating',cleanupConfirmed:false,createdAt:at(),updatedAt:at(),agentId:agent.id,runtimeId:agent.runtime_id,daemon:this.platform.executionIdentity(),...(space.verification?{verification:space.verification}:{}),timeout:{configuredSeconds:request.timeoutSeconds,observationDeadlineSeconds:request.timeoutSeconds,runtimeMaxSeconds:this.platform.executionLimits().maxTaskSeconds}};
     this.platform.engine.store.put('multica-execution',record);
     let issue;
     try{issue=await this.platform.client.createIssue({title:request.project.name.slice(0,70)+' · '+request.stageId+' · '+request.attemptId.slice(0,8),allow_duplicate:true,project_id:space.providerProjectId,status:'todo',assignee_type:'agent',assignee_id:agent.id,description:request.prompt+'\n\nGWI execution identity: '+request.attemptId+'\nWorkspace: '+space.workspace+'\nSource revision: '+space.sourceCommit});}
-    catch(error){lease?.revoke();const rejected=error instanceof MulticaApiError&&error.status===409&&error.code==='active_duplicate_issue';record.status=rejected?'not_dispatched':'unknown';record.cleanupConfirmed=rejected;record.error=error instanceof Error?error.message:'External creation could not be confirmed.';if(error instanceof MulticaApiError)record.rejection={code:error.code,status:error.status};record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);throw error;}
+    catch(error){lease?.revoke();const rejected=error instanceof MulticaApiError&&error.status===409&&error.code==='active_duplicate_issue';record.status=rejected?'not_dispatched':'unknown';record.cleanupConfirmed=rejected;record.error=error instanceof Error?error.message:'External creation could not be confirmed.';if(error instanceof MulticaApiError)record.rejection={code:error.code,status:error.status};record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);if(rejected&&record.verification)await this.platform.workspaces.disposeVerification(record.verification.workspaceId);throw error;}
     record.issueId=issue.id;record.status='queued';this.platform.engine.store.put('multica-execution',record);
     const ref:ExecutionRef={provider:'multica',issueId:issue.id,agentId:agent.id,runtimeId:agent.runtime_id};
     request.onEvent({type:'multica.issue',message:'Agent work queued in Multica.',ref,data:{sourceCommit:space.sourceCommit,workspace:space.workspace}});
@@ -102,9 +114,9 @@ export class PlatformExecution {
         const added=await this.platform.client.listTaskMessages(task.id,sequence);messages.push(...added);if(messages.length>1000)messages=messages.slice(-1000);
         for(const row of added){sequence=Math.max(sequence,row.seq);if(row.content)request.onEvent({type:'multica.message',message:row.content.slice(0,6000),ref,data:{sequence:row.seq,type:row.type,tool:row.tool}});}
         if(isMulticaTaskTerminal(task)){
-          if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});return{text:taskResultText(task,messages),usage:record.usage};}
+          if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});await this.checkVerification(record,request.onEvent);return{text:taskResultText(task,messages),usage:record.usage};}
           if(!task.started_at||task.result!==undefined&&task.result!==null||await this.platform.confirmDaemonIdle(record.daemon)){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);}
-          if(record.cleanupConfirmed)await this.syncIssue(record,'cancelled',request.onEvent);
+          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent);await this.checkVerification(record,request.onEvent);}
           throw new AppError(record.cleanupConfirmed?'MULTICA_TASK_FAILED':'EXTERNAL_RECONCILIATION_REQUIRED',task.error??task.failure_reason??'The external task did not deliver a verified result.',409);
         }
         if(!cancelRequested&&(request.signal.aborted||Date.now()>=deadline||(record.usage&&budgetTokens(record.usage)>request.tokenBudget))){
@@ -133,6 +145,13 @@ export class PlatformExecution {
     const receipt=await this.platform.client.appendTaskInstruction(ref.issueId,ref.externalId,text,randomUUID());return{id:receipt.id,status:receipt.supplements.find(item=>item.task_id===ref.externalId)?.status??'pending'};
   }
   async close(){this.closing=true;await Promise.allSettled([...this.completions]);}
+  private async checkVerification(record:ExecutionRecord,onEvent?:(event:AdapterEvent)=>void){
+    if(!record.verification||record.verification.check)return;
+    const check=await this.platform.workspaces.checkVerification(record.verification.workspaceId);record.verification.check=check;this.platform.engine.store.put('multica-execution',record);
+    await this.platform.workspaces.disposeVerification(record.verification.workspaceId);
+    onEvent?.({type:'verification.checked',message:check.unchanged?'Verification finished with the prepared source unchanged; the disposable copy has been removed.':'Verification changed prepared source; its result cannot satisfy independent review.',data:check});
+    demand(check.unchanged,'VERIFICATION_SOURCE_MUTATED','The verification task changed prepared source. Its result was rejected; retry independent verification or return the change to implementation.',409);
+  }
   private async finishIssue(id:string,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void){const record=this.platform.engine.store.get<ExecutionRecord>('multica-execution',id);if(record)await this.syncIssue(record,state,onEvent);}
   private async syncIssue(record:ExecutionRecord,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void){
     if(!record.issueId||!record.cleanupConfirmed||record.issueState===state)return;
@@ -167,7 +186,7 @@ export class PlatformExecution {
     if(record.issueDesiredState&&record.issueSyncError)await this.syncIssue(record,record.issueDesiredState);
     if(record.status==='not_dispatched'&&record.cleanupConfirmed&&!record.issueId&&!record.taskId)return{...record,canRetry:true};
     if(!record.issueId&&record.agentId){
-      const space=this.platform.engine.store.get<RemoteProject>('multica-run-project',runId),matches:{task:MulticaTask;issueId:string}[]=[];
+      const space=record.verification?this.platform.engine.store.get<RemoteProject>('multica-verification-project',record.id):this.platform.engine.store.get<RemoteProject>('multica-run-project',runId),matches:{task:MulticaTask;issueId:string}[]=[];
       for(const task of await this.platform.client.listAgentTasks(record.agentId)){
         if(!task.issue_id||task.agent_id!==record.agentId||record.runtimeId&&task.runtime_id!==record.runtimeId)continue;
         const issue=await this.platform.client.getIssue(task.issue_id);
@@ -186,6 +205,7 @@ export class PlatformExecution {
     const usage=multicaUsage(task.usage);if(usage)this.meter(record,usage);
     if(isMulticaTaskTerminal(task)&&(!task.started_at||task.result!==undefined&&task.result!==null||await this.platform.confirmDaemonIdle(record.daemon)))record.cleanupConfirmed=true;
     this.platform.engine.store.put('multica-execution',record);
+    if(record.cleanupConfirmed)await this.checkVerification(record);
     if(record.cleanupConfirmed&&task.status!=='completed')await this.syncIssue(record,'cancelled');
     this.platform.engine.store.event({projectId:record.projectId,runId,stageId,type:'multica.reconciled',actor:'local-owner',message:record.cleanupConfirmed?'External task termination confirmed; prior results remain available for review.':'External task state observed; termination is not yet confirmed.',data:{taskId:task.id,status:task.status,cleanupConfirmed:record.cleanupConfirmed}});
     return{...record,canRetry:record.cleanupConfirmed};

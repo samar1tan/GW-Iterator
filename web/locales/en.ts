@@ -1,4 +1,5 @@
 export const en = {
+  effortNotReported:'Not reported by agent',
   reasoningHelp: 'New roles and agents default to Max. Higher effort can take longer; support depends on the installed model.', reasoningAdvisory: '(advisory)',
   intakeDecisionRetry: 'Retry scoped work',
   appName: 'GW-Iterator', projects: 'Projects', pipelines: 'Pipelines', knowledge: 'Knowledge', configuration: 'Configuration',

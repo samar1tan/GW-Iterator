@@ -21,6 +21,7 @@ export type Project = {
 };
 export type Stage = {
   id: string; name: string; roleId: string; executor: Executor; dependsOn: string[]; prompt: string; review: boolean;
+  executionPurpose?: 'review'; ownerGate?: boolean;
   reworkTo?: string;
   inputs?:string[]; outputs?:string[]; checks?:string[];
   condition?:{stageId:string;outcome:'done'|'no_change'|'revise'|'blocked'};
@@ -43,6 +44,7 @@ export type ExecutionRef = {threadId?: string; turnId?: string; externalId?: str
 export type Attempt = {
   id: string; number: number; iteration: number; status: WorkStatus; startedAt: string; endedAt?: string;
   output?: TaskOutput; error?: string; ref?: ExecutionRef; usage?: Usage;
+  tokenReservation?: number; failureCode?: string;
   nativeGoal?: {status:string; tokensUsed:number; timeUsedSeconds:number};
   nativeGoalCleared?: boolean;
   nativeCleanupConfirmed?: boolean;
@@ -61,9 +63,19 @@ export type Run = {
   snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]};
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
   recoveryOfRunId?:string;
+  approvedPolicy?: RunPolicy;
   limitRevisions?:{revision:number;policy:RunPolicy;note:string;actor:string;at:string}[];
 };
-export function runPolicy(run:Run):RunPolicy{return run.limitRevisions?.at(-1)?.policy??run.snapshot.pipeline.policy;}
+export function runPolicy(run:Run):RunPolicy{return run.limitRevisions?.at(-1)?.policy??run.approvedPolicy??run.snapshot.pipeline.policy;}
+export type RunAllowance = {policy:RunPolicy;usedTokens:number;reservedTokens:number;remainingTokens:number;usageComplete:boolean};
+export type GoalAllowance = {id:string;usedTokens:number;reservedTokens:number;remainingTokens:number;remainingSeconds:number;remainingRounds:number};
+export type RecoveryScope = {kind:'run'|'goal';id:string};
+export type RunRecovery = {
+  runId:string;stageId?:string;recoveryKey:string;action:'retry'|'approve'|'reconcile'|'wait'|'blocked'|'none';
+  code:string;reason:string;limitRevision:number;allowance:RunAllowance;stageAttempts?:number;scope:RecoveryScope;
+  recommendation?:{limits:Partial<RunPolicy>;note:string;basis:{usedTokens:number;reservedTokens:number;previousAttemptTokens?:number;attempts:number;previousPolicy:RunPolicy;purpose:'one-failed-stage'}};goal?:GoalAllowance;
+};
+export type ContinueRunInput = {stageId:string;recoveryKey:string;note?:string;approveRecommendation?:boolean};
 export type AuditEvent = {seq: number; at: string; projectId: string | null; runId: string | null; stageId: string | null; type: string; actor: string; message: string; data?: unknown};
 export type Proposal = {id: string; projectId: string; pipelineId: string; runId?: string; baseRevision: number; definition: Pipeline; rationale: string; status: 'pending' | 'applied' | 'rejected'; createdAt: string};
 export type ModelInfo = {id: string; name: string; efforts: string[]; isDefault?: boolean};
@@ -77,22 +89,27 @@ export type Intake = {
   idempotencyKey: string; targetRunIds: string[]; rounds: IntakeRound[]; policy: IntakePolicy; outcome?: string;
   supervisorRunIds?: string[]; basisRevision?:number; recoveryHistory?:GoalRecoveryRecord[]; nextRetryAt?:string;
   lastFailure?:GoalFailure; canRetry?:boolean; retryBlockedReason?:string;
+  retryBlockedCode?:string;retryBlockedScope?:RecoveryScope;retryBlockedStageId?:string;allowance?:GoalAllowance;
+  recoveryKey?:string;recoveryRecommendation?:GoalContinuationRecommendation;limitReached?:'rounds';controlRevision?:number;
+  limitRevisions?:{revision:number;previousPolicy:IntakePolicy;policy:IntakePolicy;note:string;actor:string;at:string;approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation}}[];
   executionTimeMeter?:'active-windows-v1'; executionTime?:{usedSeconds:number; remainingSeconds:number; totalElapsedSeconds:number};
 };
 export type GoalRecoveryPolicy = {autoRetry:boolean; maxAttempts:number; backoffSeconds:number; allowedFallbackModels:string[]};
 export type IntakePolicy = {maxRounds: number; maxParallel: number; maxTotalTokens: number; maxElapsedSeconds: number; recovery?:GoalRecoveryPolicy};
+export type GoalContinuationRecommendation = {policy:Partial<Pick<IntakePolicy,'maxRounds'|'maxTotalTokens'|'maxElapsedSeconds'>>;basis:{usedTokens:number;reservedTokens:number;usedSeconds:number;actionRounds:number;previousPolicy:IntakePolicy};purpose:'one-focused-continuation'};
 export type GoalFailure = {kind:'capacity'|'other'; message:string; code?:string; at:string; runId:string; native:boolean};
 export type GoalRecoveryRecord = {
   id:string; trigger:'manual'|'automatic'; status:'scheduled'|'started'|'completed'|'failed'|'cancelled'; at:string;
-  reason:string; note:string; model:string; actualModel?:string; previousRunId:string; newRunId?:string;
+  reason:string; note:string; model?:string; actualModel?:string; previousRunId:string; newRunId?:string;
   previousRef?:ExecutionRef; newRef?:ExecutionRef; basisRevision:number; previousBasisRevision:number;
   refreshConfiguration:boolean; previousPolicy?:IntakePolicy; newPolicy?:IntakePolicy; error?:string;
   startedAt?:string; endedAt?:string;
+  approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation};
 };
-export type IntakeRetryInput = {note:string; model?:string; refreshConfiguration?:boolean; policy?:{maxRounds?:number; maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
+export type IntakeRetryInput = {note?:string; model?:string; refreshConfiguration?:boolean;recoveryKey?:string;approveRecommendation?:boolean; policy?:{maxRounds?:number; maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
 export type IntakeDecision = {action: 'dispatch' | 'retry' | 'complete' | 'clarify' | 'stop'; rationale: string; expectedGain: string; tasks: {pipelineId: string; goal: string}[]; question?: string; retry?:{runId:string;stageId:string;note:string}};
 export type IntakeRound = {number: number; routerRunId: string; targetRunIds: string[]; decision?: IntakeDecision};
 export type ProjectDetail = {project: Project; pipelines: Pipeline[]; runs: Run[]; knowledge: KnowledgeEntry[]; proposals: Proposal[]; events: AuditEvent[]; intakes: Intake[]};
 export type Actor = {name: string; kind: 'human' | 'agent'; projectId?: string; tools?: ControlTool[]};
-export type StartRunInput = {projectId: string; pipelineId: string; goal: string; baseline: string; mode?: 'once' | 'loop'; dependsOnRunIds?: string[]; idempotencyKey: string; knowledgeIds?: string[]; trigger?: Trigger; parentRunId?: string; parentStageId?: string};
+export type StartRunInput = {projectId: string; pipelineId: string; goal: string; baseline: string; mode?: 'once' | 'loop'; dependsOnRunIds?: string[]; idempotencyKey: string; knowledgeIds?: string[]; trigger?: Trigger; parentRunId?: string; parentStageId?: string;limits?:Partial<RunPolicy>};
 export type KnowledgeSyncResult = {entries: KnowledgeEntry[]; stats: {added: number; changed: number; unchanged: number; missing: number; errors: number}};

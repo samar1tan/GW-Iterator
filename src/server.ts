@@ -15,7 +15,7 @@ import {ControlMcp} from './control-mcp.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
-import type {Actor,IntegrationInfo,IntakeRetryInput,Pipeline,Project,StartRunInput,TaskOutput} from './contracts.ts';
+import type {Actor,ContinueRunInput,IntegrationInfo,IntakeRetryInput,Pipeline,Project,StartRunInput,TaskOutput} from './contracts.ts';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
@@ -113,6 +113,8 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry)$/);
   if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
+  if(run&&run[2]==='recovery'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,engine.recovery(id,url.searchParams.get('stageId')??undefined,actor));return;}
+  if(run&&run[2]==='continue'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,engine.continueRun(id,input as ContinueRunInput,actor));return;}
   if(run){const id=decodeURIComponent(run[1]),resource=run[2];engine.detail(engine.run(id).projectId,actor);if(resource==='changes'&&method==='GET'){demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await platform.workspaces.changes(id));return;}if(resource==='artifacts'&&method==='GET'){demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await platform.workspaces.artifact(id,url.searchParams.get('path')??''));return;}if(!resource&&method==='GET'){json(response,{run:engine.run(id),events:engine.store.events({runId:id,limit:300})});return;}if(resource==='cancel'&&method==='POST'){json(response,await engine.cancel(id,String(input.note??''),actor));return;}if(resource==='pause'&&method==='POST'){json(response,engine.pause(id,String(input.note??''),actor));return;}if(resource==='resume'&&method==='POST'){json(response,engine.resume(id,actor));return;}
     if(resource==='limits'&&method==='POST'){demand(isObject(input.limits),'INVALID_RUN_LIMITS','Provide the finite new execution limits.');json(response,engine.changeLimits(id,Number(input.expectedRevision),input.limits,String(input.note??''),actor));return;}
     if(resource==='executions'&&method==='GET'){json(response,{executions:execution?.records(id)??[]});return;}
@@ -123,16 +125,17 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
 }
 
 const development=process.argv.includes('--dev');
-const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'node_modules')],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
+const brandAsset=path.join(root,'public/brand/gwi-mark.svg');
+const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'node_modules'),brandAsset],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
 async function publicDevelopmentPath(url:URL):Promise<boolean>{
   let decoded=url.pathname;for(let count=0;count<3;count++){try{const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}catch{return false;}}
   decoded=decoded.replaceAll('\\','/');
   if(decoded==='/'||decoded==='/index.html'||decoded==='/@vite/client')return true;
-  const filename=decoded.startsWith('/@fs/')?path.resolve(decoded.slice('/@fs/'.length)):path.resolve(root,'.'+decoded);
+  const filename=decoded==='/brand/gwi-mark.svg'?brandAsset:decoded.startsWith('/@fs/')?path.resolve(decoded.slice('/@fs/'.length)):path.resolve(root,'.'+decoded);
   const allowed=[path.join(root,'web'),path.join(root,'node_modules')];
-  if(filename!==path.join(root,'src/contracts.ts')&&!allowed.some(directory=>filename.startsWith(directory+path.sep)))return false;
+  if(filename!==brandAsset&&filename!==path.join(root,'src/contracts.ts')&&!allowed.some(directory=>filename.startsWith(directory+path.sep)))return false;
   const actual=await realpath(filename).catch(()=>filename);
-  return actual!==dataDirectory&&!actual.startsWith(dataDirectory+path.sep)&&(actual===path.join(root,'src/contracts.ts')||allowed.some(directory=>actual.startsWith(directory+path.sep)));
+  return actual!==dataDirectory&&!actual.startsWith(dataDirectory+path.sep)&&(actual===brandAsset||actual===path.join(root,'src/contracts.ts')||allowed.some(directory=>actual.startsWith(directory+path.sep)));
 }
 const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2','.png':'image/png'};
 const server=createServer(async(request,response)=>{

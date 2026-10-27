@@ -1,5 +1,7 @@
 # Third-party dependencies
 
+The GWI mark in `public/brand/gwi-mark.svg` and the workflow illustration in `site/assets/workbench-example.svg` are original project assets, distributed under this repository's Apache-2.0 license. They contain no GitHub or Multica identity assets. GitHub's [Primer Product UI](https://primer.style/product/) informed the interface conventions; GWI does not claim affiliation with GitHub.
+
 Original GW-Iterator source is licensed under Apache-2.0. Dependency licenses remain separate; this file does not relicense upstream code or authorize a deployment prohibited by its license.
 
 ## Multica

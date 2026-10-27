@@ -11,6 +11,7 @@
     "dev": "node src/server.ts --dev",
     "start": "node src/server.ts",
     "build": "tsc --noEmit && vite build",
+    "build:site": "node scripts/build-site.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "gwi": "node scripts/gwi.mjs"

@@ -1,6 +1,7 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  effortNotReported:'代理未报告',
   reasoningHelp: '新角色和代理默认 Max。更高强度可能耗时更长；支持范围取决于已安装模型。', reasoningAdvisory: '（仅供参考）',
   intakeDecisionRetry: '重试对应工作',
   appName: 'GW-Iterator', projects: '项目', pipelines: '流程', knowledge: '知识', configuration: '配置',
