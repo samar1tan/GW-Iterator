@@ -45,7 +45,7 @@ export function AdoptProject({selectedId, onSelect, onClose, onApplied}: {
   }, [selectedId, merge]);
 
   async function scan(event: React.FormEvent) {
-    event.preventDefault(); if (busy || !draft.workspace.trim()) return;
+    event.preventDefault(); if (busy || selected?.status === 'scanning' || !draft.workspace.trim()) return;
     setBusy(true); setError(null);
     try {
       const adoption = await api<Adoption>('/api/adoptions', {method: 'POST', body: {workspace: draft.workspace.trim(), ...(draft.name.trim() ? {name: draft.name.trim()} : {}), ...(draft.repository.trim() ? {repository: draft.repository.trim()} : {}), idempotencyKey: key.current}});
@@ -59,14 +59,14 @@ export function AdoptProject({selectedId, onSelect, onClose, onApplied}: {
     catch (error) {setError(error); await refresh().catch(() => {});} finally {setApplying(false);}
   }
 
-  return <Modal wide title={t('adoptionTitle')} onClose={onClose}>
+  return <Modal wide title={t('adoptionTitle')} busy={busy || applying} onClose={onClose}>
     <div className="adoption-setup">
       <p className="muted small">{t('adoptionIntro')}</p>
       <form className="form-stack" onSubmit={event => void scan(event)}>
         <Field label={t('workspace')}><input autoFocus required value={draft.workspace} onChange={event => setDraft({...draft, workspace: event.target.value})} spellCheck={false}/></Field>
         <div className="form-grid"><Field label={`${t('projectName')} · ${t('optional')}`}><input value={draft.name} onChange={event => setDraft({...draft, name: event.target.value})}/></Field><Field label={`${t('repository')} · ${t('optional')}`} hint={t('adoptionRepositoryHint')}><input value={draft.repository} onChange={event => setDraft({...draft, repository: event.target.value})} spellCheck={false}/></Field></div>
         <p className="hint adoption-permissions">{t('adoptionReadBoundary')}</p>
-        <div className="actions"><Button type="submit" tone="primary" disabled={busy || !draft.workspace.trim()}>{busy ? t('adoptionSubmitting') : t('adoptionScan')}</Button></div>
+        <div className="actions"><Button type="submit" tone="primary" disabled={busy || selected?.status === 'scanning' || !draft.workspace.trim()}>{busy ? t('adoptionSubmitting') : t(selected?.status === 'scanning' ? 'adoptionScanning' : 'adoptionScan')}</Button></div>
       </form>
       <ErrorNotice error={error}/>
       <section className="adoption-review">

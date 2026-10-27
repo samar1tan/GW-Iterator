@@ -40,6 +40,8 @@ npm start
 
 Open [the local app](http://127.0.0.1:4318). Connect an existing project through its local workspace. Codex-assisted adoption can propose project guidance and knowledge sources for review. Real project settings and account connections are private local state; this repository contains no populated project configuration.
 
+For a first run, follow the [pipeline quickstart](docs/pipeline-quickstart.md). GWI's Multica jobs are inspected in GWI; they are separate from chats in the Codex desktop app.
+
 The [setup guide](docs/multica-setup.md) covers prerequisites, native permission probes, private state and recovery. Use `npm run dev` for frontend development and `npm test` for automated checks.
 
 ## Work in a project

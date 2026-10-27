@@ -21,26 +21,32 @@ export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?
 export function ErrorNotice({ error }: { error: unknown }) {
   const { t } = useI18n();
   if (!error) return null;
-  return <Notice tone="error"><div>{errorText(error)}</div>{error instanceof APIError && <><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>}</Notice>;
+  const messageKeys:Record<string,MessageKey>={REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
+  const localizedKey=error instanceof APIError?messageKeys[error.code]:undefined;
+  return <Notice tone="error"><div>{localizedKey?t(localizedKey):errorText(error)}</div>{error instanceof APIError && (localizedKey?<details><summary>{t('details')}</summary><code className="error-code">{error.code}</code><p>{errorText(error)}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details>:<><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>)}</Notice>;
 }
 export function Empty({ children }: { children: ReactNode }) { return <div className="empty">{children}</div>; }
-export function Modal({ title, children, onClose, wide = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+export function Modal({ title, children, onClose, wide = false, busy = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; busy?: boolean }) {
   const { t } = useI18n(); const titleId = useId(); const dialog = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousFocus = opener.current;
     const previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     if (!dialog.current?.contains(document.activeElement)) dialog.current?.querySelector<HTMLElement>('input, textarea, select, button')?.focus();
     return () => { document.body.style.overflow = previousOverflow; if (previousFocus?.isConnected) previousFocus.focus(); };
   }, []);
-  return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`modal ${wide ? 'wide' : ''}`} onKeyDown={event => {
-    if (event.key === 'Escape') { event.preventDefault(); onClose(); }
+  useEffect(() => { if (busy) dialog.current?.focus(); }, [busy]);
+  return <div className="modal-scrim" onMouseDown={event => { if (!busy && event.target === event.currentTarget) onClose(); }}><section ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-busy={busy || undefined} aria-labelledby={titleId} className={`modal ${wide ? 'wide' : ''}`} onKeyDown={event => {
+    if (event.key === 'Escape') { event.preventDefault(); if (!busy) onClose(); }
     if (event.key === 'Tab') {
-      const targets = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]') ?? []).filter(element => element.getClientRects().length > 0);
+      const targets = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]') ?? []).filter(element => element.getClientRects().length > 0 && !element.closest('[inert]'));
+      if (!targets.length) { event.preventDefault(); dialog.current?.focus(); return; }
       const first = targets[0]; const last = targets.at(-1);
+      if (document.activeElement === dialog.current) { event.preventDefault(); (event.shiftKey ? last : first)?.focus(); return; }
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
-  }}><header className="modal-header"><h2 id={titleId}>{title}</h2><Button tone="quiet" onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content">{children}</div></section></div>;
+  }}><header className="modal-header"><h2 id={titleId}>{title}</h2><Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div></section></div>;
 }
 export function Status({ value }: { value: WorkStatus }) {
   const { t } = useI18n(); return <span className={`status status-${value}`}><StateIcon status={value}/>{t(value === 'waiting' ? 'waitingStatus' : value)}</span>;

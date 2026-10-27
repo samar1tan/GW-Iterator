@@ -1,4 +1,5 @@
 export const en = {
+  invalidRole: 'Check the role name, instructions, model and execution settings. Use a supported reasoning level, such as Max.', invalidSource: 'Check the source path, kind and selected roles. Private configuration and credential files cannot be indexed.', workspaceTooBroad: 'Choose a project folder rather than the filesystem root or home folder.',
   effortNotReported:'Not reported by agent',
   reasoningHelp: 'New roles and agents default to Max. Higher effort can take longer; support depends on the installed model.', reasoningAdvisory: '(advisory)',
   intakeDecisionRetry: 'Retry scoped work',

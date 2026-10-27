@@ -78,7 +78,14 @@ export class Engine {
   async sync(id:string,actor:Actor){
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     this.scope(actor,id);demand(!actor.projectId,'OWNER_REQUIRED','Local source synchronization requires the owner token.',403);demand(!this.syncing.has(id),'SYNC_IN_PROGRESS','Knowledge synchronization is already running.',409);this.syncing.add(id);
-    try{const project=this.project(id),old=this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),result=await syncKnowledge(project,old);demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);this.store.transaction(()=>{demand(this.project(id).revision===project.revision,'REVISION_CONFLICT','Knowledge sources changed during synchronization.',409);for(const entry of result.entries)this.store.put('knowledge',entry);this.audit(actor,id,'knowledge.synced','Project knowledge synchronized.',{data:result.stats});});return result;}finally{this.syncing.delete(id);}
+    try{const project=this.project(id),old=this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),result=await syncKnowledge(project,old);demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);this.store.transaction(()=>{
+      demand(this.project(id).revision===project.revision,'REVISION_CONFLICT','Knowledge sources changed during synchronization.',409);
+      const retained=new Set(result.entries.map(entry=>entry.id));
+      // Only remove initial entries; lessons may be added while source files are read.
+      for(const entry of old)if(!retained.has(entry.id))this.store.delete('knowledge',entry.id);
+      for(const entry of result.entries)this.store.put('knowledge',entry);
+      this.audit(actor,id,'knowledge.synced','Project knowledge synchronized.',{data:result.stats});
+    });return result;}finally{this.syncing.delete(id);}
   }
   search(id:string,query:string,role?:string,kind?:string):KnowledgeEntry[]{return searchKnowledge(this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),query,role,kind);}
   lesson(id:string,input:{title:string;content:string;roles?:string[];runId?:string},actor:Actor):KnowledgeEntry{this.scope(actor,id,'knowledge.write');const project=this.project(id);demand(text(input.title,300)&&text(input.content,200000),'INVALID_LESSON','Provide a title and useful lesson.');const roles=input.roles??[];demand(roles.every(role=>project.roles.some(item=>item.id===role)),'INVALID_ROLES','Choose project roles.');if(input.runId)demand(this.run(input.runId).projectId===id,'PROJECT_SCOPE','Source run belongs to another project.');const entry:KnowledgeEntry={id:newId(),projectId:id,sourceId:'run-lessons',kind:'lesson',roles,title:input.title,content:input.content,hash:digest(input.content),revision:1,syncedAt:now(),status:'current',...(input.runId?{originRunId:input.runId}:{})};this.store.transaction(()=>{this.store.put('knowledge',entry);this.audit(actor,id,'knowledge.lesson',input.title,{runId:input.runId,data:{entryId:entry.id}});});return entry;}

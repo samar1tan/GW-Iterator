@@ -468,6 +468,34 @@ test('project, pipeline and knowledge revisions stay frozen for a run and its la
   await pump(h, () => h.engine.run(fresh.id).status === 'completed', 'the new revision completion');
 });
 
+test('knowledge directory recovery removes only obsolete source placeholders and preserves lessons and frozen history', async t => {
+  const h = await fixture(t); let p = await project(h);
+  const documents = path.join(h.workspace, 'docs'), filename = path.join(documents, 'guide.md');
+  p = await h.engine.updateProject(p.id, p.revision, {...p, knowledgeSources: [{id: 'project-guides', path: documents, kind: 'document', roles: []}]}, OWNER);
+  const missing = await h.engine.sync(p.id, OWNER), placeholder = missing.entries[0].id;
+  assert.equal(missing.stats.missing, 1);
+  await mkdir(documents); await writeFile(filename, '# Synthetic guide\nReviewed project guidance.');
+  const synchronizing = h.engine.sync(p.id, OWNER);
+  const lesson = h.engine.lesson(p.id, {title: 'Synthetic lesson', content: 'A concurrent verified lesson.'}, OWNER);
+  const recovered = await synchronizing, current = recovered.entries.find(entry => entry.status === 'current')!;
+  assert.equal(recovered.stats.missing, 0);
+  assert.equal(h.engine.detail(p.id, OWNER).knowledge.some(entry => entry.id === placeholder), false);
+  assert.deepEqual(h.engine.store.get('knowledge', lesson.id), lesson);
+  const flow = pipeline(h, p, [stage('deliver', [], {executor: 'manual'})]), run = start(h, p, flow);
+  await rm(filename); await h.engine.sync(p.id, OWNER);
+  const retired = h.engine.store.get<KnowledgeEntry>('knowledge', current.id)!;
+  assert.equal(retired.status, 'missing'); assert.equal(retired.hash, current.hash); assert.equal(retired.content, current.content);
+  assert.equal(h.engine.run(run.id).snapshot.knowledge.find(entry => entry.id === current.id)?.status, 'current');
+  assert.equal(h.codex.calls.length, 0);
+  await h.engine.close();
+  const reopened = new Store(h.stateDirectory);
+  try {
+    assert.equal(reopened.get('knowledge', placeholder), null);
+    assert.deepEqual(reopened.get('knowledge', lesson.id), lesson);
+    assert.equal(reopened.get<KnowledgeEntry>('knowledge', current.id)?.status, 'missing');
+  } finally {reopened.close();}
+});
+
 test('bounded worker knowledge context retains provenance and leaves full stored knowledge unchanged', async t => {
   const h = await fixture(t), p = await project(h);
   const entries = Array.from({length: 7}, (_, index) => h.engine.lesson(p.id, {title: `Synthetic bounded context ${index}`, content: (`Synthetic bounded context ${index}. `).repeat(200), roles: ['development']}, OWNER));
@@ -719,13 +747,17 @@ test('development server blocks synthetic private files through direct, raw, enc
   const privateFile = path.join(probeDirectory, 'synthetic-private.txt');
   const externalPrivateFile = path.join(dataDirectory, 'synthetic-private.txt');
   await Promise.all([writeFile(privateFile, marker), writeFile(externalPrivateFile, marker)]);
+  const nativeProbe = path.join(directory, 'synthetic-codex'), nativeCalls = path.join(directory, 'synthetic-native-calls');
+  await writeFile(nativeProbe, `#!${process.execPath}\nimport {appendFileSync} from 'node:fs';\nappendFileSync(${JSON.stringify(nativeCalls)}, 'called\\n');\nprocess.exit(1);\n`, {mode: 0o700});
   const reservation = createNetServer();
   await new Promise<void>(resolveListen => reservation.listen(0, '127.0.0.1', resolveListen));
   const address = reservation.address();
   assert.ok(address && typeof address !== 'string');
   const port = address.port;
   await new Promise<void>((resolveClose, reject) => reservation.close(error => error ? reject(error) : resolveClose()));
-  const child = spawn(process.execPath, ['src/server.ts', '--dev'], {cwd: root, env: {...process.env, GWI_DATA_DIR: dataDirectory, GWI_PORT: String(port)}, stdio: ['ignore', 'pipe', 'pipe']});
+  const environment: NodeJS.ProcessEnv = {...process.env, GWI_DATA_DIR: dataDirectory, GWI_PORT: String(port), GWI_CODEX_BIN: nativeProbe, GWI_MULTICA_CONNECTION: path.join(dataDirectory, 'no-synthetic-connection.json')};
+  delete environment.GWI_CODEX_MODEL;
+  const child = spawn(process.execPath, ['src/server.ts', '--dev'], {cwd: root, env: environment, stdio: ['ignore', 'pipe', 'pipe']});
   let stderr = '';
   child.stderr.setEncoding('utf8').on('data', chunk => {stderr = (stderr + chunk).slice(-4000);});
   t.after(async () => {
@@ -788,6 +820,16 @@ test('development server blocks synthetic private files through direct, raw, enc
   await localJSON('/api/runs/'+run.id+'/continue','POST',{stageId:'manual-check',recoveryKey:recovery.recoveryKey});
   await localJSON('/api/runs/'+run.id+'/stages/manual-check/complete','POST',{output:OUTPUT});
   assert.equal((await localJSON('/api/runs/'+run.id+'/recovery?stageId=manual-check')).code,'RUN_COMPLETED');
+  const wrapper = await localJSON('/api/pipelines', 'POST', {projectId: project.id, roleId: flow.roleId, name: 'Synthetic manual-only parent'}) as Pipeline;
+  await localJSON('/api/pipelines/'+wrapper.id, 'PUT', {expectedRevision: wrapper.revision, definition: {...wrapper, stages: [{id: 'manual-child', name: 'Await synthetic manual child', roleId: flow.roleId, executor: 'pipeline', dependsOn: [], prompt: 'Reuse the manual evidence flow.', review: false, options: {pipelineId: flow.id}}]}});
+  const parent = await localJSON('/api/runs', 'POST', {projectId: project.id, pipelineId: wrapper.id, goal: 'Accept nested manual evidence.', idempotencyKey: randomUUID()}) as Run;
+  const childId = (await localJSON('/api/runs/'+parent.id)).run.stages[0].attempts.at(-1)?.ref?.childRunId as string|undefined;
+  assert.ok(childId);
+  for (let count=0;count<40;count++) {const current = await localJSON('/api/runs/'+childId) as {run:Run}; if(current.run.status==='waiting')break; await new Promise(resolve=>setTimeout(resolve,50));}
+  await localJSON('/api/runs/'+childId+'/stages/manual-check/complete', 'POST', {output: OUTPUT});
+  for (let count=0;count<40;count++) {const current = await localJSON('/api/runs/'+parent.id) as {run:Run}; if(current.run.status==='completed')break; await new Promise(resolve=>setTimeout(resolve,50));}
+  assert.equal((await localJSON('/api/runs/'+parent.id)).run.status, 'completed');
+  assert.equal(await readFile(nativeCalls, 'utf8').catch(()=>''), '', 'Manual-only starts, recovery and nested work never launch native discovery or model work.');
 });
 
 test('upstream rework invalidates a completed child even when the wrapper hits its attempt limit before relaunch', async t => {
