@@ -75,13 +75,13 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       assert.ok(html.includes('Max'));
       assert.ok(html.includes(locale==='en'?'Role used for this execution':'本次执行的角色'));
       const launch=render(createElement(LaunchPipeline,{pipeline,project,onClose:()=>{},onStarted:async()=>{}}));
-      assert.ok(launch.includes('required="" rows="4"'));
+      assert.ok(launch.includes('required="" rows="3"'));
       assert.ok(launch.match(/<button[^>]*type="submit"[^>]*>[^]*?<\/button>/)?.[0].includes('disabled'));
       assert.ok(!launch.includes('type="number"'));
       assert.ok(launch.includes('Prepare change'));
       const manualLaunch=render(createElement(LaunchPipeline,{pipeline:{...pipeline,stages:pipeline.stages.map(stage=>({...stage,executor:'manual'}))},project,onClose:()=>{},onStarted:async()=>{}}));
       assert.ok(!manualLaunch.includes('example-model'));
-      assert.ok(manualLaunch.includes(locale==='en'?'This workflow uses human steps and does not call a model.':'此流程由人工步骤完成，不会调用模型。'));
+      assert.ok(manualLaunch.includes(locale==='en'?'Human workflow':'人工流程'));
       assert.ok(!manualLaunch.includes('pf-account-allowance'));
       assert.ok(!manualLaunch.includes(locale==='en'?'Account readiness is checked before model work':'调用模型前会检查账户可用情况'));
       const retry=render(createElement(GoalRetryForm,{intake,models:[],onRetry:async()=>{},onClose:()=>{}}));
@@ -181,7 +181,8 @@ test('account allowance uses returned window durations and observed ranges witho
       const learning=render(createElement(AccountAllowanceView,{assessment:account,now:observed,onRefresh:()=>{}}));
       const ordinarySummary=learning.split('<details')[0];
       assert.ok(ordinarySummary.includes('62.5%'));
-      assert.ok(ordinarySummary.includes(locale==='en'?'no samples yet':'尚无执行样本'));
+      assert.ok(!ordinarySummary.includes(locale==='en'?'no samples yet':'尚无执行样本'));
+      assert.equal((ordinarySummary.match(/<meter\b/g)??[]).length,2);
       assert.ok(!ordinarySummary.includes(makeI18n(locale).date(account.account.observedAt)));
       assert.ok(!ordinarySummary.includes(locale==='en'?'Resets ':'重置时间：'));
       assert.ok(!ordinarySummary.includes('<h4'));

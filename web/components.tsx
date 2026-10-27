@@ -26,7 +26,7 @@ export function ErrorNotice({ error }: { error: unknown }) {
   return <Notice tone="error"><div>{localizedKey?t(localizedKey):errorText(error)}</div>{error instanceof APIError && (localizedKey?<details><summary>{t('details')}</summary><code className="error-code">{error.code}</code><p>{errorText(error)}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details>:<><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>)}</Notice>;
 }
 export function Empty({ children }: { children: ReactNode }) { return <div className="empty">{children}</div>; }
-export function Modal({ title, children, onClose, wide = false, busy = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; busy?: boolean }) {
+export function Modal({ title, children, footer, onClose, wide = false, busy = false }: { title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean; busy?: boolean }) {
   const { t } = useI18n(); const titleId = useId(); const dialog = useRef<HTMLElement>(null);
   const opener = useRef<HTMLElement | null>(typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => {
@@ -46,7 +46,7 @@ export function Modal({ title, children, onClose, wide = false, busy = false }: 
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
-  }}><header className="modal-header"><h2 id={titleId}>{title}</h2>{busy&&<span className="modal-progress" role="status">{t('processing')}</span>}<Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div></section></div>;
+  }}><header className="modal-header"><h2 id={titleId}>{title}</h2>{busy&&<span className="modal-progress" role="status">{t('processing')}</span>}<Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div>{footer&&<footer className="modal-footer" inert={busy}>{footer}</footer>}</section></div>;
 }
 export function Status({ value }: { value: WorkStatus }) {
   const { t } = useI18n(); return <span className={`status status-${value}`}><StateIcon status={value}/>{t(value === 'waiting' ? 'waitingStatus' : value)}</span>;
