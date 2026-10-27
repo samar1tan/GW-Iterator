@@ -2,7 +2,10 @@ import {execFile, spawn} from 'node:child_process';
 import type {ChildProcessWithoutNullStreams} from 'node:child_process';
 import {isAbsolute, resolve} from 'node:path';
 import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {budgetTokens} from '../contracts.ts';
+import {ACCOUNT_ALLOWANCE_TTL_MS,normalizeAccountObservation,unavailableAccountObservation} from '../account-allowance.ts';
+import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
 import type {ControlTool, CodexInfo, ExecutionRef, ModelInfo, TaskOutput, Usage} from '../contracts.ts';
 import type {AdapterEvent, CodexAdapter, CodexExecution, CodexExecutionInput, CodexGoalExecution, CodexGoalInput, CodexGoalResult, CodexNativeGoal} from './types.ts';
 
@@ -18,6 +21,8 @@ export type CodexAdapterOptions = {
   interruptGraceMs?: number;
 };
 type PendingRequest = {resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>};
+type ExecutionBoundary = 'dispatching' | 'not_dispatched' | 'terminal';
+type StartupBoundary = {paidRequestSent: boolean; ref?: ExecutionRef};
 type Message = {text: string; phase?: string; complete: boolean};
 type ExecutionState = {
   kind: 'task';
@@ -27,6 +32,7 @@ type ExecutionState = {
   toolEnd: Promise<never>; endTools: (error: Error) => void;
   settled: boolean; stopError?: Error; interrupting?: Promise<void>; timer?: ReturnType<typeof setTimeout>;
   stopTimer?: ReturnType<typeof setTimeout>; abort: () => void;
+  boundary?: ExecutionBoundary; dispatchObserved?: boolean;
 };
 type GoalState = {
   kind: 'goal'; input: CodexGoalInput; tools: Set<ControlTool>; ref: ExecutionRef;
@@ -37,6 +43,7 @@ type GoalState = {
   summary: string; terminalSummary?: string; timer?: ReturnType<typeof setTimeout>; stopTimer?: ReturnType<typeof setTimeout>;
   consecutiveFailedTurns: number; completedTurns: Set<string>; lastTurnError?: string;
   abort: () => void; usage?: Usage;
+  boundary?: ExecutionBoundary; activationConfirmed?: boolean; dispatchObserved?: boolean;
 };
 type OwnedState = ExecutionState | GoalState;
 
@@ -77,6 +84,36 @@ const OUTPUT_SCHEMA = {
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function accountFingerprint(value:unknown):string|undefined{
+  if(!object(value)||!object(value.account))return;
+  const account=value.account,identity:Record<string,string>={};
+  if(typeof account.type!=='string'||!account.type.toLowerCase().includes('chatgpt'))return;
+  for(const key of ['id','accountId','email','workspaceId'])if(typeof account[key]==='string'&&account[key].trim()&&account[key].length<=1024)identity[key]=key==='email'?account[key].trim().toLowerCase():account[key];
+  if(!Object.keys(identity).length)return;
+  return createHash('sha256').update(JSON.stringify({type:account.type,...identity})).digest('hex');
+}
+
+/** Decode only metered windows; account/contact details and credit records never leave this boundary. */
+export function parseCodexAccountAllowance(account:unknown,value:unknown,now=Date.now()):AccountAllowanceObservation{
+  const accountKey=accountFingerprint(account),windows:unknown[]=[],buckets:{id?:string;value:unknown}[]=[];
+  let invalid=false,exhausted=false;
+  if(!object(value))return unavailableAccountObservation('ACCOUNT_ALLOWANCE_MALFORMED',now);
+  if(Object.hasOwn(value,'rateLimitsByLimitId')){
+    if(!object(value.rateLimitsByLimitId))invalid=true;
+    else for(const [id,bucket]of Object.entries(value.rateLimitsByLimitId))buckets.push({id,value:bucket});
+  }else if(object(value.rateLimits))buckets.push({value:value.rateLimits});else invalid=true;
+  for(const bucket of buckets){
+    if(!object(bucket.value)){invalid=true;continue;}
+    const data=bucket.value,id=typeof data.limitId==='string'?data.limitId:bucket.id;
+    if(typeof data.rateLimitReachedType==='string'&&data.rateLimitReachedType.trim())exhausted=true;
+    if(!id||(bucket.id&&data.limitId!==undefined&&data.limitId!==bucket.id)){invalid=true;continue;}
+    for(const slot of ['primary','secondary']as const){const window=data[slot];if(window==null)continue;if(!object(window)){invalid=true;continue;}
+      windows.push({bucketId:id,...(typeof data.limitName==='string'?{bucketName:data.limitName}:{}),slot,usedPercent:window.usedPercent,windowDurationMins:window.windowDurationMins,resetsAt:window.resetsAt});
+    }
+  }
+  return normalizeAccountObservation({status:invalid?'unavailable':'available',source:'local-codex',windows,exhausted,...(accountKey?{accountKey}:{}),...(exhausted?{reason:'ACCOUNT_LIMIT_REACHED'}:invalid?{reason:'ACCOUNT_ALLOWANCE_MALFORMED'}:{}),observedAt:new Date(now).toISOString(),expiresAt:new Date(now+ACCOUNT_ALLOWANCE_TTL_MS).toISOString()},now);
 }
 
 function text(value: unknown): string | undefined {
@@ -155,6 +192,7 @@ class LocalCodexAdapter implements CodexAdapter {
   private nextId = 0;
   private pending = new Map<number, PendingRequest>();
   private executions = new Map<string, ExecutionState>();
+  private uncertainExecutions = new Map<string, ExecutionState>();
   private goals = new Map<string, GoalState>();
   private terminations = new Set<Promise<void>>();
 
@@ -163,6 +201,18 @@ class LocalCodexAdapter implements CodexAdapter {
     this.binary = options.binary ?? (process.env.GWI_CODEX_BIN?.trim() || 'codex');
     if (!this.binary.trim() || this.binary.includes('\0')) throw new Error('Choose a Codex executable path or command name.');
     if (options.defaultModel !== undefined && !options.defaultModel.trim()) throw new Error('Choose a nonempty local default model.');
+  }
+
+  async readAccountAllowance():Promise<AccountAllowanceObservation>{
+    try{
+      await this.ready();
+      const before=await this.request('account/read',{refreshToken:false});
+      const limits=await this.request('account/rateLimits/read',undefined);
+      const after=await this.request('account/read',{refreshToken:false});
+      const observed=parseCodexAccountAllowance(after,limits);
+      if(accountFingerprint(before)!==accountFingerprint(after))return normalizeAccountObservation({...observed,status:'unavailable',reason:'ACCOUNT_CHANGED'},Date.now());
+      return observed;
+    }catch(error){return unavailableAccountObservation(object(error)&&error.rpcCode===-32601?'ACCOUNT_ALLOWANCE_UNSUPPORTED':'ACCOUNT_ALLOWANCE_READ_FAILED');}
   }
 
   private async connect(): Promise<void> {
@@ -251,7 +301,7 @@ class LocalCodexAdapter implements CodexAdapter {
     this.pending.delete(value.id);
     if (object(value.error)) {
       const code = typeof value.error.code === 'number' ? ` (${value.error.code})` : '';
-      pending.reject(new Error(`Codex request failed${code}.`));
+      pending.reject(Object.assign(new Error(`Codex request failed${code}.`),{rpcCode:typeof value.error.code==='number'?value.error.code:undefined}));
     } else if ('result' in value) pending.resolve(value.result);
     else pending.reject(new Error('Codex returned an invalid JSON-RPC response.'));
   }
@@ -263,6 +313,15 @@ class LocalCodexAdapter implements CodexAdapter {
       else this.stop(state, new Error('Codex progress could not be delivered to the supervisor.'), 'codex.observer_failed', false);
     }
   }
+
+  private executionBoundary(state: OwnedState, boundary: ExecutionBoundary, dispatched: boolean, cleanupConfirmed: boolean): void {
+    state.boundary = boundary;
+    this.emit(state, {type: 'codex.execution_boundary', message: 'Native execution boundary was observed.', data: {state: boundary, dispatched, cleanupConfirmed}});
+  }
+  private preparationBoundary(input: CodexExecutionInput, ref?: ExecutionRef): void {
+    try {input.onEvent({type: 'codex.execution_boundary', message: 'Native preparation ended before model dispatch.', ...(ref ? {ref: {...ref}} : {}), data: {state: 'not_dispatched', dispatched: false, cleanupConfirmed: true}});} catch {}
+  }
+  private definitelyRefused(error: unknown): boolean {return object(error) && (error.rpcCode === -32601 || error.rpcCode === -32602);}
 
   private recordMessage(state: ExecutionState, item: JsonObject, complete: boolean): void {
     if (item.type !== 'agentMessage' || typeof item.id !== 'string' || typeof item.text !== 'string') return;
@@ -318,11 +377,19 @@ class LocalCodexAdapter implements CodexAdapter {
     }
     const goal = typeof params.threadId === 'string' ? this.goals.get(params.threadId) : undefined;
     if (goal) {this.goalNotification(goal, method, params); return;}
-    const state = typeof params.threadId === 'string' ? this.executions.get(params.threadId) : undefined;
-    if (!state || state.settled) return;
+    const state = typeof params.threadId === 'string' ? this.executions.get(params.threadId) ?? this.uncertainExecutions.get(params.threadId) : undefined;
+    if (!state) return;
+    if (method.startsWith('item/') || method.startsWith('turn/') || method === 'thread/tokenUsage/updated') state.dispatchObserved = true;
     const turn = object(params.turn) ? params.turn : undefined;
     const turnId = text(params.turnId) ?? text(turn?.id);
     if (turnId && !this.acceptTurn(state, turnId)) return;
+    if (state.settled) {
+      if (method === 'turn/completed' && turnId && ['completed', 'failed', 'interrupted'].includes(String(turn?.status))) {
+        this.executionBoundary(state, 'terminal', true, true);
+        this.uncertainExecutions.delete(state.ref.threadId!);
+      }
+      return;
+    }
     if (method === 'thread/tokenUsage/updated') {
       const usage = object(params.tokenUsage) && object(params.tokenUsage.total) ? params.tokenUsage.total : undefined;
       if (!usage || ![usage.inputTokens, usage.outputTokens, usage.totalTokens].every(number => typeof number === 'number' && Number.isSafeInteger(number) && number >= 0)) return;
@@ -343,6 +410,7 @@ class LocalCodexAdapter implements CodexAdapter {
         : `Codex ${text(item.type) ?? 'item'} ${method === 'item/started' ? 'started' : 'completed'}.`;
       this.emit(state, {type: method, message: message.slice(0, 16000), data: {itemId: item.id, itemType: item.type, status: item.status, exitCode: item.exitCode}});
     } else if (method === 'turn/completed' && turn) {
+      if (turnId && ['completed', 'failed', 'interrupted'].includes(String(turn.status))) this.executionBoundary(state, 'terminal', true, true);
       if (Array.isArray(turn.items)) for (const item of turn.items) if (object(item)) this.recordMessage(state, item, true);
       this.emit(state, {type: method, message: `Codex turn ${text(turn.status) ?? 'ended'}.`});
       if (state.stopError) {this.finish(state, state.stopError); return;}
@@ -430,6 +498,7 @@ class LocalCodexAdapter implements CodexAdapter {
     if (state.stopTimer) clearTimeout(state.stopTimer);
     state.input.signal.removeEventListener('abort', state.abort);
     if (this.executions.get(state.ref.threadId!) === state) this.executions.delete(state.ref.threadId!);
+    if (state.boundary !== 'terminal' && state.boundary !== 'not_dispatched') this.uncertainExecutions.set(state.ref.threadId!, state);
     if (error) state.reject(error);
     else if (output) state.resolve({output, ...(state.usage ? {usage: {...state.usage}} : {})});
     else state.reject(new Error('Codex execution ended without an output.'));
@@ -514,6 +583,7 @@ class LocalCodexAdapter implements CodexAdapter {
       throw new Error('Codex returned an invalid native goal state for the owned thread.');
     }
     const goal: CodexNativeGoal = {threadId: value.threadId as string, objective: value.objective, status: value.status as CodexNativeGoal['status'], tokensUsed: value.tokensUsed as number, timeUsedSeconds: value.timeUsedSeconds as number, createdAt: value.createdAt as number, updatedAt: value.updatedAt as number, ...(value.tokenBudget !== undefined ? {tokenBudget: value.tokenBudget as number | null} : {})};
+    state.activationConfirmed = true;
     if (JSON.stringify(state.goal) !== JSON.stringify(goal)) {
       state.goal = goal;
       this.emit(state, {type: 'thread/goal/updated', message: `Native Codex goal reported ${goal.status}.`, data: {goal}});
@@ -521,10 +591,13 @@ class LocalCodexAdapter implements CodexAdapter {
   }
 
   private goalNotification(state: GoalState, method: string, params: JsonObject): void {
+    if (method.startsWith('item/') || method.startsWith('turn/') || method === 'thread/tokenUsage/updated') state.dispatchObserved = true;
     const turn = object(params.turn) ? params.turn : undefined;
     const turnId = text(params.turnId) ?? text(turn?.id);
     if (method === 'turn/started' && turnId) {
       state.ref.turnId = turnId;
+      state.activationConfirmed = true;
+      if (state.boundary !== 'dispatching') this.executionBoundary(state, 'dispatching', true, false);
       state.activeTurns.add(turnId);
       this.emit(state, {type: method, message: 'Native Codex goal started a turn.', data: {turnId}});
       if (state.ending || state.settled) {
@@ -536,6 +609,9 @@ class LocalCodexAdapter implements CodexAdapter {
       return;
     }
     if (method === 'turn/completed' && turnId) {
+      if (!['completed', 'failed', 'interrupted'].includes(String(turn?.status))) return;
+      state.ref.turnId = turnId;
+      state.activationConfirmed = true;
       state.activeTurns.delete(turnId);
       if (state.settled && state.activeTurns.size === 0 && state.stopTimer) {clearTimeout(state.stopTimer); state.stopTimer = undefined;}
       if (!state.settled && !state.ending && !state.completedTurns.has(turnId)) {
@@ -643,7 +719,10 @@ class LocalCodexAdapter implements CodexAdapter {
   }
 
   private maybeFinishGoal(state: GoalState): void {
-    if (state.ending && !state.setting && state.clearConfirmed && state.activeTurns.size === 0) this.finishGoal(state, state.finalError);
+    if (state.ending && !state.setting && state.clearConfirmed && state.activeTurns.size === 0) {
+      if (state.activationConfirmed && state.boundary !== 'not_dispatched' && state.boundary !== 'terminal') this.executionBoundary(state, 'terminal', true, true);
+      this.finishGoal(state, state.finalError);
+    }
   }
 
   private finishGoal(state: GoalState, error?: Error): void {
@@ -659,6 +738,13 @@ class LocalCodexAdapter implements CodexAdapter {
   }
 
   async startGoal(input: CodexGoalInput): Promise<CodexGoalExecution> {
+    const boundary: StartupBoundary = {paidRequestSent: false};
+    try {return await this.startNativeGoal(input, boundary);} catch (error) {
+      if (!boundary.paidRequestSent) this.preparationBoundary(input, boundary.ref);
+      throw error;
+    }
+  }
+  private async startNativeGoal(input: CodexGoalInput, boundary: StartupBoundary): Promise<CodexGoalExecution> {
     if (!isAbsolute(input.workspace) || !input.objective?.trim() || input.objective.length > 4000) throw new Error('A native Codex goal requires an absolute workspace and an objective of at most 4,000 characters.');
     if (!Number.isFinite(input.timeoutSeconds) || input.timeoutSeconds <= 0 || !Number.isSafeInteger(input.tokenBudget) || input.tokenBudget <= 0) throw new Error('A native Codex goal requires finite positive time and token limits.');
     if (!['read-only', 'workspace-write'].includes(input.role.sandbox)) throw new Error('The native Codex goal role sandbox is unsupported.');
@@ -685,6 +771,7 @@ class LocalCodexAdapter implements CodexAdapter {
       dynamicTools: [...tools].map(tool => ({name: toolName(tool), description: TOOL_DEFINITIONS[tool].description, inputSchema: {type: 'object', properties: TOOL_DEFINITIONS[tool].properties, required: TOOL_DEFINITIONS[tool].required, additionalProperties: false}})),
     }), deadline, input.signal);
     if (!object(response) || !object(response.thread) || typeof response.thread.id !== 'string' || !response.thread.id) throw new Error('Native Codex goal setup did not return an owned thread identifier.');
+    boundary.ref = {threadId: response.thread.id};
     const sandbox = object(response.sandbox) ? response.sandbox : undefined;
     if (response.approvalPolicy !== 'never' || !sandbox || sandbox.type !== (input.role.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite') || sandbox.networkAccess === true
       || (sandbox.type === 'workspaceWrite' && (!Array.isArray(sandbox.writableRoots) || sandbox.writableRoots.some(root => typeof root !== 'string' || resolve(root) !== resolve(input.workspace))))) throw new Error('Native Codex goal setup did not confirm the requested sandbox and approval policy.');
@@ -699,6 +786,9 @@ class LocalCodexAdapter implements CodexAdapter {
     input.signal.addEventListener('abort', state.abort, {once: true});
     state.timer = setTimeout(() => {void this.endGoal(state, 'cleared', 'Native Codex goal reached the configured time limit.');}, Math.max(1, deadline - Date.now()));
     try {
+      this.executionBoundary(state, 'dispatching', true, false);
+      if (state.stopError || state.settled || input.signal.aborted) throw state.stopError ?? interrupted('Native Codex goal was cancelled before activation.');
+      boundary.paidRequestSent = true;
       const set = await this.request('thread/goal/set', {threadId: state.ref.threadId, objective: input.objective, status: 'active', tokenBudget: input.tokenBudget}, Math.min(this.options.requestTimeoutMs ?? 20000, Math.max(1, deadline - Date.now())));
       if (!object(set) || !object(set.goal)) throw new Error('Native Codex goal API did not return an actual goal.');
       if (!state.goal) this.recordGoal(state, set.goal);
@@ -707,6 +797,7 @@ class LocalCodexAdapter implements CodexAdapter {
       this.maybeFinishGoal(state);
       return {ref: {...state.ref}, completion};
     } catch (error) {
+      if (this.definitelyRefused(error) && !state.activationConfirmed && !state.dispatchObserved) this.executionBoundary(state, 'not_dispatched', false, true);
       const failure = new Error(`Native Codex goal setup is unsupported or failed: ${safeError(error)}`);
       state.setting = false;
       state.finalError = failure;
@@ -748,6 +839,13 @@ class LocalCodexAdapter implements CodexAdapter {
   }
 
   async start(input: CodexExecutionInput): Promise<CodexExecution> {
+    const boundary: StartupBoundary = {paidRequestSent: false};
+    try {return await this.startNativeTask(input, boundary);} catch (error) {
+      if (!boundary.paidRequestSent) this.preparationBoundary(input, boundary.ref);
+      throw error;
+    }
+  }
+  private async startNativeTask(input: CodexExecutionInput, boundary: StartupBoundary): Promise<CodexExecution> {
     if (!isAbsolute(input.workspace)) throw new Error('Codex workspace must be an absolute path.');
     if (!Number.isFinite(input.timeoutSeconds) || input.timeoutSeconds <= 0 || !Number.isSafeInteger(input.tokenBudget) || input.tokenBudget <= 0) throw new Error('Codex execution requires finite positive time and token limits.');
     if (!['read-only', 'workspace-write'].includes(input.role.sandbox)) throw new Error('The Codex role sandbox is unsupported.');
@@ -772,6 +870,7 @@ class LocalCodexAdapter implements CodexAdapter {
       dynamicTools: [...tools].map(tool => ({name: toolName(tool), description: TOOL_DEFINITIONS[tool].description, inputSchema: {type: 'object', properties: TOOL_DEFINITIONS[tool].properties, required: TOOL_DEFINITIONS[tool].required, additionalProperties: false}})),
     }), deadline, input.signal);
     if (!object(response) || !object(response.thread) || typeof response.thread.id !== 'string' || !response.thread.id) throw new Error('Codex did not return an actual thread identifier.');
+    boundary.ref = {threadId: response.thread.id};
     if (input.signal.aborted) throw interrupted('Codex task was cancelled before it started.');
     const ref: ExecutionRef = {threadId: response.thread.id};
     let resolveCompletion!: ExecutionState['resolve'];
@@ -788,6 +887,9 @@ class LocalCodexAdapter implements CodexAdapter {
     input.signal.addEventListener('abort', state.abort, {once: true});
     state.timer = setTimeout(() => this.stop(state, new Error('Codex reached the configured time limit.'), 'codex.time_limit'), Math.max(1, deadline - Date.now()));
     try {
+      this.executionBoundary(state, 'dispatching', true, false);
+      if (state.stopError || state.settled || input.signal.aborted) throw state.stopError ?? interrupted('Codex task was cancelled before dispatch.');
+      boundary.paidRequestSent = true;
       const result = await this.request('turn/start', {
         threadId: ref.threadId, cwd: input.workspace, runtimeWorkspaceRoots: [input.workspace], approvalPolicy: 'never',
         sandboxPolicy: input.role.sandbox === 'read-only' ? {type: 'readOnly', networkAccess: false}
@@ -802,6 +904,7 @@ class LocalCodexAdapter implements CodexAdapter {
       if (input.signal.aborted) {state.abort(); await this.sendInterrupt(state); throw state.stopError;}
       return {ref: {...ref}, completion};
     } catch (error) {
+      if (this.definitelyRefused(error) && !state.ref.turnId && !state.dispatchObserved && state.boundary !== 'terminal') this.executionBoundary(state, 'not_dispatched', false, true);
       if (!state.settled) {
         // A failed turn/start may have reached the server without returning a handle.
         // Closing this connection prevents an untracked native task from continuing.
@@ -847,6 +950,7 @@ class LocalCodexAdapter implements CodexAdapter {
     await Promise.allSettled([...this.terminations]);
     for (const state of this.goals.values()) if (state.stopTimer) clearTimeout(state.stopTimer);
     this.goals.clear();
+    this.uncertainExecutions.clear();
   }
 }
 

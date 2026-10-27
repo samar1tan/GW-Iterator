@@ -10,9 +10,9 @@ import type {ControlMcp} from './control-mcp.ts';
 import type {VerificationCheck} from './workspaces.ts';
 import {AppError,demand,isObject,validateOutput} from './validation.ts';
 
-export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null}};
+export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null};allowanceExecutionId?:string;allowanceFinishedAt?:string;allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING'};
 type RemoteProject={id:string;providerProjectId:string;workspace:string;sourceCommit:string;verification?:ExecutionRecord['verification']};
-type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds:number;tokenBudget:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review'};
+type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds:number;tokenBudget:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review';accountStageId?:string};
 const at=()=>new Date().toISOString();
 const wait=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 
@@ -36,6 +36,7 @@ export function taskResultText(task:MulticaTask,messages:MulticaTaskMessage[]):s
 export class PlatformExecution {
   private platform:Platform;
   private projects=new Map<string,Promise<RemoteProject>>();
+  private accountFinishes=new Map<string,Promise<void>>();
   private controls?:ControlMcp;private closing=false;private completions=new Set<Promise<unknown>>();
   readonly agent:AgentExecutor;
   readonly planner:GoalPlanner;
@@ -90,11 +91,18 @@ export class PlatformExecution {
       }catch(error){lease?.revoke();throw error;}
     }
     if(request.signal.aborted||this.closing){lease?.revoke();throw new AppError('EXECUTION_CANCELLED','Execution was cancelled before assignment.',409);}
-    const record:ExecutionRecord={id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'creating',cleanupConfirmed:false,createdAt:at(),updatedAt:at(),agentId:agent.id,runtimeId:agent.runtime_id,daemon:this.platform.executionIdentity(),...(space.verification?{verification:space.verification}:{}),timeout:{configuredSeconds:request.timeoutSeconds,observationDeadlineSeconds:request.timeoutSeconds,runtimeMaxSeconds:this.platform.executionLimits().maxTaskSeconds}};
-    this.platform.engine.store.put('multica-execution',record);
-    let issue;
-    try{issue=await this.platform.client.createIssue({title:request.project.name.slice(0,70)+' · '+request.stageId+' · '+request.attemptId.slice(0,8),allow_duplicate:true,project_id:space.providerProjectId,status:'todo',assignee_type:'agent',assignee_id:agent.id,description:request.prompt+'\n\nGWI execution identity: '+request.attemptId+'\nWorkspace: '+space.workspace+'\nSource revision: '+space.sourceCommit});}
-    catch(error){lease?.revoke();const rejected=error instanceof MulticaApiError&&error.status===409&&error.code==='active_duplicate_issue';record.status=rejected?'not_dispatched':'unknown';record.cleanupConfirmed=rejected;record.error=error instanceof Error?error.message:'External creation could not be confirmed.';if(error instanceof MulticaApiError)record.rejection={code:error.code,status:error.status};record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);if(rejected&&record.verification)await this.platform.workspaces.disposeVerification(record.verification.workspaceId);throw error;}
+    const record:ExecutionRecord={id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:at(),updatedAt:at(),agentId:agent.id,runtimeId:agent.runtime_id,daemon:this.platform.executionIdentity(),...(space.verification?{verification:space.verification}:{}),timeout:{configuredSeconds:request.timeoutSeconds,observationDeadlineSeconds:request.timeoutSeconds,runtimeMaxSeconds:this.platform.executionLimits().maxTaskSeconds}};
+    let issue,assignmentIntent=false;
+    try{
+      const canonicalStage=request.accountStageId??(this.platform.engine.store.get<Run>('run',request.runId)?.executionKind?'supervise':request.stageId);
+      const allowance=await this.platform.engine.beginAccountExecution(request.runId,canonicalStage,basis.model??null);if(allowance)record.allowanceExecutionId=allowance.id;
+      demand(!request.signal.aborted&&!this.closing,'EXECUTION_CANCELLED','Execution was cancelled before assignment.',409);
+      record.status='creating';record.cleanupConfirmed=false;this.platform.engine.store.put('multica-execution',record);assignmentIntent=true;
+      issue=await this.platform.client.createIssue({title:request.project.name.slice(0,70)+' · '+request.stageId+' · '+request.attemptId.slice(0,8),allow_duplicate:true,project_id:space.providerProjectId,status:'todo',assignee_type:'agent',assignee_id:agent.id,description:request.prompt+'\n\nGWI execution identity: '+request.attemptId+'\nWorkspace: '+space.workspace+'\nSource revision: '+space.sourceCommit});
+    }catch(error){
+      lease?.revoke();const rejected=!assignmentIntent||error instanceof MulticaApiError&&error.status===409&&error.code==='active_duplicate_issue';record.status=rejected?'not_dispatched':'unknown';record.cleanupConfirmed=rejected;record.error=error instanceof Error?error.message:'External creation could not be confirmed.';if(error instanceof MulticaApiError)record.rejection={code:error.code,status:error.status};record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);
+      if(rejected){await this.finishAccountExecution(record,request.onEvent);if(record.verification)await this.platform.workspaces.disposeVerification(record.verification.workspaceId);}throw error;
+    }
     record.issueId=issue.id;record.status='queued';this.platform.engine.store.put('multica-execution',record);
     const ref:ExecutionRef={provider:'multica',issueId:issue.id,agentId:agent.id,runtimeId:agent.runtime_id};
     request.onEvent({type:'multica.issue',message:'Agent work queued in Multica.',ref,data:{sourceCommit:space.sourceCommit,workspace:space.workspace}});
@@ -114,9 +122,9 @@ export class PlatformExecution {
         const added=await this.platform.client.listTaskMessages(task.id,sequence);messages.push(...added);if(messages.length>1000)messages=messages.slice(-1000);
         for(const row of added){sequence=Math.max(sequence,row.seq);if(row.content)request.onEvent({type:'multica.message',message:row.content.slice(0,6000),ref,data:{sequence:row.seq,type:row.type,tool:row.tool}});}
         if(isMulticaTaskTerminal(task)){
-          if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});await this.checkVerification(record,request.onEvent);return{text:taskResultText(task,messages),usage:record.usage};}
+          if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);return{text:taskResultText(task,messages),usage:record.usage};}
           if(!task.started_at||task.result!==undefined&&task.result!==null||await this.platform.confirmDaemonIdle(record.daemon)){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);}
-          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent);await this.checkVerification(record,request.onEvent);}
+          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent);await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);}
           throw new AppError(record.cleanupConfirmed?'MULTICA_TASK_FAILED':'EXTERNAL_RECONCILIATION_REQUIRED',task.error??task.failure_reason??'The external task did not deliver a verified result.',409);
         }
         if(!cancelRequested&&(request.signal.aborted||Date.now()>=deadline||(record.usage&&budgetTokens(record.usage)>request.tokenBudget))){
@@ -134,9 +142,10 @@ export class PlatformExecution {
   }
   private async startPlanner(input:GoalPlannerInput){
     const role=input.project.roles.find(item=>item.id==='lead'&&!item.retired)??input.project.roles.find(item=>!item.retired);demand(role,'NO_ACTIVE_COORDINATOR','Connect a project coordinator.');
-    const brief={request:input.request,baseline:input.baseline,continuation:input.continuation,remaining:input.remaining,roles:input.project.roles.filter(role=>!role.retired).map(role=>({id:role.id,sandbox:role.sandbox})),workflows:input.pipelines.map(flow=>({id:flow.id,name:flow.name,owner:flow.roleId,stages:flow.stages.map(stage=>({id:stage.id,name:stage.name,role:stage.roleId,checks:stage.checks,review:stage.review}))})),rounds:input.rounds,observations:input.observations,knowledge:input.knowledge.filter(entry=>!entry.roles.length||entry.roles.includes(role.id)).slice(0,4).map(entry=>({id:entry.id,revision:entry.revision,hash:entry.hash,title:entry.title,excerpt:entry.content.slice(0,1500)}))};
-    const prompt='Make exactly one project coordination decision from actual evidence. Do not execute implementation, poll CI, or wait for humans: the platform owns waiting. Reuse accepted work; choose a short useful action. Retry only a failed owned stage when new evidence supports it. Do not complete until the requested outcome and accepted delivery are proven.\n'+JSON.stringify(brief)+'\nReturn only JSON {"action":"dispatch|retry|complete|clarify|stop","rationale":"concise reason","expectedGain":"useful result","tasks":[{"pipelineId":"actual workflow ID","goal":"bounded instruction"}],"question":"only for clarify","retry":{"runId":"owned run ID","stageId":"failed stage ID","note":"what changes"}}. tasks must be empty except for dispatch; at most two tasks. Never invent identifiers.';
-    const attemptId=randomUUID(),result=await this.launch({project:input.project,role:{...role,sandbox:'read-only'},runId:input.executionId,stageId:'decision-'+(input.rounds.length+1),attemptId,prompt,signal:input.signal,timeoutSeconds:Math.min(300,input.remaining.seconds),tokenBudget:input.remaining.tokens,onEvent:input.onEvent});
+    const account=input.account?{status:input.account.status,code:input.account.code,action:input.account.action,windows:input.account.account.windows,observedAt:input.account.account.observedAt,expiresAt:input.account.account.expiresAt,trend:input.account.trend,activeExecutions:input.account.activeExecutions}:undefined;
+    const brief={request:input.request,baseline:input.baseline,continuation:input.continuation,resourceMode:input.resourceMode??'tokens',remaining:input.resourceMode==='account'?{seconds:input.remaining.seconds,rounds:input.remaining.rounds}:input.remaining,...(account?{account}:{}),roles:input.project.roles.filter(role=>!role.retired).map(role=>({id:role.id,sandbox:role.sandbox})),workflows:input.pipelines.map(flow=>({id:flow.id,name:flow.name,owner:flow.roleId,stages:flow.stages.map(stage=>({id:stage.id,name:stage.name,role:stage.roleId,checks:stage.checks,review:stage.review}))})),rounds:input.rounds,observations:input.observations,knowledge:input.knowledge.filter(entry=>!entry.roles.length||entry.roles.includes(role.id)).slice(0,4).map(entry=>({id:entry.id,revision:entry.revision,hash:entry.hash,title:entry.title,excerpt:entry.content.slice(0,1500)}))};
+    const prompt='Make exactly one project coordination decision from actual evidence. Do not execute implementation, poll CI, or wait for humans: the platform owns waiting. Reuse accepted work; choose a short useful action. Retry only a failed owned stage when new evidence supports it. Do not complete until the requested outcome and accepted delivery are proven.'+(input.resourceMode==='account'?' Account windows and execution trends describe shared account observations. Do not convert token diagnostics into subscription allowance, attribute shared changes solely to this task, or propose token refills. The platform rechecks account admission before paid work.':'')+'\n'+JSON.stringify(brief)+'\nReturn only JSON {"action":"dispatch|retry|complete|clarify|stop","rationale":"concise reason","expectedGain":"useful result","tasks":[{"pipelineId":"actual workflow ID","goal":"bounded instruction"}],"question":"only for clarify","retry":{"runId":"owned run ID","stageId":"failed stage ID","note":"what changes"}}. tasks must be empty except for dispatch; at most two tasks. Never invent identifiers.';
+    const attemptId=randomUUID(),result=await this.launch({project:input.project,role:{...role,sandbox:'read-only'},runId:input.executionId,stageId:'decision-'+(input.rounds.length+1),accountStageId:'supervise',attemptId,prompt,signal:input.signal,timeoutSeconds:Math.min(300,input.remaining.seconds),tokenBudget:input.remaining.tokens,onEvent:input.onEvent});
     return{ref:result.ref,completion:result.completion.then(async value=>{const decision=validatePlannerDecision(parseAgentJSON(value.text));await this.finishIssue(attemptId,'done',input.onEvent);return{decision,usage:value.usage};}).catch(async error=>{await this.finishIssue(attemptId,'cancelled',input.onEvent);throw error;})};
   }
   private async steer(ref:ExecutionRef,text:string){
@@ -145,6 +154,17 @@ export class PlatformExecution {
     const receipt=await this.platform.client.appendTaskInstruction(ref.issueId,ref.externalId,text,randomUUID());return{id:receipt.id,status:receipt.supplements.find(item=>item.task_id===ref.externalId)?.status??'pending'};
   }
   async close(){this.closing=true;await Promise.allSettled([...this.completions]);}
+  private async finishAccountExecution(record:ExecutionRecord,onEvent?:(event:AdapterEvent)=>void):Promise<void>{
+    if(!record.allowanceExecutionId||record.allowanceFinishedAt||!record.cleanupConfirmed||!(record.status==='not_dispatched'||isMulticaTaskTerminal(record)))return;
+    const pending=this.accountFinishes.get(record.id);if(pending){await pending;const latest=this.platform.engine.store.get<ExecutionRecord>('multica-execution',record.id);if(latest){record.allowanceFinishedAt=latest.allowanceFinishedAt;record.allowanceFinishError=latest.allowanceFinishError;}return;}
+    const finish=(async()=>{
+      try{
+        await this.platform.engine.finishAccountExecution(record.allowanceExecutionId!,{status:record.status,dispatched:record.status!=='not_dispatched'&&Boolean(record.issueId||record.taskId),...(record.usage?{usage:record.usage}:{})});
+        record.allowanceFinishedAt=at();delete record.allowanceFinishError;
+      }catch{record.allowanceFinishError='ACCOUNT_OBSERVATION_PENDING';onEvent?.({type:'account.observation_pending',message:'Execution ended; its account allowance observation needs another refresh.'});}
+      const latest=this.platform.engine.store.get<ExecutionRecord>('multica-execution',record.id)??record;latest.allowanceFinishedAt=record.allowanceFinishedAt;if(record.allowanceFinishError)latest.allowanceFinishError=record.allowanceFinishError;else delete latest.allowanceFinishError;this.platform.engine.store.put('multica-execution',latest);
+    })().finally(()=>this.accountFinishes.delete(record.id));this.accountFinishes.set(record.id,finish);await finish;
+  }
   private async checkVerification(record:ExecutionRecord,onEvent?:(event:AdapterEvent)=>void){
     if(!record.verification||record.verification.check)return;
     const check=await this.platform.workspaces.checkVerification(record.verification.workspaceId);record.verification.check=check;this.platform.engine.store.put('multica-execution',record);
@@ -182,9 +202,9 @@ export class PlatformExecution {
       }
     }
     const record=this.records(runId).filter(row=>row.stageId===stageId).at(-1);demand(record,'EXECUTION_NOT_FOUND','This stage has no recorded external execution.',404);
-    for(const previous of this.records(runId).filter(previous=>previous.id!==record.id&&previous.stageId===stageId&&previous.cleanupConfirmed)){if(previous.issueDesiredState&&previous.issueSyncError)await this.syncIssue(previous,previous.issueDesiredState);else if(['failed','cancelled','aborted','timeout'].includes(previous.status))await this.syncIssue(previous,'cancelled');}
+    for(const previous of this.records(runId).filter(previous=>previous.id!==record.id&&previous.stageId===stageId&&previous.cleanupConfirmed)){await this.finishAccountExecution(previous);if(previous.issueDesiredState&&previous.issueSyncError)await this.syncIssue(previous,previous.issueDesiredState);else if(['failed','cancelled','aborted','timeout'].includes(previous.status))await this.syncIssue(previous,'cancelled');}
     if(record.issueDesiredState&&record.issueSyncError)await this.syncIssue(record,record.issueDesiredState);
-    if(record.status==='not_dispatched'&&record.cleanupConfirmed&&!record.issueId&&!record.taskId)return{...record,canRetry:true};
+    if(record.status==='not_dispatched'&&record.cleanupConfirmed&&!record.issueId&&!record.taskId){await this.finishAccountExecution(record);return{...record,canRetry:true};}
     if(!record.issueId&&record.agentId){
       const space=record.verification?this.platform.engine.store.get<RemoteProject>('multica-verification-project',record.id):this.platform.engine.store.get<RemoteProject>('multica-run-project',runId),matches:{task:MulticaTask;issueId:string}[]=[];
       for(const task of await this.platform.client.listAgentTasks(record.agentId)){
@@ -205,7 +225,7 @@ export class PlatformExecution {
     const usage=multicaUsage(task.usage);if(usage)this.meter(record,usage);
     if(isMulticaTaskTerminal(task)&&(!task.started_at||task.result!==undefined&&task.result!==null||await this.platform.confirmDaemonIdle(record.daemon)))record.cleanupConfirmed=true;
     this.platform.engine.store.put('multica-execution',record);
-    if(record.cleanupConfirmed)await this.checkVerification(record);
+    if(record.cleanupConfirmed){await this.finishAccountExecution(record);await this.checkVerification(record);}
     if(record.cleanupConfirmed&&task.status!=='completed')await this.syncIssue(record,'cancelled');
     this.platform.engine.store.event({projectId:record.projectId,runId,stageId,type:'multica.reconciled',actor:'local-owner',message:record.cleanupConfirmed?'External task termination confirmed; prior results remain available for review.':'External task state observed; termination is not yet confirmed.',data:{taskId:task.id,status:task.status,cleanupConfirmed:record.cleanupConfirmed}});
     return{...record,canRetry:record.cleanupConfirmed};

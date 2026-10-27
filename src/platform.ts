@@ -100,6 +100,12 @@ export class Platform {
     const remote=existing??await this.client.createProject({title:project.name,description:marker+'\n'+project.description});
     this.engine.store.put('multica-project',{id:key,projectId:project.id,providerProjectId:remote.id});return remote;
   });}
+  async effectiveRoleModel(_project:Project,role:RoleProfile):Promise<string|null>{
+    const selected=role.model??this.defaultModel??this.profile.defaultModel;
+    if(selected)return selected;
+    const template=role.multica?.agentId?await this.client.getAgent(role.multica.agentId):undefined;
+    return template?.model??null;
+  }
   async agent(project:Project,role:RoleProfile,bind=true):Promise<MulticaAgent>{return this.one('agent:'+project.id+':'+JSON.stringify(role),async()=>{
     demand(!role.retired,'ROLE_RETIRED','Choose an active role for new work.');const runtime=await this.runtime(role);
     const template=role.multica?.agentId?await this.client.getAgent(role.multica.agentId):undefined;

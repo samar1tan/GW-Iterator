@@ -5,6 +5,9 @@ import {useI18n} from './i18n';
 import type {MessageKey} from './locales/en';
 import {useCopy} from './platform/copy';
 import {Icon} from './Icons';
+import {api} from './api';
+import type {AllowanceAssessment} from '../src/account-allowance-types';
+import {AccountAllowance,canRequestAccountStep,accountStepNeedsApproval,accountStepAuthorization} from './platform/AccountAllowance';
 
 export const defaultRecoveryPolicy: GoalRecoveryPolicy = {autoRetry: false, maxAttempts: 2, backoffSeconds: 30, allowedFallbackModels: []};
 
@@ -27,38 +30,48 @@ export function RecoveryPolicyFields({value, onChange, models, disabled = false}
 }
 
 export function canOpenGoalRecovery(intake:Intake) {
-  return !!intake.canRetry || !!intake.recoveryRecommendation || ['GOAL_TOKEN_BUDGET','GOAL_TIME_LIMIT','GOAL_ROUND_LIMIT'].includes(intake.retryBlockedCode??'');
+  if(['EXECUTION_ACTIVE','GOAL_WORK_ACTIVE','RECOVERY_IN_PROGRESS','EXTERNAL_RECONCILIATION_REQUIRED','GOAL_COMPLETED'].includes(intake.retryBlockedCode??''))return false;
+  const item=intake as Intake;
+  return !!intake.retryBlockedCode?.startsWith('ACCOUNT_')||!!intake.canRetry||!!intake.recoveryRecommendation||!!item.account||!!item.accountAcknowledgementRequired||['GOAL_TOKEN_BUDGET','GOAL_TIME_LIMIT','GOAL_ROUND_LIMIT'].includes(intake.retryBlockedCode??'');
 }
-export function GoalRetryForm({intake, models, onRetry, onClose}: {intake: Intake; models: ModelInfo[]; onRetry: (input: IntakeRetryInput) => Promise<void>; onClose: () => void}) {
+function continuationBasis(intake:Intake){return{key:intake.recoveryKey,recommendation:intake.recoveryRecommendation?structuredClone(intake.recoveryRecommendation):undefined,account:intake.account,accountAcknowledgementRequired:intake.accountAcknowledgementRequired};}
+export function GoalRetryForm({intake,models,onRetry,onClose,onChanged}:{intake:Intake;models:ModelInfo[];onRetry:(input:IntakeRetryInput)=>Promise<void>;onClose:()=>void;onChanged?:()=>Promise<void>}) {
   const {t,number,p}=useCopy();
-  const [note,setNote]=useState(''), [model,setModel]=useState(''), [refreshConfiguration,setRefreshConfiguration]=useState(false), [tokens,setTokens]=useState(''), [elapsed,setElapsed]=useState(''), [rounds,setRounds]=useState(''), [overrideRecovery,setOverrideRecovery]=useState(false);
+  const [note,setNote]=useState(''),[model,setModel]=useState(''),[refreshConfiguration,setRefreshConfiguration]=useState(false),[elapsed,setElapsed]=useState(''),[rounds,setRounds]=useState(''),[overrideRecovery,setOverrideRecovery]=useState(false);
   const [recovery,setRecovery]=useState<GoalRecoveryPolicy>(()=>structuredClone(intake.policy.recovery??defaultRecoveryPolicy));
-  const [basis,setBasis]=useState(()=>({key:intake.recoveryKey,recommendation:intake.recoveryRecommendation?structuredClone(intake.recoveryRecommendation):undefined}));
-  const [busy,setBusy]=useState(false), [error,setError]=useState<unknown>(null);
-  const hasManualPolicy=tokens!==''||elapsed!==''||rounds!==''||overrideRecovery;
-  const recommendation=!hasManualPolicy?basis.recommendation:undefined;
-  const stale=basis.key!==intake.recoveryKey||(!!recommendation&&!basis.key);
-  const blocked=!canOpenGoalRecovery(intake), needsAdjustment=!intake.canRetry&&!recommendation&&!hasManualPolicy, needsAnswer=intake.status==='clarification'&&!!intake.question;
+  const [basis,setBasis]=useState(()=>continuationBasis(intake as Intake)),[busy,setBusy]=useState(false),[refreshing,setRefreshing]=useState(false),[error,setError]=useState<unknown>(null),[cancelling,setCancelling]=useState(false),[cancelAcknowledged,setCancelAcknowledged]=useState(false);
+  const hasManualPolicy=elapsed!==''||rounds!==''||overrideRecovery;
+  const recommendation=!hasManualPolicy&&basis.recommendation&&Object.keys(basis.recommendation.policy).some(key=>key!=='maxTotalTokens')?basis.recommendation:undefined;
+  const stale=basis.key!==intake.recoveryKey||(!!recommendation&&!basis.key),accountBlocked=!canRequestAccountStep(basis.account),accountApproval=basis.accountAcknowledgementRequired||accountStepNeedsApproval(basis.account);
+  const legacyTokenBoundary=intake.retryBlockedCode==='GOAL_TOKEN_BUDGET';
+  const blocked=!canOpenGoalRecovery({...intake,account:basis.account}),needsAdjustment=!intake.canRetry&&!recommendation&&!hasManualPolicy&&!accountApproval&&!legacyTokenBoundary,needsAnswer=intake.status==='clarification'&&!!intake.question;
+  const refreshAccount=async()=>{
+    setRefreshing(true);try{const account=await api<AllowanceAssessment>('/api/account-allowance',{method:'POST',body:{refresh:true,projectId:intake.projectId,intakeId:intake.id,...(model?{model}:{})}});const result=await api<{intakes:Intake[]}>(`/api/projects/${encodeURIComponent(intake.projectId)}/intakes`);const current=result.intakes.find(item=>item.id===intake.id);if(!current)throw new Error(p('accountDecisionUnavailable'));await onChanged?.();setBasis({...continuationBasis(current),account});setError(null);}finally{setRefreshing(false);}
+  };
   async function submit(event:React.FormEvent) {
-    event.preventDefault();if(blocked||needsAdjustment||stale||busy||(needsAnswer&&!note.trim()))return;
+    event.preventDefault();if(blocked||needsAdjustment||stale||busy||refreshing||accountBlocked||(needsAnswer&&!note.trim()))return;
     const policy:NonNullable<IntakeRetryInput['policy']>={};
-    if(tokens!=='')policy.maxTotalTokens=Number(tokens);if(elapsed!=='')policy.maxElapsedSeconds=Number(elapsed);if(rounds!=='')policy.maxRounds=Number(rounds);
-    if([policy.maxTotalTokens,policy.maxElapsedSeconds,policy.maxRounds].some(value=>value!==undefined&&(!Number.isSafeInteger(value)||value<1))||(overrideRecovery&&(!Number.isSafeInteger(recovery.maxAttempts)||recovery.maxAttempts<1||!Number.isSafeInteger(recovery.backoffSeconds)||recovery.backoffSeconds<1))){setError(new Error(t('intakePolicyInvalid')));return;}
+    if(elapsed!=='')policy.maxElapsedSeconds=Number(elapsed);if(rounds!=='')policy.maxRounds=Number(rounds);
+    if([policy.maxElapsedSeconds,policy.maxRounds].some(value=>value!==undefined&&(!Number.isSafeInteger(value)||value<1))||(overrideRecovery&&(!Number.isSafeInteger(recovery.maxAttempts)||recovery.maxAttempts<1||!Number.isSafeInteger(recovery.backoffSeconds)||recovery.backoffSeconds<1))){setError(new Error(t('intakePolicyInvalid')));return;}
     if(policy.maxRounds!==undefined&&(policy.maxRounds<intake.policy.maxRounds||policy.maxRounds>10)){setError(new Error(t('recoveryRoundRange',{current:intake.policy.maxRounds})));return;}
     if(overrideRecovery)policy.recovery=recovery;
-    setBusy(true);setError(null);
-    try{await onRetry({...(note.trim()?{note:note.trim()}:{}),...(model?{model}:{}),...(refreshConfiguration?{refreshConfiguration:true}:{}),...(basis.key?{recoveryKey:basis.key}:{}),...(recommendation?{approveRecommendation:true}:{}),...(Object.keys(policy).length?{policy}:{})});onClose();}catch(value){setError(value);}finally{setBusy(false);}
+    setBusy(true);setCancelAcknowledged(false);setError(null);
+    const input:IntakeRetryInput={resourceMode:'account',...(note.trim()?{note:note.trim()}:{}),...(model?{model}:{}),...(refreshConfiguration?{refreshConfiguration:true}:{}),...(basis.key?{recoveryKey:basis.key}:{}),...(recommendation?{approveRecommendation:true}:{}),...accountStepAuthorization(basis.account,!!accountApproval),...(Object.keys(policy).length?{policy}:{})};
+    try{await onRetry(input);onClose();}catch(value){setError(value);}finally{setBusy(false);}
   }
+  const cancelContinuation=async()=>{if(!busy||cancelling||cancelAcknowledged)return;setCancelling(true);try{await api(`/api/intakes/${encodeURIComponent(intake.id)}/cancel`,{method:'POST',body:{note:p('cancelContinuationNote')}});setCancelAcknowledged(true);await onChanged?.();}catch(error){setError(error);}finally{setCancelling(false);}};
   return <form className="form-stack goal-retry-form" noValidate onSubmit={event=>void submit(event)}><p>{t('recoveryContinueHelp')}</p><ErrorNotice error={error}/>
     {blocked&&<Notice tone="warning">{intake.retryBlockedReason??t('recoveryUnavailable')}</Notice>}
-    {!blocked&&!intake.canRetry&&<p>{p('recoveryGoalLimit')}</p>}
+    <AccountAllowance context={{projectId:intake.projectId,intakeId:intake.id,model:model||undefined}} assessment={basis.account} onAssessment={account=>setBasis(previous=>({...previous,account:account??undefined}))} onRefresh={refreshAccount}/>
     {recommendation&&<GoalRecommendationSummary recommendation={recommendation}/>}
-    {stale&&<Notice tone="warning"><p>{p('recoveryContextChanged')}</p><Button onClick={()=>{setBasis({key:intake.recoveryKey,recommendation:intake.recoveryRecommendation?structuredClone(intake.recoveryRecommendation):undefined});setError(null);}}>{p('reloadContinuation')}</Button></Notice>}
+    {accountApproval&&!accountBlocked&&<p className="pf-account-approval">{p('accountOneStepHelp')}</p>}
+    {stale&&<Notice tone="warning"><p>{p('recoveryContextChanged')}</p><Button onClick={()=>{setBasis(continuationBasis(intake as Intake));setError(null);}}>{p('reloadContinuation')}</Button></Notice>}
     {needsAnswer&&<Field label={t('intakeQuestion')} hint={intake.question}><textarea autoFocus required rows={3} value={note} onChange={event=>setNote(event.target.value)} disabled={busy}/></Field>}
-    <details><summary>{p('advancedSettings')}</summary><div className="form-stack">{!needsAnswer&&<Field label={p('optionalNote')}><textarea rows={2} value={note} onChange={event=>setNote(event.target.value)} disabled={busy}/></Field>}<Field label={`${t('recoveryModel')} · ${t('optional')}`}><select value={model} onChange={event=>setModel(event.target.value)} disabled={busy}><option value="">{t('recoveryKeepModel')}</option>{models.map(value=><option key={value.id} value={value.id}>{value.name||value.id}</option>)}</select></Field><label className="check"><input type="checkbox" checked={refreshConfiguration} disabled={busy} onChange={event=>setRefreshConfiguration(event.target.checked)}/><span>{t('recoveryRefreshConfiguration')}</span></label>
-      <details><summary>{t('recoveryChangeLimits')}</summary><p className="hint">{p('manualLimitsHelp')}</p><div className="intake-policy-grid"><Field label={t('recoveryActionRounds')} hint={t('recoveryCurrentLimit',{count:number(intake.policy.maxRounds)})}><input type="number" min={intake.policy.maxRounds} max={10} step={1} value={rounds} disabled={busy} onChange={event=>setRounds(event.target.value)}/></Field><Field label={t('intakeMaxTokens')} hint={t('recoveryCurrentLimit',{count:number(intake.policy.maxTotalTokens)})}><input type="number" min={intake.policy.maxTotalTokens} step={1} value={tokens} disabled={busy} onChange={event=>setTokens(event.target.value)}/></Field><Field label={t('intakeMaxElapsed')} hint={t('recoveryCurrentLimit',{count:number(intake.policy.maxElapsedSeconds)})}><input type="number" min={intake.policy.maxElapsedSeconds} step={1} value={elapsed} disabled={busy} onChange={event=>setElapsed(event.target.value)}/></Field></div></details>
+    <details><summary>{p('advancedSettings')}</summary><div className="form-stack">{!needsAnswer&&<Field label={p('optionalNote')}><textarea rows={2} value={note} onChange={event=>setNote(event.target.value)} disabled={busy}/></Field>}<Field label={`${t('recoveryModel')} · ${t('optional')}`}><select value={model} onChange={event=>{setModel(event.target.value);setBasis(previous=>({...previous,account:undefined,accountAcknowledgementRequired:false}));setError(null);}} disabled={busy}><option value="">{t('recoveryKeepModel')}</option>{models.map(value=><option key={value.id} value={value.id}>{value.name||value.id}</option>)}</select></Field><label className="check"><input type="checkbox" checked={refreshConfiguration} disabled={busy} onChange={event=>setRefreshConfiguration(event.target.checked)}/><span>{t('recoveryRefreshConfiguration')}</span></label>
+      <details><summary>{p('executionBounds')}</summary><p className="hint">{p('manualLimitsHelp')}</p><div className="intake-policy-grid"><Field label={t('recoveryActionRounds')} hint={t('recoveryCurrentLimit',{count:number(intake.policy.maxRounds)})}><input type="number" min={intake.policy.maxRounds} max={10} step={1} value={rounds} disabled={busy} onChange={event=>setRounds(event.target.value)}/></Field><Field label={t('intakeMaxElapsed')} hint={t('recoveryCurrentLimit',{count:number(intake.policy.maxElapsedSeconds)})}><input type="number" min={intake.policy.maxElapsedSeconds} step={1} value={elapsed} disabled={busy} onChange={event=>setElapsed(event.target.value)}/></Field></div></details>
       <details><summary>{t('recoveryCapacityPolicy')}</summary><label className="check"><input type="checkbox" checked={overrideRecovery} disabled={busy} onChange={event=>setOverrideRecovery(event.target.checked)}/><span>{t('recoveryChangePolicy')}</span></label>{overrideRecovery&&<RecoveryPolicyFields value={recovery} onChange={setRecovery} models={models} disabled={busy}/>}</details>
-    </div></details><div className="form-actions"><Button disabled={busy} onClick={onClose}>{t('close')}</Button><Button type="submit" tone="primary" disabled={busy||blocked||needsAdjustment||stale||(needsAnswer&&!note.trim())}><Icon name="play"/>{busy?t('recoveryContinuing'):recommendation?p('approveContinue'):t('recoveryContinue')}</Button></div>
+      <details><summary>{p('recordedTokenDiagnostics')}</summary><p className="hint">{p('tokenDiagnosticsHelp')}</p><dl className="metadata-list"><div><dt>{p('historicalTokenConfiguration')}</dt><dd>{number(intake.policy.maxTotalTokens)}</dd></div></dl>{basis.recommendation&&<pre className="json-output">{JSON.stringify(basis.recommendation,null,2)}</pre>}</details>
+    </div></details><div className="form-actions"><Button disabled={busy&&!cancelAcknowledged} onClick={onClose}>{t('close')}</Button>{busy&&!cancelAcknowledged&&<Button tone="danger" disabled={cancelling} onClick={()=>void cancelContinuation()}>{p(cancelling?'cancellingContinuation':'cancelContinuation')}</Button>}{cancelAcknowledged&&<span role="status">{p('continuationCancelRequested')}</span>}{basis.account?.status!=='exhausted'&&<Button type="submit" tone="primary" disabled={busy||refreshing||blocked||needsAdjustment||stale||accountBlocked||(needsAnswer&&!note.trim())}><Icon name="play"/>{busy?t('recoveryContinuing'):accountApproval?p('accountApproveStep'):recommendation?p('approveContinue'):t('recoveryContinue')}</Button>}</div>
   </form>;
 }
 
@@ -71,5 +84,5 @@ export function RecoveryHistory({records, models, runs, onRun}: {records: GoalRe
 
 export function GoalRecommendationSummary({recommendation}:{recommendation:GoalContinuationRecommendation}) {
   const {p,t,number}=useCopy(),basis=recommendation.basis;
-  return <section className="pf-recovery-recommendation"><strong>{p('recoveryRecommendation')}</strong><p>{p('goalContinuationRecommendation')}</p><p>{p('reportedBudgetUse',{used:number(basis.usedTokens),limit:number(basis.previousPolicy.maxTotalTokens)})}</p><p>{p('goalRecordedUse',{rounds:number(basis.actionRounds),seconds:number(Math.round(basis.usedSeconds))})}</p>{basis.reservedTokens>0&&<p>{p('reservedWorkUse',{tokens:number(basis.reservedTokens)})}</p>}<ul>{Object.entries(recommendation.policy).map(([key,next])=><li key={key}>{p('allowanceChange',{name:t(key==='maxTotalTokens'?'intakeMaxTokens':key==='maxElapsedSeconds'?'intakeMaxElapsed':'recoveryActionRounds'),before:number(basis.previousPolicy[key as keyof typeof recommendation.policy]),after:number(next)})}</li>)}</ul><p className="hint">{p('goalContinuationEffect')}</p></section>;
+  return <section className="pf-recovery-recommendation"><strong>{p('executionBounds')}</strong><p>{p('goalContinuationRecommendation')}</p><p>{p('goalRecordedUse',{rounds:number(basis.actionRounds),seconds:number(Math.round(basis.usedSeconds))})}</p><ul>{Object.entries(recommendation.policy).filter(([key])=>key!=='maxTotalTokens').map(([key,next])=><li key={key}>{p('allowanceChange',{name:t(key==='maxElapsedSeconds'?'intakeMaxElapsed':'recoveryActionRounds'),before:number(basis.previousPolicy[key as keyof typeof recommendation.policy]),after:number(next)})}</li>)}</ul><p className="hint">{p('goalContinuationEffect')}</p></section>;
 }

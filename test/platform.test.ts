@@ -9,7 +9,8 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import test from 'node:test';
 import type {TestContext} from 'node:test';
-import type {Actor, KnowledgeEntry, RoleProfile, TaskOutput,Project} from '../src/contracts.ts';
+import type {Actor, KnowledgeEntry, RoleProfile, TaskOutput,Project,Run} from '../src/contracts.ts';
+import type {AllowanceExecution,AllowanceFinish,AllowanceAssessment} from '../src/account-allowance-types.ts';
 import type {AgentExecutionInput, CodexAdapter} from '../src/adapters/types.ts';
 import {MulticaClient} from '../src/adapters/multica.ts';
 import type {MulticaAgent, MulticaIssue, MulticaProject, MulticaTask} from '../src/adapters/multica.ts';
@@ -95,6 +96,82 @@ async function fixture(t: TestContext) {
   t.after(async () => {taskGate.resolve(); state.taskListGate = undefined; await execution.close(); await engine.close(); controls!.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); await rm(directory, {recursive: true, force: true});});
   return {directory, state, connection, controls, client, engine, platform, execution, project, input, taskGate};
 }
+
+type Fixture=Awaited<ReturnType<typeof fixture>>;
+function accountLifecycle(h:Fixture){
+  const begins:{runId:string;stageId:string;model:string|null;issuePosts:number}[]=[],finishes:{id:string;value:AllowanceFinish}[]=[];
+  const control={beginError:undefined as AppError|undefined,beginGate:undefined as Promise<void>|undefined,finishErrors:0};
+  h.engine.beginAccountExecution=async(runId,stageId,model)=>{begins.push({runId,stageId,model:model??null,issuePosts:h.state.issuePosts});await control.beginGate;if(control.beginError)throw control.beginError;const execution:AllowanceExecution={id:'synthetic-allowance-execution-'+begins.length,target:{projectId:h.project.id,pipelineId:'synthetic-pipeline',stageId,roleId:'development',model:model??null,effort:'max',kind:stageId==='supervise'?'planner':'stage',runId},before:{id:'SYNTHETIC_PRIVATE_OBSERVATION',status:'available',observedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),source:'local-codex',windows:[],exhausted:false,accountKey:'SYNTHETIC_PRIVATE_ACCOUNT_KEY'},startedAt:new Date().toISOString()};return execution;};
+  h.engine.finishAccountExecution=async(id,value)=>{finishes.push({id,value:structuredClone(value)});if(control.finishErrors-->0)throw new Error('SYNTHETIC_PRIVATE_PROVIDER_PAYLOAD');};
+  return{begins,finishes,control};
+}
+function storedAdapterRun(h:Fixture){
+  const input=h.input(),at=new Date().toISOString(),pipeline=structuredClone(h.engine.detail(h.project.id,OWNER).pipelines[0]);pipeline.stages=[{id:input.stageId,name:'Synthetic external worker',roleId:input.role.id,executor:'codex',dependsOn:[],prompt:'Use only synthetic input.',review:false}];
+  const run:Run={id:input.runId,projectId:h.project.id,pipelineId:pipeline.id,goal:'Synthetic external execution scope.',baseline:'Synthetic committed input.',trigger:{kind:'human',actor:OWNER.name},status:'failed',iteration:1,mode:'once',createdAt:at,updatedAt:at,endedAt:at,dependsOnRunIds:[],idempotencyKey:'synthetic-adapter-scope',inputHash:'synthetic-adapter-hash',snapshot:{project:structuredClone(h.project),pipeline,pipelines:[pipeline],knowledge:[]},stages:[{stageId:input.stageId,status:'failed',attempts:[{id:input.attemptId,number:1,iteration:1,status:'failed',provider:'multica',startedAt:at,endedAt:at,error:'Synthetic external observation needs reconciliation.'}]}]};h.engine.store.put('run',run);return run;
+}
+
+test('account observation brackets paid assignment with the resolved model and persists no private snapshot',async t=>{
+  const h=await fixture(t),account=accountLifecycle(h);storedAdapterRun(h);h.state.taskListGate=h.taskGate.promise;
+  const input=h.input(),started=await h.execution.agent.start({...input,role:{...input.role,model:null}});
+  assert.deepEqual(account.begins,[{runId:input.runId,stageId:input.stageId,model:'synthetic-model',issuePosts:0}]);assert.equal(account.finishes.length,0);
+  const active=h.execution.records(input.runId)[0];assert.equal(active.allowanceExecutionId,'synthetic-allowance-execution-1');assert.equal(active.cleanupConfirmed,false);assert.equal(active.allowanceFinishedAt,undefined);
+  for(const secret of ['SYNTHETIC_PRIVATE_OBSERVATION','SYNTHETIC_PRIVATE_ACCOUNT_KEY'])assert.equal(JSON.stringify(active).includes(secret),false);
+  h.taskGate.resolve();assert.deepEqual((await started.completion).output,OUTPUT);assert.deepEqual(account.finishes,[{id:'synthetic-allowance-execution-1',value:{status:'completed',dispatched:true,usage:{input:420,output:20,cachedInput:300,total:440}}}]);
+  const ended=h.execution.records(input.runId)[0];assert.ok(ended.allowanceFinishedAt);assert.equal(ended.allowanceFinishError,undefined);await h.execution.reconcile(input.runId,input.stageId);assert.equal(account.finishes.length,1);assert.equal(h.execution.records(input.runId)[0].allowanceFinishedAt,ended.allowanceFinishedAt);
+});
+
+test('account exhaustion or a changed observation rejects assignment without creating an execution sample',async t=>{
+  for(const failure of ['ACCOUNT_ALLOWANCE_EXHAUSTED','ACCOUNT_ALLOWANCE_CONFLICT'])await t.test(failure,async sub=>{
+    const h=await fixture(sub),account=accountLifecycle(h);account.control.beginError=new AppError(failure,'Synthetic account admission rejected.',409);
+    await assert.rejects(h.execution.agent.start(h.input()),code(failure));assert.equal(h.state.issuePosts,0);assert.equal(h.state.tasks.size,0);assert.equal(account.finishes.length,0);
+    const record=h.execution.records('synthetic-run')[0];assert.equal(record.status,'not_dispatched');assert.equal(record.cleanupConfirmed,true);assert.equal(record.allowanceExecutionId,undefined);
+  });
+});
+
+test('Stop while the fresh account check is pending releases only a confirmed unassigned observation',async t=>{
+  const h=await fixture(t),account=accountLifecycle(h),gate=deferred<void>(),controller=new AbortController();account.control.beginGate=gate.promise;
+  const starting=h.execution.agent.start(h.input({signal:controller.signal})),rejected=assert.rejects(starting,code('EXECUTION_CANCELLED'));await eventually(()=>account.begins.length===1,'the account check before assignment');controller.abort();gate.resolve();await rejected;
+  assert.equal(h.state.issuePosts,0);assert.deepEqual(account.finishes,[{id:'synthetic-allowance-execution-1',value:{status:'not_dispatched',dispatched:false}}]);const record=h.execution.records('synthetic-run')[0];assert.equal(record.status,'not_dispatched');assert.equal(record.cleanupConfirmed,true);assert.ok(record.allowanceFinishedAt);
+});
+
+test('a known rejected assignment finishes as unassigned while uncertain responses retain their active account observation',async t=>{
+  for(const response of ['active_duplicate_issue','another_conflict','lost-response'] as const)await t.test(response,async sub=>{
+    const h=await fixture(sub),account=accountLifecycle(h);storedAdapterRun(h);
+    if(response==='lost-response')h.state.loseIssueResponse=true;else h.state.issueRejection={code:response,status:409};await assert.rejects(h.execution.agent.start(h.input()));
+    const before=h.execution.records('synthetic-run')[0];assert.equal(before.allowanceExecutionId,'synthetic-allowance-execution-1');assert.equal(account.finishes.length,response==='active_duplicate_issue'?1:0);
+    if(response==='active_duplicate_issue'){assert.deepEqual(account.finishes[0].value,{status:'not_dispatched',dispatched:false});await h.execution.reconcile('synthetic-run','work');assert.equal(account.finishes.length,1);}
+    else{assert.equal(before.cleanupConfirmed,false);assert.equal(before.allowanceFinishedAt,undefined);}
+    if(response==='lost-response'){const reconciled=await h.execution.reconcile('synthetic-run','work');assert.equal(reconciled.cleanupConfirmed,true);assert.ok(reconciled.allowanceFinishedAt);assert.equal(account.finishes.length,1);assert.equal(account.finishes[0].value.dispatched,true);assert.equal(h.state.issuePosts,1);await h.execution.reconcile('synthetic-run','work');assert.equal(account.finishes.length,1);}
+  });
+});
+
+test('terminal-looking execution without cleanup proof retains account observation until exact reconciliation',async t=>{
+  const h=await fixture(t),account=accountLifecycle(h);storedAdapterRun(h);h.state.taskStatus='failed';h.state.taskResult=()=>undefined;
+  const started=await h.execution.agent.start(h.input());await assert.rejects(started.completion,code('EXTERNAL_RECONCILIATION_REQUIRED'));assert.equal(account.finishes.length,0);assert.equal(h.execution.records('synthetic-run')[0].cleanupConfirmed,false);
+  h.state.tasks.get(started.ref.issueId!)![0].result={receipt:'Synthetic terminal failure receipt.'};const reconciled=await h.execution.reconcile('synthetic-run','work');assert.equal(reconciled.cleanupConfirmed,true);assert.equal(account.finishes.length,1);assert.equal(account.finishes[0].value.status,'failed');assert.equal(account.finishes[0].value.dispatched,true);
+});
+
+test('failed ending account observations retain a sanitized retry marker without replacing the actual task result',async t=>{
+  const h=await fixture(t),account=accountLifecycle(h);storedAdapterRun(h);account.control.finishErrors=1;
+  const started=await h.execution.agent.start(h.input());assert.deepEqual((await started.completion).output,OUTPUT);
+  const pending=h.execution.records('synthetic-run')[0];assert.equal(pending.cleanupConfirmed,true);assert.equal(pending.allowanceFinishedAt,undefined);assert.equal(pending.allowanceFinishError,'ACCOUNT_OBSERVATION_PENDING');assert.equal(JSON.stringify(pending).includes('SYNTHETIC_PRIVATE_PROVIDER_PAYLOAD'),false);
+  const reconciled=await h.execution.reconcile('synthetic-run','work');assert.ok(reconciled.allowanceFinishedAt);assert.equal(reconciled.allowanceFinishError,undefined);assert.equal(account.finishes.length,2);assert.equal(h.state.issuePosts,1);await h.execution.reconcile('synthetic-run','work');assert.equal(account.finishes.length,2);
+});
+
+test('planner account observations use the canonical supervise stage and resolved inherited model',async t=>{
+  const h=await fixture(t),account=accountLifecycle(h);h.state.taskResult=()=>JSON.stringify({action:'stop',rationale:'Synthetic bounded decision ended.',expectedGain:'No new paid work.',tasks:[]});
+  const started=await h.execution.planner.start({project:h.project,pipelines:[],knowledge:[],request:'Make one synthetic coordination decision.',baseline:'Synthetic source.',rounds:[],observations:[],remaining:{tokens:1000,seconds:5,rounds:1},signal:new AbortController().signal,onEvent(){},executionId:'synthetic-planner-allowance'});await started.completion;
+  assert.deepEqual(account.begins,[{runId:'synthetic-planner-allowance',stageId:'supervise',model:'synthetic-model',issuePosts:0}]);assert.equal(h.execution.records('synthetic-planner-allowance')[0].stageId,'decision-1');assert.equal(account.finishes.length,1);assert.equal(account.finishes[0].value.dispatched,true);
+});
+
+test('account-mode planner context uses shared allowance evidence and keeps technical token safeguards out of its allowance',async t=>{
+  const h=await fixture(t);accountLifecycle(h);h.state.taskResult=()=>JSON.stringify({action:'stop',rationale:'Synthetic observation reviewed.',expectedGain:'No further synthetic action.',tasks:[]});
+  const at=new Date().toISOString(),account:AllowanceAssessment={key:'SYNTHETIC_OWNER_APPROVAL_KEY',status:'learning',code:'ACCOUNT_ALLOWANCE_LEARNING',action:'continue',activeExecutions:0,account:{id:'SYNTHETIC_PRIVATE_OBSERVATION_ID',status:'available',source:'local-codex',observedAt:at,expiresAt:new Date(Date.now()+60000).toISOString(),exhausted:false,windows:[{bucketId:'synthetic-codex',slot:'primary',usedPercent:30,remainingPercent:70,windowDurationMins:300,resetsAt:Math.floor(Date.now()/1000)+3600}]},trend:{sampleCount:2,comparableCount:2,direction:'unknown',windows:[],attribution:'shared-account-observation',reasons:['INSUFFICIENT_SAMPLES','SHARED_ACCOUNT_ACTIVITY']}};
+  const started=await h.execution.planner.start({project:h.project,pipelines:[],knowledge:[],request:'Inspect synthetic allowance context.',baseline:'Synthetic source.',rounds:[],observations:[],resourceMode:'account',account,remaining:{tokens:1000000,seconds:5,rounds:2},signal:new AbortController().signal,onEvent(){},executionId:'synthetic-planner-account-context'});await started.completion;
+  const description=String(h.state.requests.find(request=>request.method==='POST'&&request.path==='/api/issues')!.body.description),brief=JSON.parse(description.split('\n').find(line=>line.startsWith('{"request":'))!) as {resourceMode:string;remaining:{tokens?:number;seconds:number;rounds:number};account:{windows:unknown[];trend:unknown}};
+  assert.equal(brief.resourceMode,'account');assert.deepEqual(brief.remaining,{seconds:5,rounds:2});assert.deepEqual(brief.account.windows,account.account.windows);assert.deepEqual(brief.account.trend,account.trend);assert.match(description,/Do not convert token diagnostics/);
+  for(const privateValue of ['SYNTHETIC_OWNER_APPROVAL_KEY','SYNTHETIC_PRIVATE_OBSERVATION_ID'])assert.equal(description.includes(privateValue),false);
+});
 
 test('permission profile names alone never authorize execution without verified effective protections', async t => {
   const h = await fixture(t);

@@ -4,6 +4,7 @@ import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 import type {AuditEvent,Intake,Pipeline,Project,Run} from '../src/contracts.ts';
+import type {AllowanceAssessment} from '../src/account-allowance-types.ts';
 import {activityCategory,activityTitle,groupHumanActivity,isHumanActivity,mergeActivity} from '../web/platform/activity.ts';
 
 function event(seq:number,type='stage.started'):AuditEvent{return{seq,at:'2026-01-01T12:00:00Z',projectId:'example',runId:'example-run',stageId:'prepare',type,actor:'Example owner',message:`Recorded activity ${seq}`};}
@@ -44,7 +45,9 @@ test('provider deltas remain technical while repeated workflow observations grou
 const project:Project={id:'example',name:'Example project',description:'Independently authored example',workspace:'/example-project',repository:'example/project',revision:1,createdAt:'2026-01-01T12:00:00Z',updatedAt:'2026-01-01T12:00:00Z',knowledgeSources:[],roles:[{id:'owner',name:'Example owner',description:'Prepare and inspect the requested result.',instructions:'Use the recorded requirements.',model:'example-model',effort:'max',sandbox:'read-only',skills:[],tools:['context.read','run.read']}]};
 const pipeline:Pipeline={id:'example-flow',projectId:project.id,revision:1,name:'Example workflow',description:'Prepare and review a focused change.',roleId:'owner',stages:[{id:'prepare',name:'Prepare change',roleId:'owner',executor:'codex',dependsOn:[],prompt:'Prepare the requested change.',review:true,checks:['Check the requested behavior.']},{id:'deliver',name:'Inspect delivery',roleId:'owner',executor:'manual',dependsOn:['prepare'],prompt:'Inspect the actual result.',review:false}],policy:{concurrency:1,maxAttempts:2,maxIterations:1,timeoutSeconds:300,tokenBudget:20000},updatedAt:project.updatedAt};
 const run:Run={id:'example-run',projectId:project.id,pipelineId:pipeline.id,goal:'Correct the example navigation and verify the affected links.',baseline:'Example baseline',trigger:{kind:'human',actor:'Example owner'},status:'review',iteration:1,mode:'once',createdAt:project.createdAt,updatedAt:project.updatedAt,dependsOnRunIds:[],idempotencyKey:'example-key',inputHash:'example-hash',snapshot:{project,pipeline,pipelines:[pipeline],knowledge:[]},stages:[{stageId:'prepare',status:'review',attempts:[{id:'example-attempt',number:1,iteration:1,status:'review',startedAt:project.createdAt,endedAt:project.updatedAt,provider:'manual',output:{outcome:'done',summary:'Prepared the example navigation change.',artifacts:[{label:'Example evidence',path:'evidence.md'}],observations:[]}}]},{stageId:'deliver',status:'queued',attempts:[]}]};
-const intake:Intake={id:'example-goal',projectId:project.id,request:run.goal,baseline:run.baseline,status:'failed',createdAt:project.createdAt,updatedAt:project.updatedAt,routerRunId:'example-coordinator',idempotencyKey:'example-goal-key',targetRunIds:[run.id],rounds:[],policy:{maxRounds:2,maxParallel:1,maxTotalTokens:50000,maxElapsedSeconds:600},canRetry:true};
+const observed=Date.now();
+const account:AllowanceAssessment={key:'synthetic-assessment',status:'learning',code:'ACCOUNT_ALLOWANCE_LEARNING',action:'continue',account:{id:'synthetic-observation',status:'available',observedAt:new Date(observed).toISOString(),expiresAt:new Date(observed+3600000).toISOString(),source:'local-codex',exhausted:false,windows:[{bucketId:'example-bucket',slot:'primary',usedPercent:37.5,remainingPercent:62.5,windowDurationMins:360,resetsAt:Math.floor(observed/1000)+21600},{bucketId:'example-bucket',slot:'secondary',usedPercent:12,remainingPercent:88,windowDurationMins:4320,resetsAt:Math.floor(observed/1000)+259200}]},trend:{sampleCount:0,comparableCount:0,direction:'unknown',windows:[],attribution:'shared-account-observation',reasons:['SHARED_ACCOUNT_ACTIVITY','NO_SAMPLES']},activeExecutions:0,target:{projectId:project.id,pipelineId:pipeline.id,stageId:'prepare',roleId:'owner',model:'example-model',effort:'max',kind:'stage'}};
+const intake:Intake={id:'example-goal',projectId:project.id,request:run.goal,baseline:run.baseline,status:'failed',createdAt:project.createdAt,updatedAt:project.updatedAt,routerRunId:'example-coordinator',idempotencyKey:'example-goal-key',targetRunIds:[run.id],rounds:[],policy:{maxRounds:2,maxParallel:1,maxTotalTokens:50000,maxElapsedSeconds:600},canRetry:true,resourceMode:'account',account};
 
 test('ordinary views render steps, real evidence and progressive recovery in both locales',async()=>{
   const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom'});
@@ -52,6 +55,7 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
     const {I18nContext,makeI18n}=await server.ssrLoadModule('/web/i18n.tsx');
     const {RunWorkspace}=await server.ssrLoadModule('/web/platform/RunWorkspace.tsx');
     const {LaunchPipeline}=await server.ssrLoadModule('/web/platform/LaunchPipeline.tsx');
+    const {Workbench}=await server.ssrLoadModule('/web/platform/Workbench.tsx');
     const {GoalRetryForm,canOpenGoalRecovery,GoalRecommendationSummary}=await server.ssrLoadModule('/web/GoalRecovery.tsx');
     const {RunRecommendationSummary}=await server.ssrLoadModule('/web/platform/StageRecovery.tsx');
     const {orderedStages}=await server.ssrLoadModule('/web/platform/PipelineSteps.tsx');
@@ -78,15 +82,19 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       const manualLaunch=render(createElement(LaunchPipeline,{pipeline:{...pipeline,stages:pipeline.stages.map(stage=>({...stage,executor:'manual'}))},project,onClose:()=>{},onStarted:async()=>{}}));
       assert.ok(!manualLaunch.includes('example-model'));
       assert.ok(manualLaunch.includes(locale==='en'?'This workflow uses human steps and does not call a model.':'此流程由人工步骤完成，不会调用模型。'));
+      assert.ok(!manualLaunch.includes('pf-account-allowance'));
+      assert.ok(!manualLaunch.includes(locale==='en'?'Account readiness is checked before model work':'调用模型前会检查账户可用情况'));
       const retry=render(createElement(GoalRetryForm,{intake,models:[],onRetry:async()=>{},onClose:()=>{}}));
       assert.ok(!retry.includes('textarea required'));
+      assert.ok(!retry.includes(locale==='en'?'Outcome token budget':'目标 Token 预算'));
       assert.ok(!retry.match(/<button[^>]*type="submit"[^>]*>[^]*?<\/button>/)?.[0].includes('disabled'));
       assert.ok(retry.indexOf(locale==='en'?'Advanced settings':'高级设置')<retry.indexOf('type="number"'));
       const runProposal=render(createElement(RunRecommendationSummary,{usageComplete:true,recommendation:{limits:{tokenBudget:38000,maxAttempts:3},note:'Example scoped continuation',basis:{usedTokens:19000,reservedTokens:0,previousAttemptTokens:9000,attempts:2,previousPolicy:pipeline.policy,purpose:'one-failed-stage'}}}));
-      assert.ok(runProposal.includes('19,000'));
-      assert.ok(runProposal.includes('20,000'));
-      assert.ok(runProposal.includes('38,000'));
-      assert.ok(runProposal.includes('9,000'));
+      assert.ok(!runProposal.includes('19,000'));
+      assert.ok(!runProposal.includes('20,000'));
+      assert.ok(!runProposal.includes('38,000'));
+      assert.ok(!runProposal.includes('9,000'));
+      assert.ok(runProposal.includes('2 → 3'));
       assert.ok(!runProposal.includes('<details'));
       assert.ok(!runProposal.includes('<input'));
       const manualProposal=render(createElement(RunRecommendationSummary,{showTokenUse:false,usageComplete:true,recommendation:{limits:{maxAttempts:3},note:'Example manual retry',basis:{usedTokens:0,reservedTokens:0,attempts:2,previousPolicy:pipeline.policy,purpose:'one-failed-stage'}}}));
@@ -94,9 +102,10 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       assert.ok(!manualProposal.toLowerCase().includes('token'));
       assert.ok(manualProposal.includes('2 → 3'));
       const goalProposal=render(createElement(GoalRecommendationSummary,{recommendation:{policy:{maxTotalTokens:75000,maxRounds:3},basis:{usedTokens:48000,reservedTokens:1000,usedSeconds:180,actionRounds:2,previousPolicy:intake.policy},purpose:'one-focused-continuation'}}));
-      assert.ok(goalProposal.includes('48,000'));
-      assert.ok(goalProposal.includes('50,000'));
-      assert.ok(goalProposal.includes('75,000'));
+      assert.ok(!goalProposal.includes('48,000'));
+      assert.ok(!goalProposal.includes('50,000'));
+      assert.ok(!goalProposal.includes('75,000'));
+      assert.ok(goalProposal.includes('2 → 3'));
       assert.ok(!goalProposal.includes('<details'));
       assert.ok(!goalProposal.includes('<input'));
       const history=render(createElement(ActivityTimeline,{events:[event(1)],active:false}));
@@ -111,6 +120,12 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       assert.ok(!ownerCard.includes('example-model'));
       assert.ok(!ownerCard.includes('Max'));
       assert.ok(ownerCard.includes(locale==='en'?'Human task':'人工任务'));
+      const heldRun={...run,status:'waiting',stages:[{...run.stages[0],status:'waiting',allowanceHold:{code:'ACCOUNT_STEP_APPROVAL_REQUIRED'},attempts:[{...run.stages[0].attempts[0],output:undefined,error:'Example account approval is required.'}]},run.stages[1]]};
+      const heldWorkbench=render(createElement(Workbench,{detail:{project,pipelines:[pipeline],runs:[heldRun],knowledge:[],proposals:[],events:[],intakes:[]},onGoal:()=>{},onRun:()=>{},onPipeline:()=>{},onLibrary:()=>{},onStartPipeline:async()=>{},onChanged:async()=>{}}));
+      const decisionTitle=locale==='en'?'Needs your decision':'等待你的决策';
+      assert.ok(heldWorkbench.includes('<h2>'+decisionTitle+'</h2><span class="count">1</span>'));
+      assert.ok(heldWorkbench.includes(locale==='en'?'Approve one bounded execution':'批准一次有界执行'));
+      assert.ok(heldWorkbench.includes('Example account approval is required.'));
       const blockedSummary='Example input is unavailable.';
       const blockedRun={...run,status:'failed',stopReason:blockedSummary,stages:[{...run.stages[0],status:'failed',attempts:[{...run.stages[0].attempts[0],error:blockedSummary,output:{...run.stages[0].attempts[0].output,outcome:'blocked',summary:blockedSummary}}]},run.stages[1]]};
       const blocked=render(createElement(RunWorkspace,{run:blockedRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
@@ -127,5 +142,84 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
     }
     assert.equal(canOpenGoalRecovery({...intake,canRetry:false,retryBlockedCode:'EXTERNAL_RECONCILIATION_REQUIRED'}),false);
     assert.equal(canOpenGoalRecovery({...intake,canRetry:false,retryBlockedCode:'GOAL_TOKEN_BUDGET'}),true);
+  }finally{await server.close();}
+});
+
+test('account allowance uses returned window durations and observed ranges without token or task-count conversions',async()=>{
+  const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom'});
+  try{
+    const {I18nContext,makeI18n}=await server.ssrLoadModule('/web/i18n.tsx');
+    const {AccountAllowanceView,canRequestAccountStep,accountStepNeedsApproval,accountStepAuthorization,accountAllowancePath}=await server.ssrLoadModule('/web/platform/AccountAllowance.tsx');
+    const {GoalRetryForm}=await server.ssrLoadModule('/web/GoalRecovery.tsx');
+    const expired={...account,account:{...account.account,expiresAt:new Date(observed-1000).toISOString()}};
+    const exhausted:AllowanceAssessment={...account,status:'exhausted',action:'wait',code:'ACCOUNT_ALLOWANCE_EXHAUSTED',account:{...account.account,exhausted:true,windows:account.account.windows.map(window=>({...window,usedPercent:100,remainingPercent:0}))}};
+    const unavailable:AllowanceAssessment={...account,key:'synthetic-unavailable',status:'unavailable',action:'owner-step',code:'ACCOUNT_ALLOWANCE_UNAVAILABLE',account:{...account.account,status:'unavailable',windows:[]},trend:{...account.trend,reasons:['SHARED_ACCOUNT_ACTIVITY','OBSERVATION_UNAVAILABLE']}};
+    const observedTrend:AllowanceAssessment={...account,status:'ready',code:'ACCOUNT_ALLOWANCE_READY',trend:{sampleCount:6,comparableCount:4,direction:'rising',durationSeconds:{low:20,high:60},windows:[{bucketId:'example-bucket',slot:'primary',windowDurationMins:360,lowPercent:.25,highPercent:1.5}],attribution:'shared-account-observation',reasons:['SHARED_ACCOUNT_ACTIVITY']}};
+    assert.ok(accountAllowancePath({projectId:'example',intakeId:'example-goal',model:'example-model/next'}).includes('model=example-model%2Fnext'));
+    assert.notEqual(accountAllowancePath({projectId:'example',intakeId:'example-goal',model:'example-model/next'}),accountAllowancePath({projectId:'example',intakeId:'example-goal'}));
+    assert.equal(canRequestAccountStep(account,observed),true);
+    assert.equal(accountStepNeedsApproval(account),false);
+    assert.deepEqual(accountStepAuthorization(account),{});
+    assert.equal(canRequestAccountStep(exhausted,observed),false);
+    assert.deepEqual(accountStepAuthorization({...exhausted,action:'owner-step'},true),{});
+    assert.equal(canRequestAccountStep(expired,observed),false);
+    assert.deepEqual(accountStepAuthorization(expired,true),{});
+    assert.equal(canRequestAccountStep({...account,account:{...account.account,expiresAt:'invalid'}},observed),false);
+    assert.equal(canRequestAccountStep({...account,account:{...account.account,windows:[]}},observed),false);
+    assert.equal(canRequestAccountStep(unavailable,observed),true);
+    assert.equal(accountStepNeedsApproval(unavailable),true);
+    const staleUnavailable={...unavailable,account:{...unavailable.account,expiresAt:new Date(observed-1000).toISOString()}};
+    assert.equal(canRequestAccountStep(staleUnavailable,observed),true);
+    assert.deepEqual(accountStepAuthorization(staleUnavailable),{approveAccountStep:true,accountAssessmentKey:'synthetic-unavailable'});
+    assert.deepEqual(accountStepAuthorization(unavailable),{approveAccountStep:true,accountAssessmentKey:'synthetic-unavailable'});
+    for(const locale of ['en','zh-CN']){
+      const render=(element:ReturnType<typeof createElement>)=>renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},element));
+      const learning=render(createElement(AccountAllowanceView,{assessment:account,now:observed,onRefresh:()=>{}}));
+      const ordinarySummary=learning.split('<details')[0];
+      assert.ok(ordinarySummary.includes('62.5%'));
+      assert.ok(ordinarySummary.includes(locale==='en'?'no samples yet':'尚无执行样本'));
+      assert.ok(!ordinarySummary.includes(makeI18n(locale).date(account.account.observedAt)));
+      assert.ok(!ordinarySummary.includes(locale==='en'?'Resets ':'重置时间：'));
+      assert.ok(!ordinarySummary.includes('<h4'));
+      assert.equal((learning.match(/<details/g)??[]).length,1);
+      assert.ok(!/<details[^>]*open/.test(learning));
+      assert.ok(learning.includes('62.5%'));
+      assert.ok(learning.includes(locale==='en'?'6-hour window':'6 小时窗口'));
+      assert.ok(learning.includes(locale==='en'?'3-day window':'3 天窗口'));
+      assert.ok(!learning.includes('5-hour'));
+      assert.ok(!learning.includes('7-day'));
+      assert.ok(learning.includes(makeI18n(locale).date(account.account.observedAt)));
+      assert.ok(learning.includes(makeI18n(locale).date(new Date(account.account.windows[0].resetsAt*1000).toISOString())));
+      assert.ok(learning.includes(locale==='en'?'No execution samples yet.':'还没有执行样本'));
+      assert.ok(!learning.includes(locale==='en'?'percentage points':'个百分点'));
+      assert.ok(learning.includes(locale==='en'?'Shared across Codex sessions':'各个 Codex 会话和项目共享'));
+      const trend=render(createElement(AccountAllowanceView,{assessment:observedTrend,now:observed}));
+      assert.ok(trend.split('<details')[0].includes('0.25–1.5'));
+      assert.ok(trend.includes(locale==='en'?'percentage points':'个百分点'));
+      assert.ok(trend.includes(locale==='en'?'account change increasing':'账户变化幅度增加'));
+      assert.ok(trend.includes(locale==='en'?'4/6 comparable samples':'6 次执行中有 4'));
+      assert.ok(trend.includes('20–60'));
+      assert.ok(trend.includes('Max'));
+      const missing=render(createElement(AccountAllowanceView,{assessment:unavailable,now:observed}));
+      assert.ok(missing.includes(locale==='en'?'cannot be confirmed':'无法确认'));
+      assert.ok(!missing.includes('0%'));
+      const unconfirmed=render(createElement(AccountAllowanceView,{assessment:{...unavailable,account:{...unavailable.account,reason:'ACCOUNT_IDENTITY_UNAVAILABLE',windows:account.account.windows}},now:observed}));
+      assert.ok(unconfirmed.includes('62.5%'));
+      assert.ok(unconfirmed.includes(locale==='en'?'current availability is unconfirmed':'目前尚不能确认可用额度'));
+      const stale=render(createElement(AccountAllowanceView,{assessment:expired,now:observed}));
+      assert.ok(stale.includes(locale==='en'?'observation is stale':'观测已过期'));
+      const small=render(createElement(AccountAllowanceView,{assessment:{...account,account:{...account.account,windows:[{...account.account.windows[0],remainingPercent:.001,usedPercent:99.999}]}},now:observed}));
+      assert.ok(small.includes('&lt;0.01%'));
+      const zero=render(createElement(AccountAllowanceView,{assessment:{...observedTrend,trend:{...observedTrend.trend,windows:observedTrend.trend.windows.map(window=>({...window,lowPercent:0,highPercent:0}))}},now:observed}));
+      assert.ok(zero.includes(locale==='en'?'does not establish free execution':'不能视为不消耗额度'));
+      const exhaustedForm=render(createElement(GoalRetryForm,{intake:{...intake,account:exhausted,canRetry:false,retryBlockedCode:'ACCOUNT_EXHAUSTED'},models:[],onRetry:async()=>{},onClose:()=>{}}));
+      assert.ok(!exhaustedForm.includes('type="submit"'));
+      assert.ok(exhaustedForm.includes(locale==='en'?'Refresh':'刷新'));
+      assert.ok(!exhaustedForm.includes(locale==='en'?'Approve one bounded execution':'批准一次有界执行'));
+      const ownerForm=render(createElement(GoalRetryForm,{intake:{...intake,account:unavailable,accountAcknowledgementRequired:true},models:[],onRetry:async()=>{},onClose:()=>{}}));
+      assert.ok(ownerForm.includes(locale==='en'?'Approve one bounded execution':'批准一次有界执行'));
+      assert.ok(!ownerForm.match(/<button[^>]*type="submit"[^>]*>[^]*?<\/button>/)?.[0].includes('disabled'));
+      assert.ok(!ownerForm.includes('name="tokenBudget"'));
+    }
   }finally{await server.close();}
 });

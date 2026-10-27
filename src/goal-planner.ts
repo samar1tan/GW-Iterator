@@ -1,3 +1,4 @@
+import type {AllowanceAssessment} from './account-allowance-types.ts';
 import type {ExecutionRef, IntakeDecision, IntakeRound, KnowledgeEntry, Pipeline, Project, TaskOutput, Usage, WorkStatus} from './contracts.ts';
 import type {AdapterEvent} from './adapters/types.ts';
 import {demand, isObject, text} from './validation.ts';
@@ -5,9 +6,11 @@ import {demand, isObject, text} from './validation.ts';
 export type GoalPlannerObservation = {
   id: string; status: WorkStatus; goal: string; stopReason?: string;
   stages: {id: string; status: WorkStatus; output?: TaskOutput; error?: string;attemptCount?:number}[];
+  resourceMode?:'account'|'tokens';
   limits?:{tokenBudget:number;usedTokens:number;remainingTokens:number;maxAttempts:number};
 };
 export type GoalPlannerInput = {
+  resourceMode?:'account'|'tokens';account?:AllowanceAssessment;
   project: Project; pipelines: Pipeline[]; knowledge: KnowledgeEntry[];
   request: string; baseline: string; rounds: IntakeRound[]; observations: GoalPlannerObservation[];
   continuation?:{note:string;reason:string};

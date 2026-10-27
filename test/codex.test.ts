@@ -135,6 +135,33 @@ function input(overrides: Partial<CodexExecutionInput> = {}, roleOverrides: Part
   return {value, controller, events, role};
 }
 
+test('reads native account windows without model work and drops identity and credit payloads',async t=>{
+  const reset=Math.floor(Date.now()/1000)+3600;
+  const h=harness(t,(message,child)=>{if(message.method==='account/rateLimits/read'){child.reply(message.id!,{rateLimitsByLimitId:{codex:{limitId:'codex',primary:{usedPercent:27,windowDurationMins:15,resetsAt:reset},credits:{balance:'synthetic-hidden-balance'}}},rateLimitResetCredits:{availableCount:2,credits:[{id:'synthetic-hidden-reset'}]}});return true;}});
+  assert.ok(h.adapter.readAccountAllowance);
+  const result=await h.adapter.readAccountAllowance();
+  assert.equal(result.status,'available');assert.equal(result.windows[0].remainingPercent,73);assert.equal(result.windows[0].windowDurationMins,15);
+  assert.deepEqual(h.child.requests.map(value=>value.method),['initialize','initialized','account/read','account/rateLimits/read','account/read']);
+  assert.equal(Object.hasOwn(h.child.requests.find(value=>value.method==='account/rateLimits/read')!,'params'),false);
+  const serialized=JSON.stringify(result);for(const value of ['synthetic-account@example.invalid','synthetic-hidden-balance','synthetic-hidden-reset','rateLimitResetCredits','credits'])assert.equal(serialized.includes(value),false);
+});
+
+test('an account switch around a native meter read makes the observation unavailable',async t=>{
+  let accounts=0;const reset=Math.floor(Date.now()/1000)+3600;
+  const h=harness(t,(message,child)=>{
+    if(message.method==='account/read'){child.reply(message.id!,{account:{type:'chatgpt',email:++accounts===1?'first@example.invalid':'second@example.invalid'}});return true;}
+    if(message.method==='account/rateLimits/read'){child.reply(message.id!,{rateLimits:{limitId:'codex',primary:{usedPercent:80,windowDurationMins:300,resetsAt:reset}}});return true;}
+  });
+  assert.ok(h.adapter.readAccountAllowance);const result=await h.adapter.readAccountAllowance();assert.equal(result.status,'unavailable');assert.equal(result.reason,'ACCOUNT_CHANGED');assert.equal(result.windows[0].remainingPercent,20);
+  assert.equal(h.child.requests.some(value=>value.method==='thread/start'||value.method==='turn/start'),false);
+});
+
+test('unavailable native account methods return a bounded generic error without provider details',async t=>{
+  const h=harness(t,(message,child)=>{if(message.method==='account/rateLimits/read'){child.send({id:message.id,error:{code:-32601,message:'synthetic-private@example.invalid synthetic-sensitive-message'}});return true;}});
+  assert.ok(h.adapter.readAccountAllowance);const result=await h.adapter.readAccountAllowance();assert.equal(result.status,'unavailable');assert.equal(result.reason,'ACCOUNT_ALLOWANCE_UNSUPPORTED');
+  assert.equal(JSON.stringify(result).includes('synthetic-sensitive-message'),false);assert.equal(h.child.requests.some(value=>value.method==='thread/start'||value.method==='turn/start'),false);
+});
+
 test('initializes once, discovers models and enabled workspace skills, and exposes only native auth status', async t => {
   const h = harness(t, (message, child) => {
     if (message.method !== 'model/list') return;
@@ -458,6 +485,129 @@ test('unconfirmed turn startup is bounded and kills the connection instead of lo
   const h = harness(t, message => message.method === 'turn/start', {requestTimeoutMs: 15});
   await assert.rejects(h.adapter.start(input().value), /request timed out/);
   assert.ok(h.child.kills.includes('SIGTERM'));
+});
+
+function boundaries(events: AdapterEvent[]) {
+  return events.filter(event => event.type === 'codex.execution_boundary');
+}
+
+test('execution boundaries confirm only preparation failures or structured unaccepted paid requests', async t => {
+  for (const mode of ['task', 'goal'] as const) await t.test(mode, async sub => {
+    const preflight = harness(sub), invalid = input({workspace: 'relative-workspace'});
+    await assert.rejects(mode === 'task' ? preflight.adapter.start(invalid.value) : preflight.adapter.startGoal!({...invalid.value, objective: 'An invalid synthetic launch.'}), /absolute/);
+    assert.deepEqual(boundaries(invalid.events).map(event => event.data), [{state: 'not_dispatched', dispatched: false, cleanupConfirmed: true}]);
+    assert.equal(preflight.child.requests.length, 0);
+    for (const code of [-32601, -32602]) await sub.test(String(code), async inner => {
+      const h = harness(inner, (message, child) => {
+        if (message.method !== (mode === 'task' ? 'turn/start' : 'thread/goal/set')) return;
+        child.send({id: message.id!, error: {code, message: 'Synthetic protocol refusal.'}});
+        return true;
+      }), run = input();
+      await assert.rejects(mode === 'task' ? h.adapter.start(run.value) : h.adapter.startGoal!({...run.value, objective: 'A refused synthetic launch.'}), /failed/);
+      assert.deepEqual(boundaries(run.events).map(event => event.data), [
+        {state: 'dispatching', dispatched: true, cleanupConfirmed: false},
+        {state: 'not_dispatched', dispatched: false, cleanupConfirmed: true},
+      ]);
+      assert.ok(boundaries(run.events).every(event => event.ref?.threadId === 'thread-1'));
+    });
+  });
+});
+
+test('lost and ambiguous startup responses never prove that native work was not dispatched', async t => {
+  for (const mode of ['task', 'goal'] as const) for (const response of ['lost', 'failed', 'malformed'] as const) await t.test(`${mode} ${response}`, async sub => {
+    const h = harness(sub, (message, child) => {
+      if (message.method !== (mode === 'task' ? 'turn/start' : 'thread/goal/set')) return;
+      if (response === 'failed') child.send({id: message.id!, error: {code: -32001, message: 'Method not found is merely display text here.'}});
+      if (response === 'malformed') child.reply(message.id!, {});
+      return true;
+    }, {requestTimeoutMs: 15}), run = input();
+    await assert.rejects(mode === 'task' ? h.adapter.start(run.value) : h.adapter.startGoal!({...run.value, objective: 'A launch with an uncertain response.'}));
+    assert.deepEqual(boundaries(run.events).map(event => event.data), [{state: 'dispatching', dispatched: true, cleanupConfirmed: false}]);
+    if (mode === 'goal') {
+      assert.ok(h.child.requests.some(message => message.method === 'thread/goal/clear'));
+      assert.equal(h.child.nativeGoals.size, 0);
+    }
+  });
+});
+
+test('an actual terminal task remains proven when its startup response is lost', async t => {
+  const h = harness(t, (message, child) => {
+    if (message.method !== 'turn/start') return;
+    const ref = {threadId: message.params!.threadId, turnId: 'completed-without-start-response'};
+    child.notify('turn/started', {threadId: ref.threadId, turn: {id: ref.turnId, status: 'inProgress'}});
+    child.complete(ref);
+    return true;
+  }, {requestTimeoutMs: 15}), run = input();
+  await assert.rejects(h.adapter.start(run.value), /request timed out/);
+  assert.deepEqual(boundaries(run.events).at(-1), {type: 'codex.execution_boundary', message: 'Native execution boundary was observed.', ref: {threadId: 'thread-1', turnId: 'completed-without-start-response'}, data: {state: 'terminal', dispatched: true, cleanupConfirmed: true}});
+  assert.equal(boundaries(run.events).some(event => (event.data as {state: string}).state === 'not_dispatched'), false);
+});
+
+test('late task terminal proof survives a failed local completion without accepting late output', async t => {
+  const h = harness(t), run = input(), execution = await h.adapter.start(run.value);
+  const failed = assert.rejects(execution.completion, /Synthetic error/);
+  h.child.notify('error', {...execution.ref, error: {message: 'Synthetic error.'}, willRetry: false});
+  await failed;
+  assert.equal(boundaries(run.events).some(event => (event.data as {cleanupConfirmed: boolean}).cleanupConfirmed), false);
+  h.child.complete(execution.ref, {...OUTPUT, summary: 'A late result must not be accepted.'});
+  assert.deepEqual(boundaries(run.events).at(-1)?.data, {state: 'terminal', dispatched: true, cleanupConfirmed: true});
+  assert.deepEqual(boundaries(run.events).at(-1)?.ref, execution.ref);
+  assert.equal(run.events.some(event => event.message.includes('A late result must not be accepted.')), false);
+});
+
+test('observed native work overrides a contradictory unsupported startup response', async t => {
+  for (const mode of ['task', 'goal'] as const) await t.test(mode, async sub => {
+    const h = harness(sub, (message, child) => {
+      if (message.method !== (mode === 'task' ? 'turn/start' : 'thread/goal/set')) return;
+      const ref = {threadId: message.params!.threadId, turnId: 'actual-native-turn'};
+      child.notify('turn/started', {threadId: ref.threadId, turn: {id: ref.turnId, status: 'inProgress'}});
+      if (mode === 'task') child.complete(ref);
+      child.send({id: message.id!, error: {code: -32602, message: 'Contradictory refusal after actual work.'}});
+      return true;
+    }), run = input();
+    await assert.rejects(mode === 'task' ? h.adapter.start(run.value) : h.adapter.startGoal!({...run.value, objective: 'An observed synthetic activation.'}), /failed/);
+    assert.equal(boundaries(run.events).some(event => (event.data as {state: string}).state === 'not_dispatched'), false);
+    assert.deepEqual(boundaries(run.events).at(-1)?.data, {state: 'terminal', dispatched: true, cleanupConfirmed: true});
+    assert.equal(boundaries(run.events).at(-1)?.ref?.turnId, 'actual-native-turn');
+  });
+});
+
+test('execution activity without a turn identity prevents a false not-dispatched proof', async t => {
+  for (const mode of ['task', 'goal'] as const) await t.test(mode, async sub => {
+    const h = harness(sub, (message, child) => {
+      if (message.method !== (mode === 'task' ? 'turn/start' : 'thread/goal/set')) return;
+      child.notify('item/completed', {threadId: message.params!.threadId, item: {id: 'observed-command', type: 'commandExecution', command: 'synthetic-check', exitCode: 0}});
+      child.send({id: message.id!, error: {code: -32602, message: 'Contradictory refusal after activity.'}});
+      return true;
+    }), run = input();
+    await assert.rejects(mode === 'task' ? h.adapter.start(run.value) : h.adapter.startGoal!({...run.value, objective: 'Activity without an actual turn identifier.'}), /failed/);
+    assert.deepEqual(boundaries(run.events).map(event => event.data), [{state: 'dispatching', dispatched: true, cleanupConfirmed: false}]);
+  });
+});
+
+test('native goal terminal proof waits for cleared goal and ended turns and records late activity', async t => {
+  const h = harness(t, (message, child) => {
+    if (message.method !== 'turn/interrupt') return;
+    child.reply(message.id!, {});
+    return true;
+  }), run = input(), execution = await h.adapter.startGoal!({...run.value, objective: 'A goal with explicit terminal proof.'});
+  await immediate();
+  reportGoal(h.child, execution.ref, 'complete');
+  await immediate();
+  assert.ok(h.child.requests.some(message => message.method === 'thread/goal/clear'));
+  assert.equal(boundaries(run.events).some(event => (event.data as {state: string}).state === 'terminal'), false);
+  const turnId = 'thread-1-goal-turn-1';
+  h.child.notify('turn/completed', {threadId: execution.ref.threadId, turn: {id: turnId, status: 'interrupted'}});
+  await execution.completion;
+  assert.equal(boundaries(run.events).at(-1)?.ref?.turnId, turnId);
+  assert.deepEqual(boundaries(run.events).at(-1)?.data, {state: 'terminal', dispatched: true, cleanupConfirmed: true});
+  h.child.notify('turn/started', {threadId: execution.ref.threadId, turn: {id: 'late-owned-turn', status: 'inProgress'}});
+  await immediate();
+  assert.deepEqual(boundaries(run.events).at(-1)?.data, {state: 'dispatching', dispatched: true, cleanupConfirmed: false});
+  assert.equal(boundaries(run.events).at(-1)?.ref?.turnId, 'late-owned-turn');
+  h.child.notify('turn/completed', {threadId: execution.ref.threadId, turn: {id: 'late-owned-turn', status: 'interrupted'}});
+  assert.deepEqual(boundaries(run.events).at(-1)?.data, {state: 'terminal', dispatched: true, cleanupConfirmed: true});
+  assert.equal(boundaries(run.events).filter(event => (event.data as {state: string}).state === 'terminal').length, 2);
 });
 
 test('closing rejects active work and prevents adapter reuse', async t => {
