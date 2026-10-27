@@ -364,3 +364,25 @@ test('new projects include the focused implement, independent QA and manual deli
   for (let count = 0; count < 3; count++) {await h.engine.tick(); await delay(10);} assert.equal(h.state.issuePosts, 2);
   h.engine.completeManual(run.id, 'delivery', {...OUTPUT, summary: 'The owner inspected the synthetic change and independent checks.'}, OWNER); assert.equal(h.engine.run(run.id).status, 'completed'); assert.equal(h.state.issuePosts, 2); assert.ok([...h.state.issues.values()].every(issue => issue.status === 'done'));
 });
+
+test('new roles and agents default to max and preserve max/ultra on Multica requests', async t => {
+  const h = await fixture(t);
+  assert.ok(h.project.roles.every(role => role.effort === 'max'));
+  let revision = h.project.revision;
+  for (const effort of ['max', 'ultra'] as const) {
+    const saved = await h.platform.saveRole(h.project.id, revision, {name: 'Synthetic ' + effort, effort}, OWNER);
+    revision = saved.revision;
+    const role = saved.roles.at(-1)!;
+    assert.equal(role.effort, effort);
+    assert.equal(h.state.agents.get(role.multica!.agentId!)!.thinking_level, effort);
+  }
+  const agent = await h.platform.saveAgent(h.project.id, {name:'Synthetic custom', runtime_id:'synthetic-runtime'}, OWNER);
+  assert.equal(h.state.agents.get(agent.id)!.thinking_level, 'max');
+  await h.platform.saveAgent(h.project.id, {thinking_level:'ultra'}, OWNER, agent.id);
+  assert.equal(h.state.agents.get(agent.id)!.thinking_level, 'ultra');
+  await h.platform.saveAgent(h.project.id, {name:'Synthetic renamed'}, OWNER, agent.id);
+  assert.equal(h.state.agents.get(agent.id)!.thinking_level, 'ultra');
+  await assert.rejects(h.platform.saveAgent(h.project.id, {thinking_level:'extreme'}, OWNER, agent.id), code('INVALID_EFFORT'));
+  const saved = await h.platform.saveRole(h.project.id, revision, {name:'Synthetic default'}, OWNER);
+  assert.equal(saved.roles.at(-1)!.effort, 'max');
+});

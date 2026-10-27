@@ -1,7 +1,10 @@
 export const EXECUTORS = ['manual', 'codex', 'github', 'pipeline'] as const;
 export type Executor = typeof EXECUTORS[number];
 export type WorkStatus = 'queued' | 'running' | 'waiting' | 'review' | 'paused' | 'skipped' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh';
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+export type Effort = typeof EFFORTS[number];
+export const DEFAULT_EFFORT: Effort = 'max';
+export const EFFORT_LABELS: Record<Effort, string> = {low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra'};
 export type ControlTool = 'context.read' | 'knowledge.search' | 'knowledge.write' | 'pipeline.read' | 'pipeline.propose' | 'pipeline.write' | 'run.read' | 'run.start' | 'intake.route' | 'project.bootstrap';
 export const CONTROL_TOOLS: ControlTool[] = ['context.read','knowledge.search','knowledge.write','pipeline.read','pipeline.propose','pipeline.write','run.read','run.start','intake.route','project.bootstrap'];
 export type RoleProfile = {

@@ -96,3 +96,11 @@ Each requirement needs current evidence; the old technical test count does not e
 10. Operate the complete project-to-delivery journey in English/Simplified Chinese, including responsive layout, keyboard, loading/empty/error/waiting and recovery. User product review is separate from engineering checks.
 
 Track implementation and unpassed checks explicitly. Keep the full requested product scope intact while work proceeds.
+
+## Reasoning settings (bounded issue #6)
+
+Every newly created project role, including Team, Settings and server creation paths, defaults to native `max`; new connected agents do too. Explicit choices and copied role settings remain explicit. Existing private configurations and frozen run snapshots are never migrated. Model IDs, permissions, skills, tools and credentials remain unchanged.
+
+The native values `low`, `medium`, `high`, `xhigh`, `max`, `ultra` round-trip through validation, serialization and Codex/Multica execution without downgrading. In every locale their exact display labels are Light, Medium, High, Extra High, Max, Ultra, respectively. Team role, Settings role and connected-agent editors show these labels and nearby guidance in the current UI locale only (English or Simplified Chinese), backed by the shared language resources, with a [CodexRadar reference](https://codexradar.com/?station=codex). This reference is advisory; the installed model catalog and runtime determine actual support and availability. Unsupported choices must never be silently replaced.
+
+Acceptance requires focused tests for new defaults, max/ultra validation and adapter pass-through, supported choices and locale-independent labels, plus typecheck and build. Independent QA exercises the three editors in English and Simplified Chinese. The supervising owner applies Max to active roles through the UI after delivery; this implementation does not change them. No paid model probes or publication are required. See [official model and reasoning guidance](https://learn.chatgpt.com/docs/agent-configuration/subagents#choosing-models-and-reasoning).
