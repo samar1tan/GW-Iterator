@@ -58,6 +58,33 @@ const observed=Date.now();
 const account:AllowanceAssessment={key:'synthetic-assessment',status:'learning',code:'ACCOUNT_ALLOWANCE_LEARNING',action:'continue',account:{id:'synthetic-observation',status:'available',observedAt:new Date(observed).toISOString(),expiresAt:new Date(observed+3600000).toISOString(),source:'local-codex',exhausted:false,windows:[{bucketId:'example-bucket',slot:'primary',usedPercent:37.5,remainingPercent:62.5,windowDurationMins:360,resetsAt:Math.floor(observed/1000)+21600},{bucketId:'example-bucket',slot:'secondary',usedPercent:12,remainingPercent:88,windowDurationMins:4320,resetsAt:Math.floor(observed/1000)+259200}]},trend:{sampleCount:0,comparableCount:0,direction:'unknown',windows:[],attribution:'shared-account-observation',reasons:['SHARED_ACCOUNT_ACTIVITY','NO_SAMPLES']},activeExecutions:0,target:{projectId:project.id,pipelineId:pipeline.id,stageId:'prepare',roleId:'owner',model:'example-model',effort:'max',kind:'stage'}};
 const intake:Intake={id:'example-goal',projectId:project.id,request:run.goal,baseline:run.baseline,status:'failed',createdAt:project.createdAt,updatedAt:project.updatedAt,routerRunId:'example-coordinator',idempotencyKey:'example-goal-key',targetRunIds:[run.id],rounds:[],policy:{maxRounds:2,maxParallel:1,maxTotalTokens:50000,maxElapsedSeconds:600},canRetry:true,resourceMode:'account',account};
 
+test('stage and collapsed audit results share safe Markdown without repeating output in the activity preview',async t=>{
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{I18nContext,makeI18n}=await vite.ssrLoadModule('/web/i18n.tsx'),{RunWorkspace}=await vite.ssrLoadModule('/web/platform/RunWorkspace.tsx'),{ActivityTimeline}=await vite.ssrLoadModule('/web/platform/ActivityTimeline.tsx');
+  const summary='## Evidence\n\n**Checked**\n\n- Retained source\n\n| State | Result |\n| --- | --- |\n| Before | Unknown |\n\n[Read evidence](#evidence) and a note.[^source]\n\n[^source]: Synthetic source.\n\n<script>synthetic()</script>\n\n<iframe src="https://example.com/embed"></iframe>\n\n[Unsafe](javascript:alert%281%29) [Local](./source.md)\n\n![Explicit image](https://example.com/image.png)';
+  const resultRun={...run,stages:run.stages.map((stage,index)=>index?stage:{...stage,attempts:stage.attempts.map(attempt=>({...attempt,output:{...attempt.output!,summary}}))})};
+  const stageEvent={...event(2,'stage.result'),message:summary};
+  for(const locale of ['en','zh-CN']){
+    const render=(component:unknown,props:Record<string,unknown>)=>renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(component as typeof RunWorkspace,props)));
+    const html=render(RunWorkspace,{run:resultRun,events:[stageEvent],onSelect(){},onRun(){},onBack(){},onChanged:async()=>{}});
+    const main=html.slice(html.indexOf('<section class="pf-result-summary">'),html.indexOf('<section class="pf-artifacts">'));
+    assert.match(main,/<h2[^>]*>Evidence<\/h2>/);assert.ok(main.includes('<strong>Checked</strong>'));assert.ok(main.includes('<li>Retained source</li>'));assert.ok(main.includes('<table>'));
+    assert.ok(!main.includes('<p class="pre-wrap">## Evidence'));
+    const ids=[...html.matchAll(/\sid="([^"]+)"/g)].map(match=>match[1]);assert.equal(new Set(ids).size,ids.length,'Stage output and its audit copy have distinct heading and footnote IDs.');
+    for(const type of ['stage.result','manual.completed','goal.answered','goal.completed']){
+      const activity=render(ActivityTimeline,{events:[{...stageEvent,type,data:{intakeId:'example-goal'}}]});
+      assert.ok(!activity.includes('class="pf-event-message"'),'Result text must not appear in the default activity preview.');
+      assert.match(activity,/<details><summary>[^<]+<\/summary><div class="knowledge-text knowledge-markdown">/);
+      assert.ok(activity.includes('<strong>Checked</strong>'));assert.ok(activity.includes('<table>'));
+      assert.ok(activity.includes('href="#/projects/example/workbench?goal=example-goal"'));
+      assert.doesNotMatch(activity,/<(?:script|iframe|img)\b/i);assert.doesNotMatch(activity,/href="(?:javascript:|data:|file:|\/\/)/i);
+      assert.ok(activity.includes('href="https://example.com/image.png"'));assert.ok(!activity.includes('href="./source.md"'));
+    }
+    assert.doesNotMatch(html,/<(?:script|iframe|img)\b/i);assert.doesNotMatch(html,/href="(?:javascript:|data:|file:|\/\/)/i);
+  }
+  assert.equal(resultRun.stages[0].attempts[0].output?.summary,summary);assert.equal(stageEvent.message,summary);
+});
+
 test('ordinary views render steps, real evidence and progressive recovery in both locales',async()=>{
   const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom'});
   try{
@@ -148,7 +175,7 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       const blocked=render(createElement(RunWorkspace,{run:blockedRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
       assert.ok(!blocked.includes('notice error'));
       assert.ok(!blocked.includes('notice warning'));
-      assert.ok(blocked.includes('<p class="pre-wrap">'+blockedSummary+'</p>'));
+      assert.ok(blocked.includes('<div class="knowledge-text knowledge-markdown"><p>'+blockedSummary+'</p>'));
       const distinctError='Example permission check failed.';
       const distinctRun={...blockedRun,stopReason:distinctError,stages:[{...blockedRun.stages[0],attempts:[{...blockedRun.stages[0].attempts[0],error:distinctError}]},blockedRun.stages[1]]};
       const distinct=render(createElement(RunWorkspace,{run:distinctRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));

@@ -20,7 +20,7 @@ import {ControlMcp} from './control-mcp.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
-import type {Actor,ContinueRunInput,IntegrationInfo,IntakeRetryInput,Pipeline,Project,Run,StartRunInput,TaskOutput} from './contracts.ts';
+import type {Actor,ContinueRunInput,IntegrationInfo,IntakeRetryInput,LessonLifecycleInput,Pipeline,Project,Run,StartRunInput,TaskOutput} from './contracts.ts';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
@@ -122,8 +122,9 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     if(resource==='bindings'&&method==='PATCH'){demand(Object.keys(input).every(key=>key==='expectedRevision'||key==='bindings'),'INVALID_PROJECT_BINDINGS','Send the project revision and bindings only.');json(response,await engine.updateBindings(id,Number(input.expectedRevision),input.bindings as never,actor));return;}
     if(resource==='skills'&&method==='GET'){json(response,{skills:await engine.codex.skills(engine.project(id).workspace)});return;}
     if(resource==='knowledge/sync'&&method==='POST'){json(response,await engine.sync(id,actor));return;}
-    if(resource==='knowledge'&&method==='GET'){engine.project(id);json(response,{entries:engine.search(id,url.searchParams.get('q')??'',url.searchParams.get('role')??undefined,url.searchParams.get('kind')??undefined)});return;}
+    if(resource==='knowledge'&&method==='GET'){engine.detail(id,actor);const status=url.searchParams.get('status')??'current';demand(status==='current'||status==='archived','INVALID_KNOWLEDGE_STATUS','Choose current knowledge or archived lessons.');if(status==='archived')demand(!actor.projectId,'OWNER_REQUIRED','Archived lesson management requires the local owner token.',403);json(response,{entries:engine.search(id,url.searchParams.get('q')??'',url.searchParams.get('role')??undefined,url.searchParams.get('kind')??undefined,status)});return;}
     if(resource==='knowledge/lessons'&&method==='POST'){json(response,engine.lesson(id,input as {title:string;content:string;roles?:string[];runId?:string},actor),201);return;}
+    const lessonLifecycle=resource.match(/^knowledge\/lessons\/([^/]+)$/);if(lessonLifecycle&&method==='PATCH'){json(response,engine.setLessonLifecycle(id,decodeURIComponent(lessonLifecycle[1]),input as LessonLifecycleInput,actor));return;}
     if(resource==='revisions'&&method==='GET'){engine.project(id);json(response,{project:engine.store.list<{id:string;projectId:string}>('project-revision').filter(item=>item.projectId===id),pipelines:engine.store.list<{id:string;projectId:string}>('pipeline-revision').filter(item=>item.projectId===id)});return;}
     if(resource==='intakes'&&method==='GET'){json(response,{intakes:intakeService.list(id)});return;}
     if(resource==='intakes'&&method==='POST'){engine.detail(id,actor);await engine.ensureExecutionReady(engine.project(id));json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}

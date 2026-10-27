@@ -45,8 +45,10 @@ export type Pipeline = {id: string; projectId: string; revision: number; name: s
 export type KnowledgeEntry = {
   id: string; projectId: string; sourceId: string; kind: KnowledgeSource['kind'] | 'lesson'; roles: string[];
   title: string; content: string; hash: string; revision: number; sourcePath?: string; sourceRevision?: string;
-  syncedAt: string; status: 'current' | 'missing' | 'error'; error?: string; errorCode?: 'SOURCE_CONFIGURATION_CHANGED'; originRunId?: string;
+  syncedAt: string; status: 'current' | 'missing' | 'error' | 'archived'; error?: string; errorCode?: 'SOURCE_CONFIGURATION_CHANGED'; originRunId?: string;
+  lifecycleRevision?: number;
 };
+export type LessonLifecycleInput = {expectedRevision:number;expectedLifecycleRevision:number;archived:boolean};
 export type Artifact = {label: string; path?: string; url?: string};
 export type TaskOutput = {outcome: 'done' | 'revise' | 'blocked' | 'no_change'; summary: string; artifacts: Artifact[]; observations: string[]};
 export type Usage = {input: number; output: number; total: number; cachedInput?:number};

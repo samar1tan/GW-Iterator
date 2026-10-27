@@ -7,13 +7,13 @@ export type CreatedWork =
   | {kind: 'continued-intake'; value:Intake;previous:Pick<Intake,'routerRunId'|'status'|'updatedAt'|'controlRevision'|'workRecoveryHistory'>};
 
 function isPriorContinuationState(current:Intake,receipt:Extract<CreatedWork,{kind:'continued-intake'}>):boolean {
-  if(newRecoveryReceipt(receipt.value,receipt.previous))return (current.controlRevision??0)<=(receipt.value.controlRevision??0)&&[receipt.previous.routerRunId,receipt.value.routerRunId].includes(current.routerRunId)&&!recoveryReceiptObserved(current,receipt.value);
+  if(newRecoveryReceipt(receipt.value,receipt.previous)||current.routerRunId===receipt.value.routerRunId)return (current.controlRevision??0)<=(receipt.value.controlRevision??0)&&[receipt.previous.routerRunId,receipt.value.routerRunId].includes(current.routerRunId)&&!recoveryReceiptObserved(current,receipt.value);
   const earlierPhase=current.status===receipt.previous.status||receipt.previous.status==='clarification'&&['routing','dispatched','retry_wait'].includes(current.status);
   return current.routerRunId===receipt.previous.routerRunId&&earlierPhase&&(current.controlRevision??0)===(receipt.previous.controlRevision??0)&&Date.parse(current.updatedAt)<=Date.parse(receipt.previous.updatedAt);
 }
 function continuationObserved(current:Intake,receipt:Extract<CreatedWork,{kind:'continued-intake'}>):boolean {
-  if(newRecoveryReceipt(receipt.value,receipt.previous))return recoveryReceiptObserved(current,receipt.value);
-  if(current.routerRunId===receipt.value.routerRunId||(current.controlRevision??0)>(receipt.previous.controlRevision??0))return true;
+  if(newRecoveryReceipt(receipt.value,receipt.previous)||current.routerRunId===receipt.value.routerRunId)return recoveryReceiptObserved(current,receipt.value);
+  if((current.controlRevision??0)>(receipt.previous.controlRevision??0))return true;
   if(current.routerRunId===receipt.previous.routerRunId||receipt.value.supervisorRunIds?.includes(current.routerRunId))return false;
   return !!current.supervisorRunIds?.includes(receipt.value.routerRunId)||Date.parse(current.updatedAt)>Date.parse(receipt.value.updatedAt);
 }

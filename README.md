@@ -46,6 +46,8 @@ The [setup guide](docs/multica-setup.md) covers prerequisites, native permission
 
 ## Work in a project
 
+**Projects** is the global entry for starting work and supervising outcomes across projects. Open one project for its workspace and configuration:
+
 - **Workbench** shows current outcomes, pending decisions and delivered artifacts. A general request can coordinate several saved workflows.
 - **Pipelines** contains reusable definitions and executions. The visual editor supports dependencies, conditions, human gates, child pipelines and bounded return paths. A focused change starts with implementation, independent QA and delivery review.
 - **Team** connects role contracts to actual agents, skills, MCP tools and runtimes. Role changes create revisions; older runs keep their basis.

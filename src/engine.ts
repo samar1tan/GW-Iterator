@@ -2,7 +2,7 @@ import {CONVERSATION_DATA_RULE} from './intake-context.ts';
 import {budgetTokens,runPolicy} from './contracts.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {stat} from 'node:fs/promises';
-import type {Actor,Attempt,AuditEvent,ContinueRunInput,ControlTool,GoalAllowance,Intake,KnowledgeEntry,KnowledgeSyncResult,Pipeline,Project,ProjectBindings,ProjectDetail,ProjectOverview,Proposal,Run,RunAllowance,RunPolicy,RunRecovery,Stage,StartRunInput,TaskOutput,Usage,WorkStatus} from './contracts.ts';
+import type {Actor,Attempt,AuditEvent,ContinueRunInput,ControlTool,GoalAllowance,Intake,KnowledgeEntry,KnowledgeSyncResult,LessonLifecycleInput,Pipeline,Project,ProjectBindings,ProjectDetail,ProjectOverview,Proposal,Run,RunAllowance,RunPolicy,RunRecovery,Stage,StartRunInput,TaskOutput,Usage,WorkStatus} from './contracts.ts';
 import type {CodexAdapter,GithubAdapter,AdapterEvent,AgentExecutor} from './adapters/types.ts';
 import type {GoalPlanner} from './goal-planner.ts';
 import {Store} from './store.ts';
@@ -95,13 +95,30 @@ export class Engine {
       const retained=new Set(result.entries.map(entry=>entry.id));
       // Only remove initial entries; lessons may be added while source files are read.
       for(const entry of old)if(!retained.has(entry.id))this.store.delete('knowledge',entry.id);
-      for(const entry of result.entries){delete entry.errorCode;this.store.put('knowledge',entry);}
+      for(const [index,entry] of result.entries.entries()){
+        // Source reads must not undo an owner's concurrent lesson lifecycle decision.
+        const current=entry.kind==='lesson'?this.store.get<KnowledgeEntry>('knowledge',entry.id):undefined;
+        if(current?.projectId===id&&current.kind==='lesson'){result.entries[index]=current;continue;}
+        delete entry.errorCode;this.store.put('knowledge',entry);
+      }
       const receipt:KnowledgeIndexReceipt={id,at:now(),sources:Object.fromEntries(project.knowledgeSources.filter(source=>!result.entries.some(entry=>entry.kind!=='lesson'&&entry.sourceId===source.id&&entry.status!=='current')).map(source=>[source.id,sourceSignature(project,source)])),stats:result.stats};this.store.put('knowledge-index',receipt);
       this.audit(actor,id,'knowledge.synced','Project knowledge synchronized.',{data:result.stats});
       checkpoint?.(result);
     });return result;}finally{this.syncing.delete(id);}
   }
-  search(id:string,query:string,role?:string,kind?:string):KnowledgeEntry[]{return searchKnowledge(this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),query,role,kind);}
+  search(id:string,query:string,role?:string,kind?:string,status:'current'|'archived'='current'):KnowledgeEntry[]{return searchKnowledge(this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),query,role,kind,status);}
+  setLessonLifecycle(id:string,entryId:string,input:LessonLifecycleInput,actor:Actor):KnowledgeEntry{
+    this.scope(actor,id);demand(!actor.projectId,'OWNER_REQUIRED','Lesson archive and restore require the local owner token.',403);this.project(id);
+    demand(isObject(input)&&Object.keys(input).every(key=>['expectedRevision','expectedLifecycleRevision','archived'].includes(key))&&Number.isSafeInteger(input.expectedRevision)&&input.expectedRevision>=1&&Number.isSafeInteger(input.expectedLifecycleRevision)&&input.expectedLifecycleRevision>=0&&typeof input.archived==='boolean','INVALID_LESSON_LIFECYCLE','Send the current lesson revisions and archive decision.');
+    return this.store.transaction(()=>{
+      const entry=this.store.get<KnowledgeEntry>('knowledge',entryId);demand(entry&&entry.projectId===id,'KNOWLEDGE_NOT_FOUND','This knowledge entry is not in the project.',404);
+      demand(entry.kind==='lesson'&&['current','archived'].includes(entry.status),'LESSON_REQUIRED','Archive and restore apply only to retained lessons.');
+      demand(entry.revision===input.expectedRevision&&(entry.lifecycleRevision??0)===input.expectedLifecycleRevision,'REVISION_CONFLICT','This lesson changed. Refresh before changing its lifecycle.',409);
+      const status=input.archived?'archived':'current';if(entry.status===status)return entry;
+      const next:KnowledgeEntry={...entry,status,lifecycleRevision:(entry.lifecycleRevision??0)+1};this.store.put('knowledge',next);
+      this.audit(actor,id,input.archived?'knowledge.lesson_archived':'knowledge.lesson_restored',entry.title,{runId:entry.originRunId,data:{entryId:entry.id,revision:entry.revision,lifecycleRevision:next.lifecycleRevision,previousStatus:entry.status,status}});return next;
+    });
+  }
   lesson(id:string,input:{title:string;content:string;roles?:string[];runId?:string},actor:Actor):KnowledgeEntry{this.scope(actor,id,'knowledge.write');const project=this.project(id);demand(text(input.title,300)&&text(input.content,200000),'INVALID_LESSON','Provide a title and useful lesson.');const roles=input.roles??[];demand(roles.every(role=>project.roles.some(item=>item.id===role)),'INVALID_ROLES','Choose project roles.');if(input.runId)demand(this.run(input.runId).projectId===id,'PROJECT_SCOPE','Source run belongs to another project.');const entry:KnowledgeEntry={id:newId(),projectId:id,sourceId:'run-lessons',kind:'lesson',roles,title:input.title,content:input.content,hash:digest(input.content),revision:1,syncedAt:now(),status:'current',...(input.runId?{originRunId:input.runId}:{})};this.store.transaction(()=>{this.store.put('knowledge',entry);this.audit(actor,id,'knowledge.lesson',input.title,{runId:input.runId,data:{entryId:entry.id}});});return entry;}
   startRun(input:StartRunInput,actor:Actor,basis?:Run['snapshot'],allocation?:RunPolicy,accountApproval?:AccountStepApproval):Run{
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);

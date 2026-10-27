@@ -1,4 +1,4 @@
-import {useId,useState} from 'react';
+import {useId,useRef,useState} from 'react';
 import type {Pipeline,Project,Run,Stage} from '../../src/contracts';
 import {EFFORT_LABELS} from '../../src/contracts';
 import {api,uid} from '../api';
@@ -12,9 +12,11 @@ import type {AllowanceAssessment} from '../../src/account-allowance-types';
 import {AccountAllowance,canRequestAccountStep,accountStepNeedsApproval,accountStepAuthorization} from './AccountAllowance';
 import {useTextDraft} from './useTextDraft';
 import {submittedDraftKey} from './workStart';
+import {requestEnterAction} from './requestKeys';
 
 export function LaunchPipeline({pipeline,pipelines=[],project,onClose,onStarted}:{pipeline:Pipeline;pipelines?:Pipeline[];project:Project;onClose:()=>void;onStarted:(run:Run)=>Promise<void>}) {
   const {p,number}=useCopy(),formId=useId();
+  const composing=useRef(false);
   const [goal,setGoal,clearGoal]=useTextDraft(`pipeline:${project.id}:${pipeline.id}`),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(null),[storedKey,setStoredKey,clearStoredKey]=useTextDraft(`pipeline-key:${project.id}:${pipeline.id}`),[account,setAccount]=useState<AllowanceAssessment|null>(null);
   const {requiresAccount,manualOnly,modelRoles:scopeRoles}=workflowScope(pipeline,pipelines);
   const readiness=useProjectReadiness(project,requiresAccount),sourceBlocked=requiresAccount&&readiness.readiness?.workspace.status!=='ready';
@@ -30,7 +32,8 @@ export function LaunchPipeline({pipeline,pipelines=[],project,onClose,onStarted}
   return <Modal title={p('launchPipeline',{name:pipeline.name})} busy={busy} onClose={onClose} footer={footer}>
     <form id={formId} className="pf-launch-form" onSubmit={event=>void submit(event)}>
       <ErrorNotice error={error}/>{requiresAccount&&<ProjectReadinessNotice {...readiness}/>}
-      <Field label={p('launchTask')}><textarea autoFocus required rows={3} value={goal} placeholder={p('launchTaskPlaceholder')} onChange={event=>setGoal(event.target.value)}/></Field>
+      <Field label={p('launchTask')}><textarea id={formId+'-task'} autoFocus required rows={3} value={goal} placeholder={p('launchTaskPlaceholder')} onChange={event=>setGoal(event.target.value)} aria-keyshortcuts="Enter Meta+Enter Control+Enter" aria-describedby={formId+'-keys'} onCompositionStart={()=>{composing.current=true;}} onCompositionEnd={()=>{composing.current=false;}} onKeyDown={event=>{const action=requestEnterAction(event.nativeEvent,composing.current);if(action==='native')return;event.preventDefault();if(action==='submit'&&!disabled)event.currentTarget.form?.requestSubmit();}}/></Field>
+      <span className="pf-request-keys" id={formId+'-keys'}>{p('requestKeysHint')}</span>
       <LaunchPath pipeline={pipeline} project={project}/>
       {modelRoles.length>0&&<div className="pf-launch-models" aria-label={p('roleDefaults')}><Icon name="cpu"/><span>{models.length===1?models[0]:p('modelConfigurationCount',{count:models.length})}</span></div>}
       {manualOnly&&<p className="pf-launch-manual"><Icon name="team"/>{p('humanWorkflow')}</p>}

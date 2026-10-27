@@ -22,6 +22,8 @@ test('launch presents task and true execution structure with a separately associ
     const props={pipeline,project,onClose:()=>{},onStarted:async()=>{}};
     const html=render(locale,LaunchPipeline,props),formId=html.match(/<form id="([^"]+)"/)?.[1];
     assert.ok(formId);const submit=html.match(/<button(?=[^>]*type="submit")[^>]*>/)?.[0];assert.ok(submit?.includes(`form="${formId}"`));
+    const task=html.match(/<textarea[^>]*>/)?.[0];assert.ok(task?.includes('aria-keyshortcuts="Enter Meta+Enter Control+Enter"'));assert.ok(task?.includes(`aria-describedby="${formId}-keys"`));
+    assert.ok(html.includes(`id="${formId}-keys"`));assert.ok(html.includes(locale==='en'?'Enter to send · Shift+Enter for a new line':'Enter 发送 · Shift+Enter 换行'));
     assert.ok(html.indexOf('</form>')<html.indexOf('<footer'),'Launch actions must remain outside the scrolling form body.');
     assert.ok(html.includes('pf-launch-path is-serial'));assert.ok(html.includes('Accept delivery'));
     const beforeDetails=html.split('<details class="pf-launch-details"')[0];

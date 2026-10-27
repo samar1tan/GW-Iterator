@@ -9,3 +9,10 @@ export function requestSummary(request:string):string{
  const prefix=units.slice(0,63).join(''),boundary=prefix.lastIndexOf(' ');
  return (boundary>=prefix.length*.65?prefix.slice(0,boundary):prefix).trimEnd()+'…';
 }
+
+
+/** Compact display text; the complete Markdown remains in the result reader. */
+export function resultPreview(content:string):string{
+ const plain=content.replace(/!?\[([^\]\n]+)\]\([^\n)]*\)/gu,'$1').replace(/`([^`\n]+)`/gu,'$1').replace(/\*\*(\S(?:[^\n]*?\S)?)\*\*/gu,'$1').replace(/(?<![\p{L}\p{N}])__(\S(?:[^\n]*?\S)?)__(?![\p{L}\p{N}])/gu,'$1');
+ return requestSummary(plain);
+}

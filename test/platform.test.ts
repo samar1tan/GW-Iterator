@@ -297,6 +297,29 @@ test('role revisions preserve the remote agent used by an earlier frozen project
   assert.notEqual(revised.id, frozen.id); assert.notEqual(revised.name, frozen.name); assert.equal(new Set([...h.state.agents.values()].map(agent => agent.name)).size, h.state.agents.size); assert.match(revised.instructions!, /deliberately revised/); assert.equal((await h.platform.agent(h.project, role, false)).instructions, original.instructions);
 });
 
+test('duplicating a role preserves explicit or inherited capability bindings in a new immutable agent revision',async t=>{
+  for(const selection of ['explicit','inherited','empty'] as const)await t.test(selection,async sub=>{
+    const h=await fixture(sub),template:MulticaAgent={id:'synthetic-shared-template',workspace_id:WORKSPACE,status:'active',name:'Synthetic shared template',description:'An independently authored reusable template.',model:'synthetic-model',runtime_id:'synthetic-runtime',skills:[{id:'synthetic-inherited-skill',name:'Synthetic inherited skill'}]};
+    h.state.agents.set(template.id,structuredClone(template));
+    const bindings:NonNullable<RoleProfile['multica']>={agentId:template.id,runtimeId:'synthetic-runtime',...(selection==='explicit'?{skillIds:['synthetic-selected-skill'],mcpServerIds:['synthetic-selected-server']}:selection==='empty'?{skillIds:[],mcpServerIds:[]}:{} )};
+    const originalRole={...h.project.roles.find(value=>value.id==='development')!,multica:bindings};
+    const source=await h.platform.saveRole(h.project.id,h.project.revision,originalRole,OWNER,originalRole.id),role=source.roles.find(value=>value.id===originalRole.id)!;
+    const frozen=structuredClone(source),agent=structuredClone(h.state.agents.get(role.multica!.agentId!)!);
+    const copied=await h.platform.duplicateRole(source.id,role.id,source.revision,OWNER),copy=copied.roles.find(value=>!source.roles.some(previous=>previous.id===value.id))!;
+    assert.ok(copy);assert.notEqual(copy.id,role.id);assert.equal(copy.name,role.name+' copy');assert.equal(copy.multica?.runtimeId,role.multica?.runtimeId);
+    assert.deepEqual(copy.multica?.skillIds,role.multica?.skillIds);assert.deepEqual(copy.multica?.mcpServerIds,role.multica?.mcpServerIds);
+    assert.equal(Object.hasOwn(copy.multica!,'skillIds'),selection!=='inherited');assert.equal(Object.hasOwn(copy.multica!,'mcpServerIds'),selection!=='inherited');
+    assert.equal(copy.sandbox,role.sandbox);assert.deepEqual(copy.tools,role.tools);assert.deepEqual(copy.skills,role.skills);assert.notEqual(copy.multica?.agentId,role.multica?.agentId);
+    const copyAgent=h.state.agents.get(copy.multica!.agentId!)!;
+    assert.deepEqual(copyAgent.skills?.map(skill=>skill.id),selection==='explicit'?['synthetic-selected-skill']:selection==='empty'?[]:['synthetic-inherited-skill']);
+    const mcpPosts=h.state.requests.filter(request=>request.method==='POST'&&request.path===`/api/agents/${copyAgent.id}/mcp-servers`);
+    assert.deepEqual(mcpPosts.map(request=>request.body.server_id),selection==='explicit'?['synthetic-selected-server']:[]);
+    assert.deepEqual(h.engine.project(source.id).roles.find(value=>value.id===role.id),role);assert.deepEqual(h.state.agents.get(agent.id),agent);assert.deepEqual(source,frozen);
+    await assert.rejects(h.platform.saveAgent(source.id,{instructions:'Synthetic attempt to mutate a frozen role agent.'},OWNER,copyAgent.id),code('ROLE_REVISION_IMMUTABLE'));
+    assert.equal(h.state.issuePosts,0);assert.equal(h.state.tasks.size,0,'Role duplication must not start provider work.');
+  });
+});
+
 test('pre-assignment metadata failures recover without invented output, usage or execution references', async t => {
   for (const history of ['recorded', 'legacy-without-record'] as const) await t.test(history, async sub => {
     const h = await fixture(sub); h.state.failAgentCreation = true;

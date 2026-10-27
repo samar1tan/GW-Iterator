@@ -14,9 +14,10 @@ export function workRecoveryTiming(record:WorkRecoveryRecord,now:number){
 /** A same-router recovery receipt has its own durable observation identity. */
 export function recoveryReceiptObserved(current:Intake,receipt:Intake):boolean {
   if((current.controlRevision??0)>(receipt.controlRevision??0))return true;
+  if((current.controlRevision??0)<(receipt.controlRevision??0))return false;
   if(current.routerRunId!==receipt.routerRunId&&current.supervisorRunIds?.includes(receipt.routerRunId))return true;
   const expected=currentWorkRecovery(receipt),actual=currentWorkRecovery(current);
-  if(!expected)return true;
+  if(!expected)return current.routerRunId===receipt.routerRunId&&(current.limitRevisions?.length??0)>=(receipt.limitRevisions?.length??0)&&Date.parse(current.updatedAt)>=Date.parse(receipt.updatedAt);
   if(!actual)return false;
   if(actual.id!==expected.id)return !!current.workRecoveryHistory?.some(record=>record.id===expected.id)||Date.parse(actual.startedAt)>Date.parse(expected.startedAt);
   return phaseOrder[actual.phase]>phaseOrder[expected.phase]||actual.phase===expected.phase&&actual.checks>=expected.checks;

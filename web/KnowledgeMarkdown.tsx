@@ -19,6 +19,28 @@ function markLeadingTitle({title}: {title?: string}) {
   };
 }
 
+function scopeDocumentIds({prefix}: {prefix?:string}) {
+  return (tree:DocumentNode)=>{
+    if(!prefix)return;
+    const identifiers=new Map<string,string>();
+    const visit=(node:DocumentNode,action:(node:DocumentNode)=>void)=>{action(node);for(const child of node.children??[])visit(child,action);};
+    visit(tree,node=>{const id=node.properties?.id;if(typeof id==='string')identifiers.set(id,prefix+id);});
+    visit(tree,node=>{
+      const properties=node.properties;if(!properties)return;
+      if(typeof properties.id==='string')properties.id=identifiers.get(properties.id)??properties.id;
+      if(typeof properties.href==='string'&&properties.href.startsWith('#')){
+        const fragment=properties.href.slice(1);let decoded=fragment;try{decoded=decodeURIComponent(fragment);}catch{}
+        const target=identifiers.get(fragment)??identifiers.get(decoded);if(target)properties.href='#'+target;
+      }
+      for(const name of ['ariaDescribedBy','ariaLabelledBy']){
+        const value=properties[name];
+        if(Array.isArray(value))properties[name]=value.map(id=>typeof id==='string'?identifiers.get(id)??id:id);
+        else if(typeof value==='string')properties[name]=value.split(/\s+/).map(id=>identifiers.get(id)??id).join(' ');
+      }
+    });
+  };
+}
+
 function safeDestination(value: string): string {
   if (/^[\u0000-\u0020]|[\u0000-\u001f\u007f]/.test(value)) return '';
   if (/^(https?:|mailto:)/i.test(value)) {
@@ -28,7 +50,7 @@ function safeDestination(value: string): string {
   return /^(?:[a-z][a-z0-9+.-]*:|[\\/]{2})/i.test(value) ? '' : value;
 }
 
-export function KnowledgeMarkdown({content, title, documentHref}: {content: string; title?: string; documentHref: string}) {
+export function KnowledgeMarkdown({content,title,documentHref,idPrefix=''}:{content:string;title?:string;documentHref:string;idPrefix?:string}) {
   const {t} = useI18n();
   const reader = useRef<HTMLDivElement>(null);
   const link = (href: string | undefined, children: ReactNode, props: AnchorHTMLAttributes<HTMLAnchorElement> = {}) => {
@@ -39,7 +61,7 @@ export function KnowledgeMarkdown({content, title, documentHref}: {content: stri
       let fragment: string;
       try { fragment = decodeURIComponent(href.slice(1)); } catch { return; }
       const target = [...(reader.current?.querySelectorAll<HTMLElement>('[id]') ?? [])]
-        .find(element => element.id === fragment || element.id === headingPrefix + fragment);
+        .find(element => element.id === fragment || element.id === idPrefix + headingPrefix + fragment);
       if (target) {
         if (!target.hasAttribute('tabindex') && target.tabIndex < 0) target.tabIndex = -1;
         target.scrollIntoView({block: 'start'});
@@ -53,7 +75,7 @@ export function KnowledgeMarkdown({content, title, documentHref}: {content: stri
     skipHtml
     urlTransform={safeDestination}
     remarkPlugins={[remarkGfm]}
-    rehypePlugins={[[rehypeSlug, {prefix: headingPrefix}], [markLeadingTitle, {title}]]}
+    rehypePlugins={[[rehypeSlug, {prefix: headingPrefix}], [markLeadingTitle, {title}], [scopeDocumentIds,{prefix:idPrefix}]]}
     remarkRehypeOptions={{footnoteLabel: t('markdownFootnotes'), footnoteBackLabel: t('markdownFootnoteBack')}}
     components={{
       a: ({node, href, children, ...props}) => link(href, children, props),

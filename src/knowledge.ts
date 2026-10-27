@@ -320,13 +320,13 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
 }
 
 /** Search current project entries with deterministic, Unicode-aware substring matching. */
-export function searchKnowledge(entries: KnowledgeEntry[], query: string, role?: string, kind?: string): KnowledgeEntry[] {
+export function searchKnowledge(entries: KnowledgeEntry[], query: string, role?: string, kind?: string, status:'current'|'archived'='current'): KnowledgeEntry[] {
   const normalize = (text: string): string => text.normalize('NFKC').toLowerCase();
   const phrase = normalize(query).trim();
   const terms = phrase.split(/\s+/).filter(Boolean);
   return entries
     .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => entry.status === 'current'
+    .filter(({ entry }) => (status==='archived'?entry.kind==='lesson'&&entry.status==='archived':entry.status==='current')
       && (!role || entry.roles.length === 0 || entry.roles.includes(role))
       && (!kind || entry.kind === kind))
     .map(({ entry, index }) => {
