@@ -1,6 +1,11 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  processing:'正在处理…',
+  unsupportedEffort:'{model} 不支持 {effort}。运行前请选择可用的强度，或改用支持该强度的模型。',
+  invalidProject:'请填写项目名称，并使用本地项目目录的完整绝对路径。',
+  projectWorkspaceHint:'填写已有项目目录的完整路径。接入不会移动文件，也不会启动模型任务。',
+  roleSaved:'角色已保存。刷新团队即可查看当前设置。',
   sourceSectionHelp: '可选：准确的 Markdown 标题。不填写时索引整份文档；修改其他来源设置会保留此范围。', noSourcesForRole: '没有适用于此角色的来源。选择全部角色可管理项目的来源。',
   sourceNeedsSync: '来源配置已变更。旧文本保留供查看，不再进入后续工作。', staleSourceRemoval: '打开此确认后，项目配置发生了变化。请先关闭并查看当前来源，再决定是否移除。', sourceRolesHelp: '不选择具体角色时，此来源对项目的所有角色可用。',
   adoptionIndexing: '项目配置已保存，正在索引选定的本地来源…', adoptionIndexed: '已记录首次知识同步结果。如有缺失或无法读取的来源，可在知识中处理。', adoptionIndexingFailed: '项目配置已保存，但首次索引未完成。请进入项目，在知识中同步来源。',

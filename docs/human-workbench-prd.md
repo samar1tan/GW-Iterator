@@ -97,3 +97,19 @@ The workbench should feel like a finished engineering product through hierarchy,
 Replace the flat, evenly bordered form treatment with a unified page masthead, clear primary/secondary columns, restrained content surfaces and readable rows. Give outcome entry, live steps/results and project settings distinct task-appropriate compositions using the same tokens. Keep real warnings, action names, keyboard focus, long content and both locales readable. No invented metrics, decorative data, extra configuration, remote fonts or paid model work are needed to prove the visual design.
 
 Acceptance is rendered and operational: compare the actual Workbench, execution and Settings journeys; inspect the remaining project/library/team/knowledge/modal surfaces in English and Simplified Chinese at ordinary desktop and narrow widths. Existing tests/build validate regressions, not artistic quality. Independent visual review must inspect the new screens, with actual findings resolved.
+
+## Human journey acceptance and continuity
+
+Evaluate the workbench from a person's intended outcome, without relying on implementation knowledge. A fresh project, an interrupted draft, a manual handoff and a failed observation are ordinary use, not edge cases that can require an agent operating backstage. Exercise a fresh isolated project and a bounded real request; keep controlled manual cases distinct from provider-backed execution.
+
+Preserve unsent outcome, pipeline-launch and stage-review text within the browser tab, scoped to its project/pipeline/attempt. Navigation, language changes and a reload must not silently erase it or move it into another project. Successful submission clears only its own draft. A confirmed start is separate from refreshing its observation: retain the created object's identity and retry observation without offering another start or changing its idempotency identity. Keep pending saves visible until their result is known.
+
+An awaiting human task shows its actual instructions and relevant upstream evidence before asking for a result. Newly added stages follow the selected stage by default, with their dependency visible; users can deliberately remove or change it for parallel work. Place added/duplicated graph nodes without overlap while preserving existing manual positioning. A person should not need to repair the graph layout before understanding a newly created workflow.
+
+Provide actionable localized project-path errors and a concise distinction between outcome coordination and running a known workflow. Complete outcome history must remain reachable beyond the workbench's initial recent entries. A saved knowledge lesson must have a direct path to the saved entry even when the previous filters exclude its kind or role. These repairs preserve the five destinations, permission boundaries and execution model.
+
+When the discovered model explicitly excludes the current effort, explain that incompatibility beside the selector and name the available choices to change. Preserve the saved value; never silently substitute another model or effort. Unknown catalog capabilities are not evidence of compatibility or incompatibility.
+
+New source registration from the project-wide Knowledge view defaults to project-wide availability, using the existing empty-role scope. Starting from a specific role keeps that explicit role. Do not enumerate today's entire team as a substitute for a project-wide default; saved source scopes remain unchanged.
+
+Acceptance covers first connection, draft continuity, author/save/reuse, manual blocking/retry/review/rework, pause/continue/stop, a bounded provider-backed outcome, knowledge registration/lookup/write receipts, settings/team edits and navigation/keyboard/layout in both locales. Record observed behavior, interventions, outstanding checks and independent review separately from automated test totals. Do not claim the human owner's product acceptance from agent-operated checks.

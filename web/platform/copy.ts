@@ -1,6 +1,12 @@
 import {useI18n} from '../i18n';
 
 const en = {
+  outcomeEntryHelp:'GWI can arrange the roles and workflow. To use a known workflow, run it below. Unsent text stays in this tab.',
+  tabDraftHelp:'Unsent text stays in this tab.',
+  showAllHistory:'Show all history ({count})', recentHistory:'Show recent history',
+  openSavedEntry:'Open saved entry',
+  preparedChangeHelp:'These changes are in the execution workspace. Accepting them does not update the project directory, merge or publish them.',
+  projectRefreshFailed:'Could not refresh this project. Recorded work and the current view are retained.',
   multicaLibrarySkills:'Multica skills',
   localCodexSkills:'Local Codex skill context',
   localCodexSkillsHelp:"GWI's native Codex execution reads these local files as skill context. Multica tasks use the separate skill-library bindings above.",
@@ -96,6 +102,12 @@ const en = {
 } as const;
 type Key = keyof typeof en;
 const zh: Record<Key,string> = {
+  outcomeEntryHelp:'由 GWI 安排角色与流程；已有流程可从下方直接运行。未发送的内容保留在当前标签页。',
+  tabDraftHelp:'未发送的内容保留在当前标签页。',
+  showAllHistory:'显示全部历史（{count}）', recentHistory:'只看近期历史',
+  openSavedEntry:'查看刚保存的条目',
+  preparedChangeHelp:'这是独立执行工作区中的准备稿。验收不会自动覆盖项目目录，也不会合并或发布。',
+  projectRefreshFailed:'无法刷新项目。已记录的工作和当前内容仍然保留，可重试刷新。',
   multicaLibrarySkills:'Multica 技能',
   localCodexSkills:'本地 Codex 技能上下文',
   localCodexSkillsHelp:'GWI 的原生 Codex 执行使用这些本地文件作为技能上下文。Multica 任务使用上方独立的技能库绑定。',

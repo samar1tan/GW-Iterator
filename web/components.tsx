@@ -21,7 +21,7 @@ export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?
 export function ErrorNotice({ error }: { error: unknown }) {
   const { t } = useI18n();
   if (!error) return null;
-  const messageKeys:Record<string,MessageKey>={REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
+  const messageKeys:Record<string,MessageKey>={INVALID_PROJECT:'invalidProject',REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
   const localizedKey=error instanceof APIError?messageKeys[error.code]:undefined;
   return <Notice tone="error"><div>{localizedKey?t(localizedKey):errorText(error)}</div>{error instanceof APIError && (localizedKey?<details><summary>{t('details')}</summary><code className="error-code">{error.code}</code><p>{errorText(error)}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details>:<><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>)}</Notice>;
 }
@@ -46,7 +46,7 @@ export function Modal({ title, children, onClose, wide = false, busy = false }: 
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
-  }}><header className="modal-header"><h2 id={titleId}>{title}</h2><Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div></section></div>;
+  }}><header className="modal-header"><h2 id={titleId}>{title}</h2>{busy&&<span className="modal-progress" role="status">{t('processing')}</span>}<Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div></section></div>;
 }
 export function Status({ value }: { value: WorkStatus }) {
   const { t } = useI18n(); return <span className={`status status-${value}`}><StateIcon status={value}/>{t(value === 'waiting' ? 'waitingStatus' : value)}</span>;
