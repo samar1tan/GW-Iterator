@@ -1,21 +1,16 @@
 import {useState} from 'react';
 import type {Intake,Pipeline,ProjectDetail,Run} from '../../src/contracts';
-import {api,safeURL,uid} from '../api';
+import {safeURL} from '../api';
 import {Button,Empty,ErrorNotice,Status} from '../components';
 import {Icon,StateIcon} from '../Icons';
 import {useCopy} from './copy';
-import {ProjectReadinessNotice,useProjectReadiness} from './ProjectReadiness';
 import {recommendPipelines} from './recommendations';
 import {requestSummary} from './requestSummary';
-import type {AllowanceAssessment} from '../../src/account-allowance-types';
-import {AccountAllowance,canRequestAccountStep,accountStepNeedsApproval,accountStepAuthorization} from './AccountAllowance';
-import {useTextDraft} from './useTextDraft';
-import {recordWorkStart,submittedDraftKey} from './workStart';
+import {RequestComposer} from './RequestComposer';
 
 export function Workbench({detail,onGoal,onCreated,onRun,onPipeline,onLibrary,onStartPipeline,onChanged,onSettings,onKnowledge}:{detail:ProjectDetail;onGoal:(id:string)=>void;onCreated?:(goal:Intake)=>void;onRun:(id:string,stageId?:string)=>void;onPipeline:(id:string)=>void;onLibrary:()=>void;onStartPipeline:(pipeline:Pipeline)=>Promise<void>;onChanged:()=>Promise<void>;onSettings?:()=>void;onKnowledge?:()=>void}) {
   const {p,t,date}=useCopy();
-  const readiness=useProjectReadiness(detail.project);
-  const [request,setRequest,clearRequest]=useTextDraft(`outcome:${detail.project.id}`), [busy,setBusy]=useState(false), [error,setError]=useState<unknown>(null), [storedKey,setStoredKey,clearStoredKey]=useTextDraft(`outcome-key:${detail.project.id}`), [account,setAccount]=useState<AllowanceAssessment|null>(null), [historyExpanded,setHistoryExpanded]=useState(false);
+  const [historyExpanded,setHistoryExpanded]=useState(false),[error,setError]=useState<unknown>(null);
   const goals=detail.intakes??[], activeGoals=goals.filter(goal=>['routing','dispatched','retry_wait','clarification'].includes(goal.status));
   const goalRuns=new Set(goals.flatMap(goal=>goal.targetRunIds));
   const runs=detail.runs.filter(run=>!run.parentRunId&&!run.executionKind&&!goalRuns.has(run.id)), current=runs.filter(run=>['queued','running','waiting','review','paused'].includes(run.status));
@@ -23,18 +18,11 @@ export function Workbench({detail,onGoal,onCreated,onRun,onPipeline,onLibrary,on
   const deliverables=detail.runs.filter(run=>!run.executionKind).flatMap(run=>run.stages.flatMap(stage=>(stage.attempts.at(-1)?.output?.artifacts??[]).map(artifact=>({artifact,run,stage})))).slice(0,8);
   const recommendations=recommendPipelines(detail.pipelines,detail.runs,detail.project.roles);
   const pristine=goals.length===0&&runs.length===0;
-  const submit=async(event:React.FormEvent)=>{
-    event.preventDefault(); if(!request.trim()||busy||readiness.readiness?.workspace.status!=='ready'||!canRequestAccountStep(account))return;
-    setBusy(true);setError(null);const submission=submittedDraftKey(request.trim(),storedKey,uid);setStoredKey(JSON.stringify(submission));
-    try {await recordWorkStart(()=>api<Intake>(`/api/projects/${detail.project.id}/intakes`,{method:'POST',body:{request:request.trim(),idempotencyKey:submission.key,resourceMode:'account',...accountStepAuthorization(account)}}),result=>{clearRequest(request);clearStoredKey(JSON.stringify(submission));if(onCreated)onCreated(result);else onGoal(result.id);},onChanged,setError);} catch(value){setError(value);} finally{setBusy(false);}
-  };
   const endedGoals=goals.filter(goal=>!activeGoals.includes(goal)),endedRuns=runs.filter(run=>!current.includes(run));
   const historyGoals=historyExpanded?endedGoals:endedGoals.slice(0,6), historyRuns=historyExpanded?endedRuns:endedRuns.slice(0,6);
   return <div className="pf-workbench">
     <header className="pf-view-header"><div><h1>{p('workbench')}</h1><p className="pf-view-subtitle">{detail.project.name}</p></div><div className="pf-work-summary"><span>{p('activeCount',{count:activeGoals.length+current.length})}</span><span className="pf-attention-count">{p('decisionCount',{count:decisions.length})}</span></div></header>
-    <ProjectReadinessNotice {...readiness} onSettings={onSettings} onKnowledge={onKnowledge}/>
-    <form className="pf-outcome-entry" onSubmit={event=>void submit(event)}><label htmlFor="pf-new-outcome"><Icon name="terminal"/>{p('outcome')}</label><textarea id="pf-new-outcome" disabled={busy} rows={2} value={request} onChange={event=>setRequest(event.target.value)} placeholder={p('outcomePlaceholder')}/><div className="pf-outcome-footer"><AccountAllowance context={{projectId:detail.project.id}} onAssessment={setAccount}/><div className="pf-outcome-actions"><Button type="submit" tone="primary" disabled={busy||!request.trim()||readiness.readiness?.workspace.status!=='ready'||!canRequestAccountStep(account)}><Icon name="play"/>{p(busy?'starting':accountStepNeedsApproval(account)?'accountApproveStep':'startWork')}</Button></div></div></form>
-    <ErrorNotice error={error}/>
+    <RequestComposer project={detail.project} onCreated={goal=>onCreated?onCreated(goal):onGoal(goal.id)} onChanged={onChanged} onSettings={onSettings} onKnowledge={onKnowledge}/><ErrorNotice error={error}/>
     <div className={`pf-workbench-columns ${pristine?'is-new-project':''} ${!activeGoals.length&&!current.length&&!decisions.length?'is-idle':''}`}>
       <section className="pf-section pf-current-work"><div className="pf-section-heading"><h2><Icon name="layers"/>{p('currentWork')}</h2><span className="count">{activeGoals.length+current.length}</span></div>{!activeGoals.length&&!current.length?<Empty>{p('noWork')}</Empty>:<div className="pf-work-cards">{activeGoals.map(goal=><GoalCard key={goal.id} goal={goal} detail={detail} onOpen={()=>onGoal(goal.id)}/>)}{current.map(run=><RunCard key={run.id} run={run} onOpen={()=>onRun(run.id)}/>)}</div>}</section>
       <section className="pf-section pf-decision-section"><div className="pf-section-heading"><h2><Icon name="check-circle"/>{p('decisions')}</h2><span className="count">{decisions.length}</span></div>{!decisions.length?<Empty>{p('noDecisions')}</Empty>:<div className="pf-decision-list">{decisions.map(({run,stage,definition})=><button className="pf-decision-card" key={run.id+stage.stageId} onClick={()=>onRun(run.id,stage.stageId)}><span className="pf-decision-label"><Icon name={stage.allowanceHold?'clock':'check-circle'}/>{p(stage.status==='review'?'decisionsForStage':stage.allowanceHold?stage.allowanceHold.code==='ACCOUNT_STEP_APPROVAL_REQUIRED'?'accountApproveStep':'accountAllowance':'manualResult')}</span><strong>{definition.name}</strong><p>{stage.allowanceHold?(stage.attempts.at(-1)?.error??p('accountAdmissionWaiting')):(stage.attempts.at(-1)?.output?.summary??definition.prompt)}</p><span className="pf-decision-owner">{run.snapshot.project.roles.find(role=>role.id===definition.roleId)?.name}<Icon name="arrow-right"/></span></button>)}</div>}</section>

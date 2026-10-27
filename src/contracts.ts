@@ -73,7 +73,7 @@ export type Run = {
   status: WorkStatus; iteration: number; mode: 'once' | 'loop'; createdAt: string; updatedAt: string; endedAt?: string;
   dependsOnRunIds: string[]; parentRunId?: string; parentStageId?: string; idempotencyKey: string; inputHash: string;
   pausedAt?:string;
-  snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]};
+  snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]; conversation?: IntakeConversation};
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
   recoveryOfRunId?:string;
   approvedPolicy?: RunPolicy;
@@ -99,11 +99,13 @@ export type ModelInfo = {id: string; name: string; efforts: string[]; isDefault?
 export type CodexInfo = {available: boolean; connected: boolean; authenticated?: boolean; version?: string; models: ModelInfo[]; error?: string; dynamicTools?: boolean};
 export type IntegrationInfo = {codex: CodexInfo; github: {available: boolean; authenticated: boolean; error?: string};multica?:{available:boolean;authenticated:boolean;connected:boolean;serverVersion?:string;error?:unknown}};
 export type ProjectOverview = Project & {runCount: number; activeRuns: number; waitingRuns: number; knowledgeCount: number; pipelineCount: number};
+export type IntakeConversation = {rootIntakeId:string;turns:{intakeId:string;request:string;response:string;resultKind:'answer'|'delivery';at:string;basisRevision:number;sourceRunId:string;clarifications?:{question:string;response:string}[];omittedClarifications?:number;truncated?:boolean}[];omittedTurns:number};
 export type Intake = {
   id: string; projectId: string; request: string; baseline: string;
   status: 'routing' | 'dispatched' | 'clarification' | 'failed' | 'completed' | 'stopped' | 'retry_wait'; createdAt: string; updatedAt: string;
   routerRunId: string; targetRunId?: string; pipelineId?: string; rationale?: string; question?: string; error?: string;
   idempotencyKey: string; targetRunIds: string[]; rounds: IntakeRound[]; policy: IntakePolicy; outcome?: string; resultKind?: 'answer';
+  parentIntakeId?:string; conversation?:IntakeConversation; continuationPending?:boolean;
   supervisorRunIds?: string[]; basisRevision?:number; recoveryHistory?:GoalRecoveryRecord[]; nextRetryAt?:string;
   lastFailure?:GoalFailure; canRetry?:boolean; retryBlockedReason?:string;
   retryBlockedCode?:string;retryBlockedScope?:RecoveryScope;retryBlockedStageId?:string;allowance?:GoalAllowance;
@@ -121,6 +123,7 @@ export type GoalRecoveryRecord = {
   reason:string; note:string; model?:string; actualModel?:string; previousRunId:string; newRunId?:string;
   previousRef?:ExecutionRef; newRef?:ExecutionRef; basisRevision:number; previousBasisRevision:number;
   refreshConfiguration:boolean; previousPolicy?:IntakePolicy; newPolicy?:IntakePolicy; error?:string;
+  replyToQuestion?:string;
   startedAt?:string; endedAt?:string;
   approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation};
 };

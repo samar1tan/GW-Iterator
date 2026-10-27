@@ -21,7 +21,7 @@ export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?
 export function ErrorNotice({ error }: { error: unknown }) {
   const { t } = useI18n();
   if (!error) return null;
-  const messageKeys:Record<string,MessageKey>={INVALID_PROJECT:'invalidProject',REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
+  const messageKeys:Record<string,MessageKey>={FOLLOWUP_NOT_READY:'followUpNotReady',INVALID_PARENT_INTAKE:'invalidParentIntake',CLARIFICATION_REPLY_REQUIRED:'clarificationReplyRequired',INVALID_PROJECT:'invalidProject',REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
   const localizedKey=error instanceof APIError?messageKeys[error.code]:undefined;
   return <Notice tone="error"><div>{localizedKey?t(localizedKey):errorText(error)}</div>{error instanceof APIError && (localizedKey?<details><summary>{t('details')}</summary><code className="error-code">{error.code}</code><p>{errorText(error)}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details>:<><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>)}</Notice>;
 }

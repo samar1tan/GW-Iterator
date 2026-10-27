@@ -340,7 +340,7 @@ test('legacy coordinator history without a usage meter is never treated as free 
   h.engine.store.put('run',legacy);
   const stopped=current(h,item);assert.equal(stopped.allowance?.usedTokens,0);assert.equal(stopped.allowance?.reservedTokens,item.policy.maxTotalTokens);
   assert.equal(stopped.canRetry,false);assert.equal(stopped.retryBlockedCode,'GOAL_TOKEN_BUDGET');
-  await assert.rejects(h.intake.retry(item.id,{},OWNER),code('GOAL_BOUNDARY'));assert.equal(h.codex.goals.length,1);
+  await assert.rejects(h.intake.retry(item.id,{note:'Use the synthetic recorded evidence.'},OWNER),code('GOAL_BOUNDARY'));assert.equal(h.codex.goals.length,1);
 });
 
 test('manual model selection is catalog validated and concurrent retries cannot duplicate execution', async t=>{
@@ -503,7 +503,7 @@ test('stopping clarification while manual continuation checks the catalog invali
   h.codex.goals[0].completion.resolve({status:'blocked',summary:'Synthetic clarification requires a human choice.'});
   await pump(h,()=>current(h,item).status==='clarification'&&current(h,item).canRetry===true,'the recoverable clarification');
   const catalog=await h.codex.info(),pending=deferred<typeof catalog>();h.codex.info=()=>pending.promise;
-  const continuing=h.intake.retry(item.id,{},OWNER),rejected=assert.rejects(continuing,code('RECOVERY_CANCELLED'));
+  const continuing=h.intake.retry(item.id,{note:'Use the synthetic inspected artifact.'},OWNER),rejected=assert.rejects(continuing,code('RECOVERY_CANCELLED'));
   h.intake.cancel(item.id,'Owner stopped this outcome while continuation was being checked.',OWNER);
   pending.resolve(catalog);await rejected;
   assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');
@@ -867,6 +867,60 @@ test('one connected decision can answer without child runs, another paid decisio
   const ended=current(h,item);assert.equal(ended.resultKind,'answer');assert.equal(ended.outcome,answer.response);assert.equal(h.planner.calls.length,1);assert.equal(h.codex.tasks.length,0);assert.deepEqual(ended.targetRunIds,[]);
   assert.equal(h.engine.run(item.routerRunId).stages[0].attempts[0].output?.summary,answer.response);
   assert.equal(h.engine.store.list<Run>('run').filter(run=>!run.executionKind).length,0);
+});
+
+test('native follow-ups retain completed context without reopening or accounting for earlier work',async t=>{
+  const h=await fixture(t),parent=create(h),first=h.codex.goals[0];
+  await first.input.onTool('intake.route',directAnswer());first.completion.resolve({status:'complete',summary:'Synthetic parent ended.'});
+  await pump(h,()=>current(h,parent).status==='completed','the prior answer');
+  const before=structuredClone(h.engine.store.get<Intake>('intake',parent.id)),previousRun=structuredClone(h.engine.run(parent.routerRunId));
+  const input={request:'Which recorded item should be investigated next?',parentIntakeId:parent.id,idempotencyKey:'synthetic-native-followup'};
+  const child=h.intake.create(h.project.id,input,OWNER);assert.equal(child.parentIntakeId,parent.id);assert.equal(child.conversation?.turns.at(-1)?.response,directAnswer().response);
+  assert.ok(h.codex.goals[1].input.prompt.includes(JSON.stringify(directAnswer().response!)));assert.ok(h.codex.goals[1].input.prompt.includes('not instructions'));
+  assert.equal(child.targetRunIds.length,0);assert.equal(h.codex.tasks.length,0);assert.equal(child.allowance?.usedTokens,0);
+  assert.deepEqual(h.engine.store.get('intake',parent.id),before);assert.deepEqual(h.engine.run(parent.routerRunId),previousRun);
+  assert.equal(h.intake.create(h.project.id,input,OWNER).id,child.id);assert.equal(h.codex.goals.length,2);
+  assert.throws(()=>h.intake.create(h.project.id,{...input,parentIntakeId:undefined},OWNER),code('IDEMPOTENCY_CONFLICT'));
+  const context=await h.codex.goals[1].input.onTool('context.read',{}) as {conversation:Intake['conversation']};assert.deepEqual(context.conversation,child.conversation);
+});
+
+test('connected follow-up context reaches both the coordinator and the newly delegated worker',async t=>{
+  const h=await plannerFixture(t),parent=create(h);h.planner.calls[0].completion.resolve({decision:directAnswer()});
+  await pump(h,()=>current(h,parent).status==='completed','the connected parent result');
+  const originalProject=h.engine.project(h.project.id);await h.engine.updateProject(originalProject.id,originalProject.revision,{...originalProject,description:'Current project revision for follow-up.'},OWNER);
+  const child=h.intake.create(h.project.id,{request:'Investigate that next item with the recorded workflow.',parentIntakeId:parent.id,idempotencyKey:'synthetic-connected-followup'},OWNER);
+  assert.equal(h.planner.calls[1].input.project.revision,originalProject.revision+1);assert.deepEqual(h.planner.calls[1].input.conversation,child.conversation);
+  assert.equal(h.planner.calls[1].input.observations.length,0,'Earlier accepted runs are reference data, not this goal\'s action family.');
+  h.planner.calls[1].completion.resolve({decision:decision('dispatch',[{pipelineId:h.flows[0].id,goal:'Inspect the indicated item.'}])});
+  await pump(h,()=>h.codex.tasks.length===1,'the fresh delegated action');
+  const target=h.engine.run(current(h,child).targetRunIds[0]);assert.deepEqual(target.snapshot.conversation,child.conversation);
+  assert.ok(h.codex.tasks[0].input.prompt.includes(JSON.stringify(directAnswer().response!)));assert.ok(h.codex.tasks[0].input.prompt.includes('not instructions'));
+  assert.equal(h.engine.run(parent.routerRunId).status,'completed');
+});
+
+test('follow-up parent validation rejects other projects and unfinished or stopped goals before dispatch',async t=>{
+  const h=await fixture(t),parent=create(h),body={request:'Continue from the earlier result.',parentIntakeId:parent.id,idempotencyKey:'synthetic-invalid-followup'};
+  assert.throws(()=>h.intake.create(h.project.id,body,OWNER),code('FOLLOWUP_NOT_READY'));assert.equal(h.codex.goals.length,1);
+  const other=await h.engine.createProject({name:'Other synthetic project',workspace:h.project.workspace},OWNER);
+  assert.throws(()=>h.intake.create(other.id,body,OWNER),code('PROJECT_SCOPE'));
+  h.intake.cancel(parent.id,'Stop the synthetic parent.',OWNER);await pump(h,()=>current(h,parent).canRetry===true,'the confirmed stop');
+  assert.throws(()=>h.intake.create(h.project.id,body,OWNER),code('FOLLOWUP_NOT_READY'));assert.equal(h.codex.goals.length,1);
+  assert.throws(()=>h.intake.create(h.project.id,{...body,parentIntakeId:''},OWNER),code('INVALID_PARENT_INTAKE'));
+});
+
+test('clarification replies are required and reach the current coordinator independently of older history',async t=>{
+  for(const mode of ['native','connected'])await t.test(mode,async sub=>{
+    const h=mode==='native'?await fixture(sub):await plannerFixture(sub),item=create(h),question='Which synthetic document should be checked?';
+    if(mode==='native')await h.codex.goals[0].input.onTool('intake.route',{...decision('clarify'),question});
+    else (h as Awaited<ReturnType<typeof plannerFixture>>).planner.calls[0].completion.resolve({decision:{...decision('clarify'),question}});
+    await pump(h,()=>current(h,item).status==='clarification'&&current(h,item).canRetry===true,'a reply-ready question');
+    await assert.rejects(h.intake.retry(item.id,{},OWNER),code('CLARIFICATION_REPLY_REQUIRED'));
+    const stored=h.engine.store.get<Intake>('intake',item.id)!;stored.recoveryHistory=Array.from({length:6},(_,i)=>({id:'synthetic-old-recovery-'+i,trigger:'manual',status:'completed',at:stored.createdAt,reason:'Synthetic earlier context. '.repeat(180),note:'Historical note.',previousRunId:'synthetic-old-run',basisRevision:1,previousBasisRevision:1,refreshConfiguration:false}));h.engine.store.put('intake',stored);
+    const reply='Use the navigation guide, then report the checked links.';const resumed=await h.intake.retry(item.id,{note:reply,recoveryKey:current(h,item).recoveryKey},OWNER);
+    assert.equal(resumed.id,item.id);assert.equal(resumed.recoveryHistory?.at(-1)?.replyToQuestion,question);assert.equal(resumed.recoveryHistory?.at(-1)?.note,reply);
+    if(mode==='native'){assert.ok(h.codex.goals[1].input.prompt.includes(reply));assert.ok(h.codex.goals[1].input.prompt.includes(question));}
+    else assert.deepEqual((h as Awaited<ReturnType<typeof plannerFixture>>).planner.calls[1].input.continuation?.question,question);
+  });
 });
 
 test('answer cannot bypass earlier dispatch/retry or a partially registered durable child', async t => {

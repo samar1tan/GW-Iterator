@@ -1,6 +1,7 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  followUpNotReady:'上一项工作尚未结束，请等结果返回后再继续。',invalidParentIntake:'无法找到上一条结果，请刷新后重试。',clarificationReplyRequired:'先回复上面的问题，再继续。',
   intakeAnswered:'已回答', directAnswer:'回答', retainedGoalResult:'已生成的结果',
   retainedGoalResultHelp:'流程结束校验失败，已生成的结果仍保留在下方。查看不需要重新执行，也不代表工作已经验收。',
   noActionsDispatched:'本次没有派发任务。', noAcceptedGoalResult:'本次尚未记录已确认的结果。',
