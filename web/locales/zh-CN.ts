@@ -1,6 +1,8 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  markdownFootnotes:'脚注', markdownFootnoteBack:'返回引用处', markdownImage:'图片引用', markdownTable:'表格', markdownCodeBlock:'代码块',
+  knowledgeFileLink:'文件链接：{path}。请在本地项目中打开。',
   knowledgeIndexUnverified:'有 {count} 个来源的同步状态尚未确认；已有本地知识仍可查看。',
   knowledgeIndexNotSynced:'还有 {count} 个登记来源未同步。同步后，其内容会加入项目知识。',
   knowledgeIndexNeedsRecheck:'有 {count} 个来源的设置已变更，请重新同步。',
