@@ -1,3 +1,4 @@
+import {DEFAULT_EFFORT, EFFORTS} from './contracts.ts';
 import {randomUUID,createHash} from 'node:crypto';
 import {readFile,writeFile,mkdir,realpath} from 'node:fs/promises';
 import path from 'node:path';
@@ -77,7 +78,7 @@ export class Platform {
   async saveRole(projectId:string,expectedRevision:number,value:Partial<RoleProfile>,actor:Actor,roleId?:string){
     const project=this.owner(actor,projectId);demand(project.revision===expectedRevision,'REVISION_CONFLICT','Project configuration changed. Refresh before saving.',409);
     const previous=project.roles.find(item=>item.id===roleId);if(roleId)demand(previous,'ROLE_NOT_FOUND','Role not found.',404);
-    demand(isObject(value),'INVALID_ROLE','Provide the role contract.');const role:RoleProfile={name:'Role',description:'',instructions:'',model:null,effort:'low',sandbox:'read-only',skills:[],tools:['context.read','knowledge.search','pipeline.read','run.read'],...previous,...value,id:roleId??value.id??randomUUID()};
+    demand(isObject(value),'INVALID_ROLE','Provide the role contract.');const role:RoleProfile={name:'Role',description:'',instructions:'',model:null,effort:DEFAULT_EFFORT,sandbox:'read-only',skills:[],tools:['context.read','knowledge.search','pipeline.read','run.read'],...previous,...value,id:roleId??value.id??randomUUID()};
     const candidate={...project,roles:previous?project.roles.map(item=>item.id===roleId?role:item):[...project.roles,role]};validateProject(candidate);
     if(!role.retired){const agent=await this.agent(candidate,role,false);role.multica={...role.multica,agentId:agent.id,runtimeId:agent.runtime_id};}
     const saved=await this.engine.updateProject(projectId,expectedRevision,{...candidate,roles:candidate.roles.map(item=>item.id===role.id?role:item)},actor);
@@ -88,6 +89,7 @@ export class Platform {
   async saveAgent(projectId:string,body:unknown,actor:Actor,id?:string){
     this.owner(actor,projectId);demand(isObject(body),'INVALID_AGENT','Provide an agent configuration.');demand(!['custom_args','runtime_config'].some(key=>key in body),'MANAGED_RUNTIME_POLICY','Change permissions through the role contract.');
     const previous=id?await this.ownedAgent(projectId,id,actor):undefined,allowed=['name','runtime_id','instructions','model','thinking_level','skill_ids','mcp_config'];const input=Object.fromEntries(Object.entries(body).filter(([key])=>allowed.includes(key))) as MulticaAgentInput;
+    if(input.thinking_level!==undefined)demand(EFFORTS.some(effort=>effort===input.thinking_level),'INVALID_EFFORT','Choose a supported native reasoning effort.');if(!id&&input.thinking_level===undefined)input.thinking_level=DEFAULT_EFFORT;
     const marker=previous?.description?.split('\n')[0]??'[GWI '+projectId+'/custom@'+randomUUID()+']';
     input.description=typeof body.description==='string'?marker+'\n'+body.description:previous?.description??marker;if(!id){input.visibility='private';input.permission_mode='private';input.custom_args=['-c','default_permissions="gwi-readonly"','-c','approval_policy="never"'];}
     let remote=id?await this.client.updateAgent(id,input):await this.client.createAgent(input);if(input.skill_ids){const skills=await this.client.setAgentSkills(remote.id,input.skill_ids);remote={...remote,skills};}return presentAgent(remote);

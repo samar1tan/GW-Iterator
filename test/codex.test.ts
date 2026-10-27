@@ -818,3 +818,13 @@ test('the local default model applies only when the role has no explicit model',
     assert.equal((explicit.events.find(event=>event.type==='codex.thread_configuration')?.data as {model:string}).model,'native-effective-model');
   });
 });
+
+for (const effort of ['max', 'ultra'] as const) {
+  test(`passes ${effort} unchanged to Codex turn and thread configuration`, async t => {
+    const h = harness(t);
+    const run = input({}, {effort});
+    await h.adapter.start(run.value);
+    assert.equal(h.child.requests.find(message => message.method === 'thread/start')!.params!.config.model_reasoning_effort, effort);
+    assert.equal(h.child.requests.find(message => message.method === 'turn/start')!.params!.effort, effort);
+  });
+}

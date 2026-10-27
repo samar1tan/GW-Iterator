@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {CONTROL_TOOLS, EXECUTORS} from './contracts.ts';
+import {CONTROL_TOOLS, EXECUTORS, EFFORTS} from './contracts.ts';
 import type {Pipeline,Project,TaskOutput} from './contracts.ts';
 
 export class AppError extends Error {
@@ -17,7 +17,7 @@ export function validateProject(project:Project):void {
   demand(project.repository===''||/^[\w.-]+\/[\w.-]+$/.test(project.repository),'INVALID_REPOSITORY','Use an owner/repository name.');
   demand(Array.isArray(project.roles)&&project.roles.length>0&&project.roles.length<=32&&unique(project.roles.map(role=>role.id)),'INVALID_ROLES','Roles must have unique identifiers.');
   for(const role of project.roles){
-    demand(id(role.id)&&text(role.name,160)&&typeof role.instructions==='string'&&role.instructions.length<=40000&&['read-only','workspace-write'].includes(role.sandbox)&&['low','medium','high','xhigh'].includes(role.effort),'INVALID_ROLE','Check role identity, instructions and execution policy.');
+    demand(id(role.id)&&text(role.name,160)&&typeof role.instructions==='string'&&role.instructions.length<=40000&&['read-only','workspace-write'].includes(role.sandbox)&&EFFORTS.includes(role.effort),'INVALID_ROLE','Check role identity, instructions and execution policy.');
     demand(Array.isArray(role.tools)&&role.tools.every(tool=>CONTROL_TOOLS.includes(tool))&&Array.isArray(role.skills)&&role.skills.length<=30&&role.skills.every(skill=>text(skill.name,160)&&text(skill.path,4096)&&path.isAbsolute(skill.path)),'INVALID_ROLE_TOOLS','Choose supported tools and installed skill paths.');
     demand(role.model===null||text(role.model,160),'INVALID_MODEL','Choose an available model or inherit Codex default.');
     demand(contractList(role.inputs)&&contractList(role.outputs)&&contractList(role.checks)&&(role.retired===undefined||typeof role.retired==='boolean'),'INVALID_ROLE_CONTRACT','Provide bounded input, output and acceptance descriptions.');

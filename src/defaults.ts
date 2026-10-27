@@ -1,3 +1,4 @@
+import {DEFAULT_EFFORT} from './contracts.ts';
 import {randomUUID} from 'node:crypto';
 import type {Project,Pipeline,RoleProfile,Stage} from './contracts.ts';
 
@@ -12,7 +13,7 @@ const contracts:Record<string,{inputs:string[];outputs:string[];checks:string[]}
   qa:{inputs:['Requested outcome, actual change and upstream evidence'],outputs:['Independent checks, reproducible defects and acceptance recommendation'],checks:['Perform checks before reporting them','Return revise for an actionable defect; never repair your own verification target']},
   operations:{inputs:['Accepted product behavior and affected delivery artifacts'],outputs:['Aligned documentation or delivery artifacts and their verification'],checks:['Keep public material English and private settings local','Do not claim publication or deployment from prepared files']}
 };
-export function defaultRoles():RoleProfile[]{return roles.map(([id,name,description])=>({id,name,description,instructions:`${description} Work only within the stated project goal. Cite actual artifacts and return a bounded result. Preserve private configuration and local assets.`,...contracts[id],model:null,effort:'low',sandbox:['development','product','design','operations'].includes(id)?'workspace-write':'read-only',skills:[],tools:['context.read','knowledge.search','pipeline.read','pipeline.propose','run.read']}));}
+export function defaultRoles():RoleProfile[]{return roles.map(([id,name,description])=>({id,name,description,instructions:`${description} Work only within the stated project goal. Cite actual artifacts and return a bounded result. Preserve private configuration and local assets.`,...contracts[id],model:null,effort:DEFAULT_EFFORT,sandbox:['development','product','design','operations'].includes(id)?'workspace-write':'read-only',skills:[],tools:['context.read','knowledge.search','pipeline.read','pipeline.propose','run.read']}));}
 export function defaultPipeline(project:Project,roleId:string,template='role',name?:string):Pipeline {
   const role=project.roles.find(item=>item.id===roleId)??project.roles[0],at=new Date().toISOString();
   const task=(id:string,title:string,owner:string,dependsOn:string[]=[],review=false):Stage=>({id,name:title,roleId:owner,executor:'codex',dependsOn,prompt:'Perform this stage of the requested outcome, using the upstream results and frozen context. Follow your role contract. Return actual artifacts, checks and unresolved findings. Do not repeat another role\'s accepted work. Return no_change when there is no supported useful change.',review,inputs:contracts[owner]?.inputs,outputs:contracts[owner]?.outputs,checks:contracts[owner]?.checks});

@@ -63,3 +63,7 @@ Delivery gathers changes, checks, reviews and external publication references. D
 Use the GW website mismatch as a clearly labeled replay: select GW; submit the mismatch; see the chosen operations flow; inspect roles and shared case; review rejection/return; inspect CI/publication evidence; accept delivery; find the reusable finding. Historical evidence must not masquerade as a fresh run.
 
 Then operate a fresh bounded real task through the same controls and connected backend. Record interventions and unpassed checks. Inspect both locales, normal/narrow layouts, keyboard use, waiting/failure recovery and return navigation. Screenshots and diagrams alone are insufficient.
+
+## Reasoning controls
+
+Team role, Settings role and connected-agent editors use identical native effort choices with locale-independent labels: Light, Medium, High, Extra High, Max, Ultra. New roles and agents start at Max. Keep existing selections visible; disable choices excluded by the selected installed model's capability list, without silently changing a saved effort. Inherited models use the catalog default when known. Unknown capability data is not a promise of support: runtime availability remains authoritative. Place one concise guidance paragraph in the current UI locale and the advisory CodexRadar link beside these controls. Switching between English and Simplified Chinese updates the guidance and advisory marker; only the six effort labels stay in English. Existing role edits and run history retain their original values until explicitly saved.

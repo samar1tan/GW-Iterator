@@ -1,6 +1,7 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  reasoningHelp: '新角色和代理默认 Max。更高强度可能耗时更长；支持范围取决于已安装模型。', reasoningAdvisory: '（仅供参考）',
   intakeDecisionRetry: '重试对应工作',
   appName: 'GW-Iterator', projects: '项目', pipelines: '流程', knowledge: '知识', configuration: '配置',
   language: '语言', switchLanguage: 'Switch to English', loading: '正在加载…', refresh: '刷新', retry: '重试', close: '关闭', cancel: '取消', save: '保存', saving: '正在保存…', edit: '编辑', create: '创建', add: '添加', remove: '移除', search: '搜索', allRoles: '全部角色', role: '角色', roles: '角色',

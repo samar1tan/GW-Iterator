@@ -1,4 +1,5 @@
 export const en = {
+  reasoningHelp: 'New roles and agents default to Max. Higher effort can take longer; support depends on the installed model.', reasoningAdvisory: '(advisory)',
   intakeDecisionRetry: 'Retry scoped work',
   appName: 'GW-Iterator', projects: 'Projects', pipelines: 'Pipelines', knowledge: 'Knowledge', configuration: 'Configuration',
   language: 'Language', switchLanguage: '切换到简体中文', loading: 'Loading…', refresh: 'Refresh', retry: 'Retry', close: 'Close', cancel: 'Cancel', save: 'Save', saving: 'Saving…', edit: 'Edit', create: 'Create', add: 'Add', remove: 'Remove', search: 'Search', allRoles: 'All roles', role: 'Role', roles: 'Roles',
