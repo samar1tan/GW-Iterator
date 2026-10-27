@@ -16,8 +16,11 @@
   border-color: var(--blue);
 }
 
+.pf-execution-activity.is-moving { border-color: var(--blue); }
+
 .pf-step-button.state-running::after,
-.pf-stage-card.state-running::after {
+.pf-stage-card.state-running::after,
+.pf-execution-activity.is-moving::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -83,7 +86,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pf-step-button.state-running::after,
-  .pf-stage-card.state-running::after { animation: none; background: var(--blue); }
+  .pf-stage-card.state-running::after,
+  .pf-execution-activity.is-moving::after { animation: none; background: var(--blue); }
   .pf-platform .state-running .state-icon,
   .pf-platform .react-flow__edge.animated path { animation: none; }
 }

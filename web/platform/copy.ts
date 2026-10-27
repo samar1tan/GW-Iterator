@@ -1,6 +1,9 @@
 import {useI18n} from '../i18n';
 
 const en = {
+  executionTaskReceived:'Task received',currentExecution:'Current execution',executionCoordinator:'Coordination',
+  executionSubmitted:'Submitted to the runner',executionPreparing:'Preparing the execution',executionQueued:'Waiting to execute',executionWorking:'Execution in progress',executionCommand:'Running a command',executionTool:'Using a tool',executionFiles:'Updating files',executionResponding:'Preparing a response',executionOutput:'Receiving runner output',executionCommentary:'Progress update',executionReported:'New activity recorded',executionHuman:'Waiting for a person',executionReview:'Ready for review',executionCi:'Waiting for GitHub',executionApproval:'Waiting for allowance approval',executionStopping:'Waiting for stop confirmation',executionProviderWait:'Awaiting runner state',executionPaused:'Further dispatch is paused',executionReceived:'Result received',executionObservationGap:'Execution state needs an update',
+  executionSeconds:'{count}s',executionMinutesSeconds:'{minutes}m {seconds}s',executionElapsed:'This attempt · {duration}',executionLastActivity:'Last activity · {duration} ago',executionQuiet:'No new activity for {duration}',
   outcomeEntryHelp:'GWI can arrange the roles and workflow. To use a known workflow, run it below. Unsent text stays in this tab.',
   tabDraftHelp:'Unsent text stays in this tab.',
   showAllHistory:'Show all history ({count})', recentHistory:'Show recent history',
@@ -102,6 +105,9 @@ const en = {
 } as const;
 type Key = keyof typeof en;
 const zh: Record<Key,string> = {
+  executionTaskReceived:'任务已接收',currentExecution:'当前执行',executionCoordinator:'协调工作',
+  executionSubmitted:'任务已提交',executionPreparing:'正在准备执行',executionQueued:'等待执行',executionWorking:'执行进行中',executionCommand:'正在运行命令',executionTool:'正在调用工具',executionFiles:'正在修改文件',executionResponding:'正在准备回复',executionOutput:'正在接收执行输出',executionCommentary:'执行进展',executionReported:'已记录新的执行活动',executionHuman:'等待人工处理',executionReview:'等待审阅',executionCi:'等待 GitHub 返回结果',executionApproval:'等待额度批准',executionStopping:'等待停止确认',executionProviderWait:'等待执行器状态',executionPaused:'后续派发已暂停',executionReceived:'已收到执行结果',executionObservationGap:'暂时无法确认最新执行状态',
+  executionSeconds:'{count} 秒',executionMinutesSeconds:'{minutes} 分 {seconds} 秒',executionElapsed:'本次尝试 · {duration}',executionLastActivity:'最近活动 · {duration}前',executionQuiet:'已有 {duration}没有新活动',
   outcomeEntryHelp:'由 GWI 安排角色与流程；已有流程可从下方直接运行。未发送的内容保留在当前标签页。',
   tabDraftHelp:'未发送的内容保留在当前标签页。',
   showAllHistory:'显示全部历史（{count}）', recentHistory:'只看近期历史',

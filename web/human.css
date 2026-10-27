@@ -558,3 +558,32 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-launch-role-details > li { grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); }
 .pf-launch-role-details > li > :is(strong,span) { min-width: 0; overflow-wrap: anywhere; }
 .pf-launch-role-details > li > span:not(.muted) { text-align: right; }
+
+.pf-current-executions { display: flex; flex-direction: column; gap: 10px; }
+.pf-current-executions > h2 { font-size: 14px; font-weight: 500; color: var(--muted); margin: 0; }
+.pf-execution-activity { position: relative; isolation: isolate; min-width: 0; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.pf-execution-current { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pf-execution-operation { flex: 0 0 34px; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; color: var(--blue); background: var(--surface-raised); }
+.pf-execution-current > div { min-width: 0; flex: 1; }
+.pf-execution-current h3 { margin: 0 0 3px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.pf-execution-current > div > span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.pf-execution-current .pf-meta-separator { display: inline-block; width: 3px; height: 3px; margin: 0 7px 3px; border-radius: 50%; background: var(--muted); }
+.pf-execution-current > .button { padding: 5px; min-height: 28px; }
+.pf-execution-times { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-top: 14px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pf-execution-times > span { display: inline-flex; align-items: center; gap: 6px; }
+.pf-execution-times .ui-icon { width: 13px; height: 13px; }
+.pf-execution-commentary { margin: 12px 0 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 7em; overflow: auto; }
+.pf-execution-tool { display: block; width: fit-content; max-width: 100%; margin-top: 12px; padding: 3px 7px; border-radius: 4px; background: var(--canvas); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.pf-execution-command { margin-top: 12px; min-width: 0; font-size: 12px; color: var(--muted); }
+.pf-execution-command > summary { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.pf-execution-command > summary code { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.pf-execution-command pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; margin: 8px 0 0; }
+.pf-execution-activity.is-quiet { border-color: var(--line); }
+.pf-execution-activity.is-quiet .pf-execution-operation { color: var(--muted); }
+.pf-stage-context > .pf-execution-activity { margin-bottom: 18px; padding: 14px; }
+@media (max-width:700px) {
+  .pf-execution-current { flex-wrap: wrap; gap: 9px; }
+  .pf-execution-current > div { min-width: 0; }
+  .pf-execution-current > .button { margin-left: auto; }
+  .pf-execution-activity { padding: 14px; }
+}

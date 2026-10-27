@@ -117,7 +117,7 @@ export class PlatformExecution {
         this.taskScope(record,task);
         if(!record.taskId){record.taskId=task.id;ref.externalId=task.id;request.onEvent({type:'multica.task',message:'Multica task identity confirmed.',ref});}
         record.status=task.status;record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);
-        if(lastStatus!==task.status){lastStatus=task.status;request.onEvent({type:'multica.status',message:'Agent execution: '+task.status,ref});}
+        if(lastStatus!==task.status){lastStatus=task.status;request.onEvent({type:'multica.status',message:'Agent execution: '+task.status,ref,data:{status:task.status}});}
         const usage=multicaUsage(task.usage);if(usage){this.meter(record,usage);request.onEvent({type:'usage',message:'Multica reported execution usage.',ref,usage:record.usage,data:{buckets:task.usage}});}
         const added=await this.platform.client.listTaskMessages(task.id,sequence);messages.push(...added);if(messages.length>1000)messages=messages.slice(-1000);
         for(const row of added){sequence=Math.max(sequence,row.seq);if(row.content)request.onEvent({type:'multica.message',message:row.content.slice(0,6000),ref,data:{sequence:row.seq,type:row.type,tool:row.tool}});}
