@@ -20,6 +20,16 @@ export type Project = {
   id: string; revision: number; name: string; description: string; workspace: string; repository: string;
   roles: RoleProfile[]; knowledgeSources: KnowledgeSource[]; createdAt: string; updatedAt: string;
 };
+export type ProjectBindings = Pick<Project, 'name' | 'description' | 'workspace' | 'repository'>;
+export type WorkspaceReadiness = {
+  status: 'ready' | 'blocked' | 'unavailable';
+  code: 'READY' | 'WORKSPACE_UNAVAILABLE' | 'GIT_UNAVAILABLE' | 'GIT_REPOSITORY_REQUIRED' | 'GIT_ROOT_MISMATCH' | 'GIT_COMMIT_REQUIRED' | 'GIT_INSPECTION_FAILED';
+  sourceCommit?: string;
+};
+export type ProjectReadiness = {
+  projectId: string; projectRevision: number; observedAt: string; workspace: WorkspaceReadiness;
+  knowledge: {status: 'not_configured' | 'not_indexed' | 'indexed' | 'issues'; configuredSources: number; indexedSources: number; currentEntries: number; missingEntries: number; errorEntries: number; lastSyncedAt?: string};
+};
 export type Stage = {
   id: string; name: string; roleId: string; executor: Executor; dependsOn: string[]; prompt: string; review: boolean;
   executionPurpose?: 'review'; ownerGate?: boolean;
@@ -34,7 +44,7 @@ export type Pipeline = {id: string; projectId: string; revision: number; name: s
 export type KnowledgeEntry = {
   id: string; projectId: string; sourceId: string; kind: KnowledgeSource['kind'] | 'lesson'; roles: string[];
   title: string; content: string; hash: string; revision: number; sourcePath?: string; sourceRevision?: string;
-  syncedAt: string; status: 'current' | 'missing' | 'error'; error?: string; originRunId?: string;
+  syncedAt: string; status: 'current' | 'missing' | 'error'; error?: string; errorCode?: 'SOURCE_CONFIGURATION_CHANGED'; originRunId?: string;
 };
 export type Artifact = {label: string; path?: string; url?: string};
 export type TaskOutput = {outcome: 'done' | 'revise' | 'blocked' | 'no_change'; summary: string; artifacts: Artifact[]; observations: string[]};

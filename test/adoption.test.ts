@@ -90,6 +90,8 @@ test('read-only source collection produces a reviewed proposal and ordinary Engi
   assert.equal(project.knowledgeSources[0].path, path.join(h.workspace, 'README.md'));
   assert.ok(h.engine.detail(project.id, OWNER).pipelines.some(pipeline => pipeline.name === 'Synthetic bounded correction' && pipeline.stages[2].reworkTo === 'correct'));
   assert.equal(h.engine.store.list('run').length, 0); assert.equal(h.githubCalls(), 0);
+  assert.equal(h.engine.detail(project.id, OWNER).knowledge.filter(entry => entry.status === 'current').length, 2);
+  assert.equal(h.service.get(item.id, OWNER).application?.knowledgeSync?.status, 'completed');
   assert.match(await readFile(path.join(h.workspace, 'README.md'), 'utf8'), /^# Synthetic Harbor/);
   assert.equal((await h.service.apply(item.id, ready.revision, OWNER)).id, project.id); assert.equal(h.engine.store.list('project').length, 1);
 });
@@ -152,7 +154,7 @@ test('scanned evidence cannot register unsupported Knowledge inputs and a correc
     });
     const ready = await recordProposal(h, item), project = await h.service.apply(item.id, ready.revision, OWNER);
     const synced = await h.engine.sync(project.id, OWNER);
-    assert.equal(synced.stats.errors, 0); assert.equal(synced.stats.added, 2);
+    assert.equal(synced.stats.errors, 0); assert.equal(synced.stats.unchanged, 2);
     assert.equal(project.knowledgeSources.some(source => source.path.endsWith('/'+filename)), false);
     assert.equal(h.codex.calls.length, 1);
   });
@@ -196,13 +198,66 @@ test('interrupted and adapter-failed scans remain inspectable and are never sile
   assert.equal(recovered.get(item.id, OWNER).status, 'failed'); assert.match(recovered.get(item.id, OWNER).error!, /restarted/); assert.equal(h.codex.calls.length, 1);
 });
 
-test('a partial Engine application retries the existing project and workflow instead of creating duplicates', async t => {
+test('a partial Engine application rolls back an uncheckpointed workflow and retries the existing project', async t => {
   const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item);
   const update = h.engine.updatePipeline.bind(h.engine); let fail = true;
   h.engine.updatePipeline = (...args) => { if (fail) { fail = false; throw new Error('Synthetic transient configuration failure.'); } return update(...args); };
   await assert.rejects(h.service.apply(item.id, ready.revision, OWNER), /Synthetic transient configuration failure/);
-  const partial = h.service.get(item.id, OWNER); assert.equal(partial.status, 'proposed'); assert.ok(partial.application?.projectId);
+  const partial = h.service.get(item.id, OWNER); assert.equal(partial.status, 'proposed'); assert.ok(partial.application?.projectId); assert.equal(partial.application?.phase, 'failed'); assert.deepEqual(partial.application?.pipelineIds, []);
   assert.equal(h.engine.store.list<Project>('project').length, 1); const before = h.engine.store.list('pipeline').length;
   const project = await h.service.apply(item.id, partial.revision, OWNER);
-  assert.equal(project.id, partial.application.projectId); assert.equal(h.engine.store.list('project').length, 1); assert.equal(h.engine.store.list('pipeline').length, before); assert.equal(h.codex.calls.length, 1);
+  assert.equal(project.id, partial.application.projectId); assert.equal(h.engine.store.list('project').length, 1); assert.equal(h.engine.store.list('pipeline').length, before + 1); assert.equal(h.codex.calls.length, 1);
+});
+
+test('a project checkpoint fault rolls back both its configuration and progress before retry', async t => {
+  const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item);
+  const put = h.engine.store.put.bind(h.engine.store); let fail = true;
+  h.engine.store.put = (kind, value) => { if (fail && kind === 'adoption' && (value as unknown as Adoption).application?.projectId) { fail = false; throw new Error('Synthetic project checkpoint fault.'); } put(kind, value); };
+  await assert.rejects(h.service.apply(item.id, ready.revision, OWNER), /Synthetic project checkpoint fault/);
+  const failed = h.service.get(item.id, OWNER); assert.equal(failed.application?.phase, 'failed'); assert.equal(failed.projectId, undefined); assert.equal(h.engine.store.list('project').length, 0); assert.equal(h.engine.store.list('pipeline').length, 0);
+  const project = await h.service.apply(item.id, failed.revision, OWNER); assert.equal(h.engine.store.list('project').length, 1); assert.equal(h.service.get(item.id, OWNER).projectId, project.id); assert.equal(h.codex.calls.length, 1);
+});
+
+test('a fault after writing a workflow cannot leave its revision ahead of the application checkpoint', async t => {
+  const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item);
+  const update = h.engine.updatePipeline.bind(h.engine); let fail = true;
+  h.engine.updatePipeline = (...args) => { const result = update(...args); if (fail) { fail = false; throw new Error('Synthetic fault after the workflow write.'); } return result; };
+  await assert.rejects(h.service.apply(item.id, ready.revision, OWNER), /Synthetic fault after the workflow write/);
+  const failed = h.service.get(item.id, OWNER); assert.deepEqual(failed.application?.completed, []); assert.deepEqual(failed.application?.pipelineIds, []);
+  const project = await h.service.apply(item.id, failed.revision, OWNER); assert.equal(h.engine.detail(project.id, OWNER).pipelines.filter(flow => flow.name === proposal().pipelines[0].name).length, 1);
+});
+
+test('initial indexing failure records applied configuration and repeats Apply without reindexing', async t => {
+  const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item);
+  const sync = h.engine.sync.bind(h.engine); let calls = 0;
+  h.engine.sync = async () => { calls++; throw new Error('Synthetic initial indexing unavailable.'); };
+  const project = await h.service.apply(item.id, ready.revision, OWNER), applied = h.service.get(item.id, OWNER);
+  assert.equal(applied.status, 'applied'); assert.equal(applied.application?.phase, 'failed'); assert.equal(applied.application?.knowledgeSync?.status, 'failed'); assert.match(applied.application?.knowledgeSync?.error ?? '', /Synthetic initial indexing/);
+  assert.equal((await h.service.apply(item.id, ready.revision, OWNER)).id, project.id); assert.equal(calls, 1); assert.equal(h.engine.store.list('project').length, 1);
+  await sync(project.id, OWNER); assert.equal(h.engine.detail(project.id, OWNER).knowledge.length, 2); assert.equal(h.codex.calls.length, 1);
+});
+
+test('initial indexing reports per-source missing results instead of declaring ready knowledge', async t => {
+  const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item), sync = h.engine.sync.bind(h.engine);
+  h.engine.sync = async (...args) => { await rm(path.join(h.workspace, 'docs/usage.md')); return sync(...args); };
+  const project = await h.service.apply(item.id, ready.revision, OWNER), applied = h.service.get(item.id, OWNER);
+  assert.equal(applied.status, 'applied'); assert.equal(applied.application?.knowledgeSync?.status, 'failed'); assert.equal(applied.application?.knowledgeSync?.stats?.missing, 1); assert.ok(h.engine.detail(project.id, OWNER).knowledge.some(entry => entry.status === 'missing'));
+});
+
+test('restart marks installation and indexing interruptions without replaying models or silently synchronizing', async t => {
+  for (const phase of ['installing', 'indexing'] as const) await t.test(phase, async child => {
+    const h = await fixture(child), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item), project = await h.service.apply(item.id, ready.revision, OWNER);
+    const interrupted = h.service.get(item.id, OWNER); interrupted.status = 'proposed'; interrupted.application!.phase = phase; interrupted.application!.knowledgeSync = {status: 'pending', at: interrupted.updatedAt}; h.engine.store.put('adoption', interrupted);
+    h.engine.sync = async () => { assert.fail('Recovery must not silently synchronize source files.'); };
+    const recovered = new AdoptionService(h.engine); recovered.recover(); const failed = recovered.get(item.id, OWNER);
+    assert.equal(failed.application?.phase, 'failed'); assert.match(failed.error ?? '', /restarted/); assert.equal(failed.status, phase === 'indexing' ? 'applied' : 'proposed'); assert.equal(failed.projectId, project.id); assert.equal(h.codex.calls.length, 1);
+    if (phase === 'indexing') { assert.equal(failed.application?.knowledgeSync?.status, 'failed'); assert.equal((await recovered.apply(item.id, failed.revision, OWNER)).id, project.id); }
+  });
+});
+
+test('legacy applied records are returned unchanged without a new initial index pass', async t => {
+  const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), ready = await recordProposal(h, item), project = await h.service.apply(item.id, ready.revision, OWNER);
+  const legacy = h.service.get(item.id, OWNER); delete legacy.application; h.engine.store.put('adoption', legacy);
+  h.engine.sync = async () => { assert.fail('An existing applied project must not be silently reindexed.'); };
+  assert.equal((await h.service.apply(item.id, legacy.revision, OWNER)).id, project.id); assert.deepEqual(h.service.get(item.id, OWNER), legacy); assert.equal(h.codex.calls.length, 1);
 });

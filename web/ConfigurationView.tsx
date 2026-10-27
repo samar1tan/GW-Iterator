@@ -1,33 +1,92 @@
-import {knowledgePath} from './platform/knowledgePath';
-import {EffortOptions, ReasoningHelp} from './ReasoningSettings';
-import {DEFAULT_EFFORT,EFFORT_LABELS} from '../src/contracts';
+import {useEffect, useRef, useState} from 'react';
+import type {Project, ProjectBindings} from '../src/contracts';
+import {EFFORT_LABELS} from '../src/contracts';
+import {APIError, api} from './api';
+import {Button, ErrorNotice, Field, Modal, Notice, SectionTitle} from './components';
+import {useI18n} from './i18n';
 import {useCopy} from './platform/copy';
-import { useEffect, useRef, useState } from 'react';
-import { CONTROL_TOOLS } from '../src/contracts';
-import type { Effort, IntegrationInfo, KnowledgeSource, Project, RoleProfile } from '../src/contracts';
-import { APIError, api, uid } from './api';
-import { Button, Empty, ErrorNotice, Field, Modal, Notice, RoleChecks, SectionTitle, toolKeys } from './components';
-import { useI18n } from './i18n';
 
-type DiscoveredSkill = { name: string; path: string; description: string };
-export function ConfigurationView({ project, integrations, scopedRole, onChanged, onDirtyChange }: { project: Project; integrations?: IntegrationInfo; scopedRole: string; onChanged: () => Promise<void>; onDirtyChange?: (dirty: boolean) => void }) {
-  const { t, date } = useI18n(); const {p}=useCopy(); const [draft, setDraft] = useState<Project>(() => structuredClone(project)); const [baseRevision, setBaseRevision] = useState(project.revision); const [selectedRole, setSelectedRole] = useState(scopedRole || project.roles[0]?.id || ''); const [skills, setSkills] = useState<DiscoveredSkill[]>([]); const [skillError, setSkillError] = useState<unknown>(null); const [error, setError] = useState<unknown>(null); const [busy, setBusy] = useState(false); const [loadingSkills, setLoadingSkills] = useState(false); const [message, setMessage] = useState('');
-  const [clean,setClean]=useState(()=>JSON.stringify(project)),[confirmReload,setConfirmReload]=useState(false);
-  const dirty=JSON.stringify(draft)!==clean,dirtyListener=useRef(onDirtyChange);dirtyListener.current=onDirtyChange;
-  useEffect(()=>{onDirtyChange?.(dirty)},[dirty,onDirtyChange]);
-  useEffect(()=>()=>dirtyListener.current?.(false),[]);
-  const loadSkills = async () => { setLoadingSkills(true); setSkillError(null); try { const result = await api<{ skills: DiscoveredSkill[] }>(`/api/projects/${encodeURIComponent(project.id)}/skills`); setSkills(result.skills); } catch (error) { setSkillError(error); } finally { setLoadingSkills(false); } };
-  useEffect(() => { void loadSkills(); }, [project.id]);
-  useEffect(() => { if (scopedRole) setSelectedRole(scopedRole); }, [scopedRole]);
-  const role = draft.roles.find(item => item.id === selectedRole) ?? draft.roles[0];
-  const updateRole = (next: RoleProfile) => setDraft({ ...draft, roles: draft.roles.map(item => item.id === next.id ? next : item) });
-  const addRole = () => { const next: RoleProfile = { id: `role-${uid()}`, name: t('newRole'), description: '', instructions: '', model: null, effort: DEFAULT_EFFORT, sandbox: 'read-only', skills: [], tools: ['context.read', 'knowledge.search', 'pipeline.read', 'run.read'] }; setDraft({ ...draft, roles: [...draft.roles, next] }); setSelectedRole(next.id); };
-  const removeRole = () => { if (!role) return; setDraft({ ...draft, roles: draft.roles.filter(item => item.id !== role.id), knowledgeSources: draft.knowledgeSources.map(source => ({ ...source, roles: source.roles.filter(id => id !== role.id) })) }); setSelectedRole(''); };
-  const save = async (event: React.FormEvent) => { event.preventDefault(); if(busy||!dirty)return; setBusy(true); setError(null); setMessage(''); try { const saved = await api<Project>(`/api/projects/${encodeURIComponent(project.id)}`, { method: 'PUT', body: { expectedRevision: baseRevision, project: {...draft,knowledgeSources:draft.knowledgeSources.map(source=>({...source,path:knowledgePath(draft.workspace,source.path)}))} } }); setDraft(structuredClone(saved)); setClean(JSON.stringify(saved)); setBaseRevision(saved.revision); setMessage(t('configurationSaved', { revision: saved.revision })); await onChanged(); } catch (error) { setError(error); } finally { setBusy(false); } };
-  const applyReload = () => { if(busy)return; setDraft(structuredClone(project)); setClean(JSON.stringify(project)); setBaseRevision(project.revision); setError(null); setMessage(''); setConfirmReload(false); };
-  const reload = () => { if(busy)return; if(dirty)setConfirmReload(true); else applyReload(); };
-  const changeSource = (next: KnowledgeSource) => setDraft({ ...draft, knowledgeSources: draft.knowledgeSources.map(source => source.id === next.id ? next : source) });
-  const allSkills = [...skills, ...(role?.skills.filter(selected => !skills.some(skill => skill.path === selected.path)).map(skill => ({ ...skill, description: '' })) ?? [])];
-  const models = integrations?.codex.models ?? []; const configuredModelUnavailable = !!role?.model && !models.some(model => model.id === role.model);
-  return <div className="surface configuration-surface"><form inert={busy} aria-busy={busy||undefined} onSubmit={event => void save(event)}><div className="page-heading"><div><h1>{p('settings')}</h1><p className="muted">{p('futureOnly')}</p></div><div className="actions"><Button disabled={busy} onClick={reload}>{t('reloadLatest')}</Button><Button tone="primary" type="submit" disabled={busy || !dirty}>{busy ? t('saving') : t('save')}</Button></div></div><ErrorNotice error={error} />{message && <Notice tone="success">{message}</Notice>}{baseRevision !== project.revision && !(error instanceof APIError&&error.code==='REVISION_CONFLICT') && <Notice tone="warning">{t('revisionChanged')}</Notice>}<div className="configuration-meta muted small">{t('projectRevision', { revision: baseRevision })} · {t('updatedAt', { date: date(draft.updatedAt) })}</div><section className="panel config-bindings"><SectionTitle title={t('projectBindings')} /><div className="form-grid"><Field label={t('projectName')}><input required value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></Field><Field label={t('repository')}><input value={draft.repository} onChange={event => setDraft({ ...draft, repository: event.target.value })} spellCheck={false} /></Field><Field label={t('workspace')} className="span-two"><input required value={draft.workspace} onChange={event => setDraft({ ...draft, workspace: event.target.value })} spellCheck={false} /></Field><Field label={t('description')} className="span-two"><textarea rows={3} value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></Field></div></section><section className="pf-defaults-overview"><h2>{p('defaultOverview')}</h2><div className="pf-defaults-list">{project.roles.filter(item=>!item.retired).map(item=><div className="pf-defaults-row" key={item.id}><strong>{item.name}</strong><span>{item.model??p('defaultModel')} · {EFFORT_LABELS[item.effort]}</span><span>{p(item.sandbox==='read-only'?'readSourceBoundary':'writeWorkspaceBoundary')}</span></div>)}</div></section><details className="pf-advanced-config" open={scopedRole?true:undefined}><summary>{p('settingsAdvanced')}</summary><section className="panel roles-panel"><SectionTitle title={t('roleProfiles')}><Button onClick={addRole}>{t('addRole')}</Button></SectionTitle><div className="role-profile-layout"><div className="role-profile-list">{draft.roles.map(item => <Button key={item.id} className={role?.id === item.id ? 'selected' : ''} onClick={() => setSelectedRole(item.id)}>{item.name}</Button>)}</div>{!role ? <Empty>{t('noRoles')}</Empty> : <div className="role-profile-form"><div className="row-between"><code className="muted small">{role.id}</code><Button tone="danger" onClick={removeRole}>{t('removeRole')}</Button></div><div className="form-grid"><Field label={t('roleName')}><input required value={role.name} onChange={event => updateRole({ ...role, name: event.target.value })} /></Field><Field label={t('roleDescription')}><input value={role.description} onChange={event => updateRole({ ...role, description: event.target.value })} /></Field><Field label={t('roleInstructions')} className="span-two"><textarea rows={7} value={role.instructions} onChange={event => updateRole({ ...role, instructions: event.target.value })} /></Field><Field label={t('model')}><select value={role.model ?? ''} onChange={event => updateRole({ ...role, model: event.target.value || null })}><option value="">{t('defaultModel')}</option>{models.map(model => <option value={model.id} key={model.id}>{model.name || model.id}</option>)}{configuredModelUnavailable && <option value={role.model!}>{role.model} · {t('modelUnavailable')}</option>}</select></Field><Field label={t('effort')}><select value={role.effort} onChange={event => updateRole({ ...role, effort: event.target.value as Effort })}><EffortOptions model={models.find(model=>model.id===role.model)??(!role.model?models.find(model=>model.isDefault):undefined)} value={role.effort}/></select></Field><ReasoningHelp/><Field label={p('executionBoundary')} className="span-two" hint={t('sandboxHelp')}><select value={role.sandbox} onChange={event => updateRole({ ...role, sandbox: event.target.value as RoleProfile['sandbox'] })}><option value="read-only">{p('readSourceBoundary')}</option><option value="workspace-write">{p('writeWorkspaceBoundary')}</option></select></Field></div><fieldset className="tools-fieldset"><legend>{t('tools')}</legend><div className="check-grid">{CONTROL_TOOLS.map(tool => <label key={tool} className="check"><input type="checkbox" checked={role.tools.includes(tool)} onChange={event => updateRole({ ...role, tools: event.target.checked ? [...role.tools, tool] : role.tools.filter(item => item !== tool) })} /><span>{t(toolKeys[tool])}<code className="muted small">{tool}</code></span></label>)}</div></fieldset><section className="skills-section"><SectionTitle title={t('skills')}><Button disabled={loadingSkills} onClick={() => void loadSkills()}>{loadingSkills ? t('loading') : t('discoverSkills')}</Button></SectionTitle><ErrorNotice error={skillError} />{!allSkills.length ? <Empty>{t('noSkills')}</Empty> : <div className="check-list skills-list">{allSkills.map(skill => <label className="check skill-check" key={skill.path}><input type="checkbox" checked={role.skills.some(item => item.path === skill.path)} onChange={event => updateRole({ ...role, skills: event.target.checked ? [...role.skills, { name: skill.name, path: skill.path }] : role.skills.filter(item => item.path !== skill.path) })} /><span><strong>{skill.name}</strong>{skill.description && <span className="small muted">{skill.description}</span>}<code className="small muted">{skill.path}</code></span></label>)}</div>}</section></div>}</div></section><section className="panel source-config-panel"><SectionTitle title={t('configuredSources')}><Button onClick={() => setDraft({ ...draft, knowledgeSources: [...draft.knowledgeSources, { id: `source-${uid()}`, kind: 'document', path: '', roles: role ? [role.id] : [] }] })}>{t('add')}</Button></SectionTitle>{!draft.knowledgeSources.length ? <Empty>{t('noSources')}</Empty> : <div className="source-config-list">{draft.knowledgeSources.map(source => <details key={source.id} open={!source.path}><summary>{source.path || source.id} <span className="tag">{t(source.kind)}</span></summary><div className="form-stack"><div className="row-between"><code className="muted small">{source.id}</code><Button tone="danger" onClick={() => setDraft({ ...draft, knowledgeSources: draft.knowledgeSources.filter(item => item.id !== source.id) })}>{t('deleteSource')}</Button></div><div className="form-grid"><Field label={t('sourceKind')}><select value={source.kind} onChange={event => changeSource({ ...source, kind: event.target.value as KnowledgeSource['kind'] })}>{(['document', 'artifact', 'memory'] as const).map(kind => <option key={kind} value={kind}>{t(kind)}</option>)}</select></Field><Field label={t('sourcePath')}><input required value={source.path} onChange={event => changeSource({ ...source, path: event.target.value })} spellCheck={false} /></Field>{source.kind === 'memory' && <Field label={t('memorySection')} hint={t('memorySectionHint')} className="span-two"><input value={source.section ?? ''} onChange={event => changeSource({ ...source, section: event.target.value })} /></Field>}</div><fieldset><legend>{t('sourceRoles')}</legend><RoleChecks roles={draft.roles} selected={source.roles} onChange={roles => changeSource({ ...source, roles })} /></fieldset></div></details>)}</div>}</section></details><div className="config-footer-actions"><span className="muted small">{t('projectRevision', { revision: baseRevision })}</span><Button tone="primary" type="submit" disabled={busy || !dirty}>{busy ? t('saving') : t('save')}</Button></div></form>{confirmReload&&<Modal title={p('unsavedChanges')} busy={busy} onClose={()=>setConfirmReload(false)}><div className="form-stack"><p>{p('settingsReloadHelp')}</p><div className="form-actions"><Button disabled={busy} onClick={()=>setConfirmReload(false)}>{p('keepEditing')}</Button><Button tone="danger" disabled={busy} onClick={applyReload}>{p('discardChanges')}</Button></div></div></Modal>}</div>;
+export function projectBindings(project: Project): ProjectBindings {
+  const {name, description, workspace, repository} = project;
+  return {name, description, workspace, repository};
+}
+
+export function ConfigurationView({project, onChanged, onDirtyChange, onTeam, onKnowledge}: {
+  project: Project;
+  onChanged: () => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
+  onTeam?: (roleId?: string) => void;
+  onKnowledge?: () => void;
+}) {
+  const {t, date} = useI18n(), {p} = useCopy();
+  const [draft, setDraft] = useState(() => projectBindings(project));
+  const [basis, setBasis] = useState(project);
+  const [clean, setClean] = useState(() => JSON.stringify(projectBindings(project)));
+  const [error, setError] = useState<unknown>(null), [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false), [confirmReload, setConfirmReload] = useState(false);
+  const dirty = JSON.stringify(draft) !== clean;
+  const dirtyListener = useRef(onDirtyChange); dirtyListener.current = onDirtyChange;
+  useEffect(() => {onDirtyChange?.(dirty);}, [dirty, onDirtyChange]);
+  useEffect(() => () => dirtyListener.current?.(false), []);
+  useEffect(() => {
+    if (!dirty) {
+      setBasis(project); setDraft(projectBindings(project));
+      setClean(JSON.stringify(projectBindings(project)));
+    }
+  }, [project.revision]);
+
+  const reload = () => {
+    setBasis(project); setDraft(projectBindings(project)); setClean(JSON.stringify(projectBindings(project)));
+    setError(null); setMessage(''); setConfirmReload(false);
+  };
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault(); if (busy || !dirty) return;
+    setBusy(true); setError(null); setMessage('');
+    try {
+      const saved = await api<Project>(`/api/projects/${encodeURIComponent(project.id)}/bindings`, {
+        method: 'PATCH', body: {expectedRevision: basis.revision, bindings: draft},
+      });
+      setBasis(saved); setDraft(projectBindings(saved)); setClean(JSON.stringify(projectBindings(saved)));
+      setMessage(t('configurationSaved', {revision: saved.revision}));
+      await onChanged();
+    } catch (error) {setError(error);} finally {setBusy(false);}
+  };
+  return <div className="surface configuration-surface">
+    <form inert={busy} aria-busy={busy || undefined} onSubmit={event => void save(event)}>
+      <div className="page-heading">
+        <div><h1>{p('settings')}</h1><p className="muted">{t('projectSettingsDescription')}</p></div>
+        <div className="actions">
+          <Button disabled={busy} onClick={() => dirty ? setConfirmReload(true) : reload()}>{t('reloadLatest')}</Button>
+          <Button tone="primary" type="submit" disabled={busy || !dirty}>{t(busy ? 'saving' : 'save')}</Button>
+        </div>
+      </div>
+      <ErrorNotice error={error}/>{message && <Notice tone="success">{message}</Notice>}
+      {dirty && basis.revision !== project.revision && !(error instanceof APIError && error.code === 'REVISION_CONFLICT') && <Notice tone="warning">{t('revisionChanged')}</Notice>}
+      <p className="configuration-meta muted small">{t('projectRevision', {revision: basis.revision})} · {t('updatedAt', {date: date(basis.updatedAt)})}</p>
+      <section className="panel config-bindings">
+        <SectionTitle title={t('projectBindings')}/>
+        <div className="form-grid">
+          <Field label={t('projectName')}><input required value={draft.name} onChange={event => setDraft({...draft, name: event.target.value})}/></Field>
+          <Field label={t('repository')}><input value={draft.repository} onChange={event => setDraft({...draft, repository: event.target.value})} spellCheck={false}/></Field>
+          <Field label={t('workspace')} className="span-two"><input required value={draft.workspace} onChange={event => setDraft({...draft, workspace: event.target.value})} spellCheck={false}/></Field>
+          <Field label={t('description')} className="span-two"><textarea rows={3} value={draft.description} onChange={event => setDraft({...draft, description: event.target.value})}/></Field>
+        </div>
+      </section>
+    </form>
+    <section className="pf-defaults-overview">
+      <SectionTitle title={p('defaultOverview')}>{onTeam && <Button onClick={() => onTeam()}>{t('manageTeam')}</Button>}</SectionTitle>
+      <div className="pf-defaults-list">{project.roles.filter(role => !role.retired).map(role => <div className="pf-defaults-row" key={role.id}>
+        <strong>{onTeam ? <button className="pf-text-button" onClick={() => onTeam(role.id)}>{role.name}</button> : role.name}</strong>
+        <span>{role.model ?? p('defaultModel')} · {EFFORT_LABELS[role.effort]}</span>
+        <span>{p(role.sandbox === 'read-only' ? 'readSourceBoundary' : 'writeWorkspaceBoundary')}</span>
+      </div>)}</div>
+    </section>
+    {onKnowledge && <div className="row-between settings-knowledge-link"><span className="muted">{t('sourceManagementLocation')}</span><Button onClick={onKnowledge}>{t('manageKnowledge')}</Button></div>}
+    {confirmReload && <Modal title={p('unsavedChanges')} busy={busy} onClose={() => setConfirmReload(false)}>
+      <div className="form-stack"><p>{p('settingsReloadHelp')}</p><div className="form-actions">
+        <Button disabled={busy} onClick={() => setConfirmReload(false)}>{p('keepEditing')}</Button>
+        <Button tone="danger" disabled={busy} onClick={reload}>{p('discardChanges')}</Button>
+      </div></div>
+    </Modal>}
+  </div>;
 }

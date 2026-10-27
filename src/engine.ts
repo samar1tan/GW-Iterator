@@ -1,7 +1,7 @@
 import {budgetTokens,runPolicy} from './contracts.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {stat} from 'node:fs/promises';
-import type {Actor,Attempt,AuditEvent,ContinueRunInput,ControlTool,GoalAllowance,Intake,KnowledgeEntry,Pipeline,Project,ProjectDetail,ProjectOverview,Proposal,Run,RunAllowance,RunPolicy,RunRecovery,Stage,StartRunInput,TaskOutput,Usage,WorkStatus} from './contracts.ts';
+import type {Actor,Attempt,AuditEvent,ContinueRunInput,ControlTool,GoalAllowance,Intake,KnowledgeEntry,KnowledgeSyncResult,Pipeline,Project,ProjectBindings,ProjectDetail,ProjectOverview,Proposal,Run,RunAllowance,RunPolicy,RunRecovery,Stage,StartRunInput,TaskOutput,Usage,WorkStatus} from './contracts.ts';
 import type {CodexAdapter,GithubAdapter,AdapterEvent,AgentExecutor} from './adapters/types.ts';
 import type {GoalPlanner} from './goal-planner.ts';
 import {Store} from './store.ts';
@@ -11,6 +11,8 @@ import {searchKnowledge,syncKnowledge} from './knowledge.ts';
 import type {AccountAllowanceService} from './account-allowance.ts';
 import type {AllowanceAssessment,AllowanceExecution,AllowanceFinish,AllowanceTarget} from './account-allowance-types.ts';
 import type {AccountStepApproval} from './contracts.ts';
+import {sourceSignature} from './project-readiness.ts';
+import type {KnowledgeIndexReceipt} from './project-readiness.ts';
 
 const now=()=>new Date().toISOString();
 const terminal=(status:WorkStatus)=>['completed','failed','cancelled','interrupted','skipped'].includes(status);
@@ -23,6 +25,8 @@ type Active={controller:AbortController;runId:string;stageId:string;attemptId:st
 export class Engine {
   readonly store:Store; readonly codex:CodexAdapter; readonly github:GithubAdapter;
   agentExecutor?:AgentExecutor; goalPlanner?:GoalPlanner; accountAllowances?:AccountAllowanceService; accountModelResolver?:(project:Project,role:Project['roles'][number])=>Promise<string|null>;
+  executionReadiness?:(project:Project)=>Promise<unknown>;
+  async ensureExecutionReady(project:Project):Promise<void>{await this.executionReadiness?.(project);}
   intake?: {route: (runId:string,stageId:string,args:Record<string,unknown>)=>unknown; reconcile:()=>void; allowance?:(runId:string)=>GoalAllowance|undefined; cancelRun?:(runId:string,note:string)=>Promise<void>; close?:()=>Promise<void>};
   private active=new Map<string,Active>(); private ticking=false; private timer:ReturnType<typeof setInterval>|null=null; private closed=false;
   private accountAdmission:Promise<void>=Promise.resolve();
@@ -43,22 +47,28 @@ export class Engine {
   }
   overview(actor:Actor):ProjectOverview[]{return this.store.list<Project>('project').filter(project=>!actor.projectId||actor.projectId===project.id).map(project=>{const runs=this.store.list<Run>('run').filter(run=>run.projectId===project.id);return{...project,runCount:runs.length,activeRuns:runs.filter(run=>run.status==='running'||run.status==='queued').length,waitingRuns:runs.filter(run=>run.status==='review'||run.status==='waiting').length,knowledgeCount:this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===project.id&&entry.status==='current').length,pipelineCount:this.store.list<Pipeline>('pipeline').filter(pipeline=>pipeline.projectId===project.id).length};});}
   detail(id:string,actor:Actor):ProjectDetail{this.scope(actor,id);return{project:this.project(id),pipelines:this.store.list<Pipeline>('pipeline').filter(item=>item.projectId===id),runs:this.store.list<Run>('run').filter(item=>item.projectId===id).reverse(),knowledge:this.store.list<KnowledgeEntry>('knowledge').filter(item=>item.projectId===id),proposals:this.store.list<Proposal>('proposal').filter(item=>item.projectId===id),events:this.store.events({projectId:id,limit:150}),intakes:this.store.list<Intake>('intake').filter(item=>item.projectId===id).reverse()};}
-  async createProject(input:{name:string;description?:string;workspace:string;repository?:string},actor:Actor):Promise<Project>{
+  async createProject(input:{name:string;description?:string;workspace:string;repository?:string},actor:Actor,checkpoint?:(project:Project)=>void):Promise<Project>{
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     demand(!actor.projectId,'OWNER_REQUIRED','Project creation requires the local owner token.',403);
     const at=now(),project:Project={id:newId(),revision:1,name:input.name,description:input.description??'',workspace:input.workspace,repository:input.repository??'',roles:defaultRoles(),knowledgeSources:[],createdAt:at,updatedAt:at};
     validateProject(project);demand((await stat(project.workspace).catch(()=>null))?.isDirectory(),'WORKSPACE_NOT_FOUND','Choose an existing workspace directory.');
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
-    this.store.transaction(()=>{this.putProject(project);for(const role of project.roles)this.putPipeline(defaultPipeline(project,role.id));this.putPipeline(defaultPipeline(project,'lead','product'));this.putPipeline(defaultPipeline(project,'operations','operations'));this.putPipeline(defaultPipeline(project,'development','focused'));this.audit(actor,project.id,'project.created','Project and role workflows created.');});return project;
+    this.store.transaction(()=>{this.putProject(project);for(const role of project.roles)this.putPipeline(defaultPipeline(project,role.id));this.putPipeline(defaultPipeline(project,'lead','product'));this.putPipeline(defaultPipeline(project,'operations','operations'));this.putPipeline(defaultPipeline(project,'development','focused'));this.audit(actor,project.id,'project.created','Project and role workflows created.');checkpoint?.(project);});return project;
   }
-  async updateProject(id:string,expectedRevision:number,input:Project,actor:Actor):Promise<Project>{
+  async updateProject(id:string,expectedRevision:number,input:Project,actor:Actor,checkpoint?:(project:Project)=>void):Promise<Project>{
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     this.scope(actor,id);demand(!actor.projectId,'OWNER_REQUIRED','Project bindings and role permissions require the local owner token.',403);
     const previous=this.project(id);demand(previous.revision===expectedRevision,'REVISION_CONFLICT','Project configuration changed. Refresh before saving.',409);
     const project={...input,id,revision:previous.revision+1,createdAt:previous.createdAt,updatedAt:now()};validateProject(project);demand((await stat(project.workspace).catch(()=>null))?.isDirectory(),'WORKSPACE_NOT_FOUND','Choose an existing workspace directory.');
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     for(const pipeline of this.store.list<Pipeline>('pipeline').filter(item=>item.projectId===id))validatePipeline(pipeline,project,this.store.list('pipeline'));
-    this.store.transaction(()=>{demand(this.project(id).revision===expectedRevision,'REVISION_CONFLICT','Project configuration changed.',409);this.putProject(project);this.audit(actor,id,'project.updated',`Project configuration revision ${project.revision}.`);});return project;
+    const affected=new Set(previous.knowledgeSources.filter(source=>{const next=project.knowledgeSources.find(item=>item.id===source.id);return !next||sourceSignature(previous,source)!==sourceSignature(project,next);}).map(source=>source.id));
+    this.store.transaction(()=>{demand(this.project(id).revision===expectedRevision,'REVISION_CONFLICT','Project configuration changed.',409);this.putProject(project);for(const entry of this.store.list<KnowledgeEntry>('knowledge'))if(entry.projectId===id&&entry.kind!=='lesson'&&entry.status==='current'&&affected.has(entry.sourceId))this.store.put('knowledge',{...entry,status:'error',errorCode:'SOURCE_CONFIGURATION_CHANGED',error:'Source configuration changed; synchronize before using this entry in new work.'});this.audit(actor,id,'project.updated',`Project configuration revision ${project.revision}.`);checkpoint?.(project);});return project;
+  }
+  async updateBindings(id:string,expectedRevision:number,bindings:Partial<ProjectBindings>,actor:Actor):Promise<Project>{
+    demand(isObject(bindings)&&Object.keys(bindings).length>0&&Object.keys(bindings).every(key=>['name','description','workspace','repository'].includes(key)),'INVALID_PROJECT_BINDINGS','Change only project name, description, workspace or repository.');
+    this.scope(actor,id);demand(!actor.projectId,'OWNER_REQUIRED','Project bindings require the local owner token.',403);
+    return this.updateProject(id,expectedRevision,{...this.project(id),...bindings},actor);
   }
   createPipeline(input:{projectId:string;roleId:string;name?:string;description?:string;template?:string},actor:Actor):Pipeline{
     this.scope(actor,input.projectId,'pipeline.write');const project=this.project(input.projectId),pipeline=defaultPipeline(project,input.roleId,input.template??'role',input.name);if(input.description)pipeline.description=input.description;
@@ -75,7 +85,7 @@ export class Engine {
     this.store.transaction(()=>{this.store.put('proposal',proposal);this.audit(actor,pipeline.projectId,'proposal.created',rationale,{runId,data:{proposalId:proposal.id,pipelineId:id,baseRevision:expectedRevision}});});return proposal;
   }
   applyProposal(id:string,actor:Actor):Pipeline{return this.store.transaction(()=>{const proposal=this.store.get<Proposal>('proposal',id);demand(proposal,'PROPOSAL_NOT_FOUND','Proposal not found.',404);this.scope(actor,proposal.projectId,'pipeline.write');demand(proposal.status==='pending','PROPOSAL_CLOSED','This proposal is already resolved.',409);const pipeline=this.updatePipeline(proposal.pipelineId,proposal.baseRevision,proposal.definition,actor);proposal.status='applied';this.store.put('proposal',proposal);this.audit(actor,proposal.projectId,'proposal.applied','Process improvement applied to future runs.',{runId:proposal.runId,data:{proposalId:id,revision:pipeline.revision}});return pipeline;});}
-  async sync(id:string,actor:Actor){
+  async sync(id:string,actor:Actor,checkpoint?:(result:KnowledgeSyncResult)=>void){
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     this.scope(actor,id);demand(!actor.projectId,'OWNER_REQUIRED','Local source synchronization requires the owner token.',403);demand(!this.syncing.has(id),'SYNC_IN_PROGRESS','Knowledge synchronization is already running.',409);this.syncing.add(id);
     try{const project=this.project(id),old=this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),result=await syncKnowledge(project,old);demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);this.store.transaction(()=>{
@@ -83,8 +93,10 @@ export class Engine {
       const retained=new Set(result.entries.map(entry=>entry.id));
       // Only remove initial entries; lessons may be added while source files are read.
       for(const entry of old)if(!retained.has(entry.id))this.store.delete('knowledge',entry.id);
-      for(const entry of result.entries)this.store.put('knowledge',entry);
+      for(const entry of result.entries){delete entry.errorCode;this.store.put('knowledge',entry);}
+      const receipt:KnowledgeIndexReceipt={id,at:now(),sources:Object.fromEntries(project.knowledgeSources.filter(source=>!result.entries.some(entry=>entry.kind!=='lesson'&&entry.sourceId===source.id&&entry.status!=='current')).map(source=>[source.id,sourceSignature(project,source)])),stats:result.stats};this.store.put('knowledge-index',receipt);
       this.audit(actor,id,'knowledge.synced','Project knowledge synchronized.',{data:result.stats});
+      checkpoint?.(result);
     });return result;}finally{this.syncing.delete(id);}
   }
   search(id:string,query:string,role?:string,kind?:string):KnowledgeEntry[]{return searchKnowledge(this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),query,role,kind);}
@@ -342,6 +354,7 @@ export class Engine {
     let standaloneObservation:AllowanceExecution|null=null;
     try{
       if(stage.executor==='codex'){
+        if(this.executionReadiness)try{await this.ensureExecutionReady(run.snapshot.project);}catch(error){this.attempt(run.id,stage.id,attempt.id,item=>{item.nativeDispatchState='not_dispatched';item.nativeDispatched=false;item.nativeCleanupConfirmed=true;item.tokenReservation=0;item.usage={input:0,output:0,total:0};});throw error;}
         const remaining=attempt.tokenReservation??this.remainingTokens(this.run(run.id));demand(remaining>0,'TOKEN_LIMIT','Run token budget reached.');const configuredRole=run.snapshot.project.roles.find(item=>item.id===stage.roleId)!;const role={...configuredRole,instructions:configuredRole.instructions+'\n\nYou execute one bounded stage in a supervised workflow. The overall run goal is context; the current stage defines your deliverable. Complete only the assigned artifact and checks. Other stages own their remaining work, such as browser acceptance or publication. Return done when this stage is supported by evidence, with unperformed later work in observations. Return blocked only when this stage itself cannot proceed; do not repeat implementation to satisfy another stage. Current stage: '+stage.name+'\nStage contract:\n'+stage.prompt};
         const executionPurpose=stage.executionPurpose??(stage.roleId==='qa'&&configuredRole.sandbox==='read-only'?'review':undefined);
         const input={workspace:run.snapshot.project.workspace,role,prompt:this.prompt(run,stage),timeoutSeconds,tokenBudget:remaining,...(executionPurpose?{executionPurpose}:{}),signal:active.controller.signal,onEvent:(event:AdapterEvent)=>this.adapterEvent(run.id,stage.id,attempt.id,event),onTool:(tool:ControlTool,args:Record<string,unknown>)=>this.controlTool(run.id,stage.id,tool,args)};

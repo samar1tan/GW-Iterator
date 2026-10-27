@@ -3,7 +3,7 @@ import {constants} from 'node:fs';
 import {lstat, open, readdir, realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
-import type {Actor, ExecutionRef, KnowledgeSource, Pipeline, Project, RoleProfile, RunPolicy, Stage, TaskOutput, Usage} from './contracts.ts';
+import type {Actor, ExecutionRef, KnowledgeSource, KnowledgeSyncResult, Pipeline, Project, RoleProfile, RunPolicy, Stage, TaskOutput, Usage} from './contracts.ts';
 import type {AdapterEvent} from './adapters/types.ts';
 import type {Engine} from './engine.ts';
 import {defaultRoles} from './defaults.ts';
@@ -28,7 +28,7 @@ export type Adoption = {
   ref?: ExecutionRef; output?: TaskOutput; usage?: Usage; observations: string[];
   events: {at: string; type: string; message: string}[];
   proposal?: AdoptionProposal; error?: string; projectId?: string; appliedFromRevision?: number;
-  application?: {projectId: string; projectRevision: number; configured: boolean; pipelineIds: string[]; completed: number[]};
+  application?: {projectId?: string; projectRevision?: number; configured: boolean; pipelineIds: string[]; completed: number[];phase?:'installing'|'indexing'|'completed'|'failed';knowledgeSync?:{status:'pending'|'completed'|'failed';stats?:KnowledgeSyncResult['stats'];error?:string;at:string}};
 };
 export type AdoptionInput = {workspace: string; name?: string; repository?: string; idempotencyKey: string};
 
@@ -246,33 +246,36 @@ export class AdoptionService {
     demand(item.status === 'proposed' && item.proposal, 'ADOPTION_NOT_READY', 'Review a completed project proposal before applying.', 409);
     demand(!this.applying.has(id) && !this.applyingWorkspaces.has(item.workspace), 'ADOPTION_APPLYING', 'This workspace already has a proposal being applied.', 409); this.applying.add(id); this.applyingWorkspaces.add(item.workspace);
     try {
+      item.application??={configured:false,pipelineIds:[],completed:[]};item.application.phase='installing';delete item.error;this.save(item,'adoption.applying',actor);
       demand(await workspacePath(item.workspace) === item.workspace, 'ADOPTION_SOURCE_BOUNDARY', 'The selected workspace changed.');
       for (const source of item.sources) if (hash(await readSource(item.workspace, source.path)) !== source.hash) throw new AppError('ADOPTION_SOURCE_CHANGED', 'Project evidence changed since the scan. Start a fresh scan before applying.', 409, {path: source.path});
       const proposal = validateProposal(item.proposal, item.citedSources, item), candidate = proposalProject(proposal, item);
-      if (!item.application) {
+      if (!item.application.projectId) {
         for (const existing of this.engine.store.list<Project>('project')) if ((await realpath(existing.workspace).catch(() => existing.workspace)) === item.workspace) throw new AppError('WORKSPACE_REGISTERED', 'This workspace already belongs to a project.', 409, {projectId: existing.id});
-        const created = await this.engine.createProject({name: candidate.name, description: candidate.description, workspace: candidate.workspace, repository: candidate.repository}, actor);
-        item.projectId = created.id; item.application = {projectId: created.id, projectRevision: created.revision, configured: false, pipelineIds: [], completed: []}; this.save(item, 'adoption.project_created', actor);
+        await this.engine.createProject({name: candidate.name, description: candidate.description, workspace: candidate.workspace, repository: candidate.repository}, actor,created=>{item.projectId=created.id;item.application!.projectId=created.id;item.application!.projectRevision=created.revision;this.save(item,'adoption.project_created',actor);});
       }
       const application = item.application;
+      const projectId=application.projectId!;
       if (!application.configured) {
-        const project = this.engine.project(application.projectId);
+        const project = this.engine.project(projectId);
         demand(project.revision === application.projectRevision, 'REVISION_CONFLICT', 'The partially adopted project was edited. Inspect it before retrying setup.', 409);
-        const configured = await this.engine.updateProject(project.id, project.revision, {...project, description: candidate.description, roles: candidate.roles, knowledgeSources: candidate.knowledgeSources}, actor);
-        application.configured = true; application.projectRevision = configured.revision; this.save(item, 'adoption.roles_configured', actor);
+        await this.engine.updateProject(project.id, project.revision, {...project, description: candidate.description, roles: candidate.roles, knowledgeSources: candidate.knowledgeSources}, actor,configured=>{application.configured=true;application.projectRevision=configured.revision;this.save(item,'adoption.roles_configured',actor);});
       }
       for (const [index, pipeline] of proposal.pipelines.entries()) {
         if (application.completed.includes(index)) continue;
-        if (!application.pipelineIds[index]) { const created = this.engine.createPipeline({projectId: application.projectId, roleId: pipeline.roleId, name: pipeline.name, description: pipeline.description}, actor); application.pipelineIds[index] = created.id; this.save(item, 'adoption.workflow_created', actor); }
-        const existing = this.engine.pipeline(application.pipelineIds[index]);
-        demand(existing.revision === 1, 'REVISION_CONFLICT', 'A partially adopted workflow was edited. Inspect it before retrying setup.', 409);
-        this.engine.updatePipeline(existing.id, existing.revision, {...existing, ...pipeline}, actor); application.completed.push(index); this.save(item, 'adoption.workflow_configured', actor);
+        this.engine.store.transaction(()=>{
+          if(!application.pipelineIds[index]){const created=this.engine.createPipeline({projectId,roleId:pipeline.roleId,name:pipeline.name,description:pipeline.description},actor);application.pipelineIds[index]=created.id;this.save(item,'adoption.workflow_created',actor);}
+          const existing=this.engine.pipeline(application.pipelineIds[index]);demand(existing.revision===1,'REVISION_CONFLICT','A partially adopted workflow was edited. Inspect it before retrying setup.',409);
+          this.engine.updatePipeline(existing.id,existing.revision,{...existing,...pipeline},actor);application.completed.push(index);this.save(item,'adoption.workflow_configured',actor);
+        });
       }
-      item.status = 'applied'; item.appliedFromRevision = expectedRevision; delete item.error; this.save(item, 'adoption.applied', actor);
-      return this.engine.project(application.projectId);
-    } catch (error) { item = this.get(id, actor); item.error = message(error); this.save(item, 'adoption.apply_failed', actor); throw error; }
+      application.phase='indexing';application.knowledgeSync={status:'pending',at:at()};item.appliedFromRevision=expectedRevision;this.save(item,'adoption.indexing',actor);
+      try{await this.engine.sync(projectId,actor,result=>{const failed=!!(result.stats.errors||result.stats.missing);application.knowledgeSync={status:failed?'failed':'completed',stats:result.stats,at:at(),...(failed?{error:'Some registered knowledge sources could not be indexed. Inspect Knowledge and synchronize again.'}:{})};application.phase=failed?'failed':'completed';item.status='applied';if(failed)item.error=application.knowledgeSync.error;else delete item.error;this.save(item,'adoption.applied',actor);});}
+      catch(error){item=this.get(id,actor);item.status='applied';item.application!.phase='failed';item.application!.knowledgeSync={status:'failed',error:message(error),at:at()};item.error='Project configuration was applied, but initial knowledge synchronization failed. Inspect Knowledge and synchronize again.';this.save(item,'adoption.index_failed',actor);}
+      return this.engine.project(projectId);
+    } catch (error) { item = this.get(id, actor); item.error = message(error);if(item.application)item.application.phase='failed'; this.save(item, 'adoption.apply_failed', actor); throw error; }
     finally { this.applying.delete(id); this.applyingWorkspaces.delete(item.workspace); }
   }
-  recover(): void { for (const item of this.engine.store.list<Adoption>('adoption')) if (item.status === 'scanning') { item.status = 'failed'; item.error = 'Supervisor restarted before this project scan finished. Inspect its recorded reference and start a new scan.'; this.save(item, 'adoption.interrupted'); } }
+  recover(): void { for (const item of this.engine.store.list<Adoption>('adoption')) if (item.status === 'scanning') { item.status = 'failed'; item.error = 'Supervisor restarted before this project scan finished. Inspect its recorded reference and start a new scan.'; this.save(item, 'adoption.interrupted'); }else if(item.status==='proposed'&&['installing','indexing'].includes(item.application?.phase??'')){const indexing=item.application?.phase==='indexing';item.application!.phase='failed';item.error=indexing?'Project configuration was applied, but the supervisor restarted during initial knowledge synchronization. Inspect Knowledge and synchronize again.':'Supervisor restarted during setup application. Review its recorded progress before retrying.';if(indexing){item.status='applied';item.application!.knowledgeSync={status:'failed',error:item.error,at:at()};}this.save(item,'adoption.apply_interrupted');} }
   async close(): Promise<void> { const pending = [...this.active.values()]; for (const scan of pending) scan.controller.abort(); await Promise.allSettled(pending.map(scan => scan.finished)); }
 }

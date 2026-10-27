@@ -7,8 +7,10 @@ The [operating guide](operating-guide.md) explains controls and recovery in deta
 1. **Choose the project.** From Projects, select the workspace that owns the
    document. Each project has its own team, pipelines and knowledge. If it is
    new, connect its local location and review the adoption proposal before
-   applying it; applying configuration does not start work. **Connect manually**
+   applying it; Apply also indexes the selected local documents and does not start model work. **Connect manually**
    uses reusable defaults without a model scan.
+   Model-backed work needs a committed Git baseline at the selected repository root.
+   Resolve any source notice or use Check again after preparing that commit.
 2. **State the outcome.** In Workbench, describe the correction, its scope and
    the evidence you expect: for example, “Correct the outdated setup instruction
    in one document; verify the replacement against current source and check

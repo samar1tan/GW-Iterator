@@ -4,13 +4,15 @@ import {api,safeURL,uid} from '../api';
 import {Button,Empty,ErrorNotice,Status} from '../components';
 import {Icon,StateIcon} from '../Icons';
 import {useCopy} from './copy';
+import {ProjectReadinessNotice,useProjectReadiness} from './ProjectReadiness';
 import {recommendPipelines} from './recommendations';
 import {requestSummary} from './requestSummary';
 import type {AllowanceAssessment} from '../../src/account-allowance-types';
 import {AccountAllowance,canRequestAccountStep,accountStepNeedsApproval,accountStepAuthorization} from './AccountAllowance';
 
-export function Workbench({detail,onGoal,onRun,onPipeline,onLibrary,onStartPipeline,onChanged}:{detail:ProjectDetail;onGoal:(id:string)=>void;onRun:(id:string,stageId?:string)=>void;onPipeline:(id:string)=>void;onLibrary:()=>void;onStartPipeline:(pipeline:Pipeline)=>Promise<void>;onChanged:()=>Promise<void>}) {
+export function Workbench({detail,onGoal,onRun,onPipeline,onLibrary,onStartPipeline,onChanged,onSettings,onKnowledge}:{detail:ProjectDetail;onGoal:(id:string)=>void;onRun:(id:string,stageId?:string)=>void;onPipeline:(id:string)=>void;onLibrary:()=>void;onStartPipeline:(pipeline:Pipeline)=>Promise<void>;onChanged:()=>Promise<void>;onSettings?:()=>void;onKnowledge?:()=>void}) {
   const {p,t,date}=useCopy();
+  const readiness=useProjectReadiness(detail.project);
   const [request,setRequest]=useState(''), [busy,setBusy]=useState(false), [error,setError]=useState<unknown>(null), [key,setKey]=useState(uid), [account,setAccount]=useState<AllowanceAssessment|null>(null);
   const goals=detail.intakes??[], activeGoals=goals.filter(goal=>['routing','dispatched','retry_wait','clarification'].includes(goal.status));
   const goalRuns=new Set(goals.flatMap(goal=>goal.targetRunIds));
@@ -20,14 +22,15 @@ export function Workbench({detail,onGoal,onRun,onPipeline,onLibrary,onStartPipel
   const recommendations=recommendPipelines(detail.pipelines,detail.runs,detail.project.roles);
   const pristine=goals.length===0&&runs.length===0;
   const submit=async(event:React.FormEvent)=>{
-    event.preventDefault(); if(!request.trim()||busy||!canRequestAccountStep(account))return;
+    event.preventDefault(); if(!request.trim()||busy||readiness.readiness?.workspace.status!=='ready'||!canRequestAccountStep(account))return;
     setBusy(true);setError(null);
     try {const result=await api<Intake>(`/api/projects/${detail.project.id}/intakes`,{method:'POST',body:{request:request.trim(),idempotencyKey:key,resourceMode:'account',...accountStepAuthorization(account)}});setRequest('');setKey(uid());await onChanged();onGoal(result.id);} catch(value){setError(value);} finally{setBusy(false);}
   };
   const historyGoals=goals.filter(goal=>!activeGoals.includes(goal)).slice(0,6), historyRuns=runs.filter(run=>!current.includes(run)).slice(0,6);
   return <div className="pf-workbench">
     <header className="pf-view-header"><div><h1>{p('workbench')}</h1><p className="pf-view-subtitle">{detail.project.name}</p></div><div className="pf-work-summary"><span>{p('activeCount',{count:activeGoals.length+current.length})}</span><span className="pf-attention-count">{p('decisionCount',{count:decisions.length})}</span></div></header>
-    <form className="pf-outcome-entry" onSubmit={event=>void submit(event)}><label htmlFor="pf-new-outcome">{p('outcome')}</label><textarea id="pf-new-outcome" rows={2} value={request} onChange={event=>setRequest(event.target.value)} placeholder={p('outcomePlaceholder')}/><AccountAllowance context={{projectId:detail.project.id}} onAssessment={setAccount}/><div className="pf-outcome-actions"><Button type="submit" tone="primary" disabled={busy||!request.trim()||!canRequestAccountStep(account)}><Icon name="play"/>{p(busy?'starting':accountStepNeedsApproval(account)?'accountApproveStep':'startWork')}</Button></div></form>
+    <ProjectReadinessNotice {...readiness} onSettings={onSettings} onKnowledge={onKnowledge}/>
+    <form className="pf-outcome-entry" onSubmit={event=>void submit(event)}><label htmlFor="pf-new-outcome">{p('outcome')}</label><textarea id="pf-new-outcome" rows={2} value={request} onChange={event=>setRequest(event.target.value)} placeholder={p('outcomePlaceholder')}/><AccountAllowance context={{projectId:detail.project.id}} onAssessment={setAccount}/><div className="pf-outcome-actions"><Button type="submit" tone="primary" disabled={busy||!request.trim()||readiness.readiness?.workspace.status!=='ready'||!canRequestAccountStep(account)}><Icon name="play"/>{p(busy?'starting':accountStepNeedsApproval(account)?'accountApproveStep':'startWork')}</Button></div></form>
     <ErrorNotice error={error}/>
     <div className={`pf-workbench-columns ${pristine?'is-new-project':''}`}>
       <section className="pf-section pf-current-work"><div className="pf-section-heading"><h2>{p('currentWork')}</h2><span className="count">{activeGoals.length+current.length}</span></div>{!activeGoals.length&&!current.length?<Empty>{p('noWork')}</Empty>:<div className="pf-work-cards">{activeGoals.map(goal=><GoalCard key={goal.id} goal={goal} detail={detail} onOpen={()=>onGoal(goal.id)}/>)}{current.map(run=><RunCard key={run.id} run={run} onOpen={()=>onRun(run.id)}/>)}</div>}</section>

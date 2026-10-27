@@ -809,7 +809,19 @@ test('development server blocks synthetic private files through direct, raw, enc
     return await response.json();
   };
   const project=await localJSON('/api/projects','POST',{name:'Synthetic API project',workspace:directory}) as Project;
+  const readiness=await localJSON('/api/projects/'+project.id+'/readiness');
+  assert.equal(readiness.workspace.code,'GIT_REPOSITORY_REQUIRED');assert.equal(readiness.knowledge.status,'not_configured');
+  const bindings=await localJSON('/api/projects/'+project.id+'/bindings','PATCH',{expectedRevision:project.revision,bindings:{name:'Synthetic renamed API project',description:project.description,workspace:project.workspace,repository:project.repository}}) as Project;
+  assert.deepEqual(bindings.roles,project.roles);assert.deepEqual(bindings.knowledgeSources,project.knowledgeSources);
+  for(const request of [
+    {route:'/api/projects/'+project.id+'/bindings',method:'PATCH',body:{expectedRevision:bindings.revision,bindings:{name:'Expanded write',roles:[]}},code:'INVALID_PROJECT_BINDINGS'},
+    {route:'/api/projects/'+project.id+'/bindings',method:'PATCH',body:{expectedRevision:project.revision,bindings:{name:'Stale write'}},code:'REVISION_CONFLICT'},
+  ]){const response:Response=await fetch(origin+request.route,{method:request.method,headers:{cookie,origin,'content-type':'application/json'},body:JSON.stringify(request.body)});assert.equal(response.status,request.code==='REVISION_CONFLICT'?409:400);assert.equal((await response.json()).error.code,request.code);}
   const detail=await localJSON('/api/projects/'+project.id) as {pipelines:Pipeline[]},flow=detail.pipelines[0];
+  for(const request of [
+    {route:'/api/runs',body:{projectId:project.id,pipelineId:flow.id,goal:'A model task needs committed input.',idempotencyKey:randomUUID()}},
+    {route:'/api/projects/'+project.id+'/intakes',body:{request:'A model goal needs committed input.',idempotencyKey:randomUUID()}},
+  ]){const response:Response=await fetch(origin+request.route,{method:'POST',headers:{cookie,origin,'content-type':'application/json'},body:JSON.stringify(request.body)});assert.equal(response.status,409);assert.equal((await response.json()).error.code,'GIT_REPOSITORY_REQUIRED');}
   const definition={...flow,stages:[{id:'manual-check',name:'Synthetic owner check',roleId:flow.roleId,executor:'manual',dependsOn:[],prompt:'Record the actual synthetic check.',review:false}]};
   await localJSON('/api/pipelines/'+flow.id,'PUT',{expectedRevision:flow.revision,definition});
   const run=await localJSON('/api/runs','POST',{projectId:project.id,pipelineId:flow.id,goal:'Verify the manual continuation API.',idempotencyKey:randomUUID(),limits:{tokenBudget:2000}}) as Run;

@@ -4,11 +4,13 @@
 
 After [local setup](multica-setup.md), start GWI and open `http://127.0.0.1:4318`. Projects is the top-level entry. A project has its own workspace, team, pipelines, knowledge and configuration; GitWorld and GWI can be managed independently.
 
-Choose an existing local workspace. Add a GitHub repository binding when the work needs it. Codex-assisted adoption reads bounded eligible sources and proposes project guidance, registered knowledge and workflows. Review the sources and proposal before applying it. Applying a configuration does not start project work or synchronize knowledge.
+Choose an existing local workspace. Add a GitHub repository binding when the work needs it. Codex-assisted adoption reads bounded eligible sources and proposes project guidance, registered knowledge and workflows. Review the sources and proposal before applying it. Applying a new configuration also synchronizes its reviewed local knowledge sources, without starting model work or CI. If indexing fails, the created project remains available; resolve the source in Knowledge and synchronize again. Previously applied setup records are not silently resynchronized.
 
 **Connect manually** creates the project with reusable defaults without a model scan. Repository binding and description are optional; team and workflow settings remain editable afterward.
 
 ## Start and follow work
+
+Before model work, GWI checks that the selected folder is its Git repository root and has a committed source baseline. A dirty working tree does not block setup, but runs use committed files. Missing Git input is shown before dispatch; **Check again** refreshes it without model work. GWI does not initialize, stage or commit source as a hidden setup step. Known human-only workflows do not require this model-source check.
 
 In the project **Workbench**, describe what should change and how you will recognize a useful result. Running a saved pipeline opens a short dialog for this concrete outcome; cancelling or leaving it empty starts no work. Ordinary starts inherit the project and role settings. Inspect the role/model summary when useful; attempt/time bounds and native permissions are advanced controls, not required launch fields. Codex allowance shows the actual account windows, remaining percentages and reset times; Refresh reads them without starting a model task.
 
@@ -42,7 +44,7 @@ The **Pipelines** library separates reusable definitions from executions. Start 
 
 Process proposals record a definition revision, rationale and supporting run. Inspect them before applying. Stale revisions are rejected. Local configuration changes remain private; do not publish actual project, pipeline or role settings as examples.
 
-In **Team**, role contracts describe responsibilities, inputs, outputs and acceptance checks. Select actual agents, skills, tools and runtimes. A shared agent is a template for a project copy. Materialized role agents are immutable; use role settings to create another revision. Project custom templates can be edited. Native configuration that may contain credentials is write-only in the browser.
+Settings edits project bindings; its role/default summaries link to **Team**. In **Team**, role contracts describe responsibilities, inputs, outputs and acceptance checks. Select actual agents, skills, tools and runtimes. A shared agent is a template for a project copy. Materialized role agents are immutable; use role settings to create another revision. Project custom templates can be edited. Native configuration that may contain credentials is write-only in the browser. Advanced role settings distinguish Multica skill-library bindings used by ordinary work from local skill files used by native Codex execution. Local discovery failures retain saved paths.
 
 If a batch role import stops partway through, confirmed roles are already saved. The form reports progress and retains only the remaining roles; correct those entries and retry. Do not resubmit the original batch.
 
@@ -53,6 +55,8 @@ GWI control-tool permissions and native file permissions are separate. Each work
 In **Knowledge**, register deliberate local sources and relevant roles, then synchronize. Supported text documents and selected memory-heading subtrees retain source identity, revision and hash. Missing or failed sources remain inspectable but do not enter new execution context. Synchronization does not crawl the home directory or translate arbitrary material.
 
 Source paths can be absolute or relative to the project's workspace, such as `docs` or `README.md`. Synchronization indexes eligible formats and excludes private configuration and credential paths. If a missing directory later becomes available, synchronize again to replace its missing-source placeholder with the current documents.
+
+Expand a source to edit its path, kind, role tags or memory section, or remove its registration. Changes invalidate its former current context immediately; source files, lessons and frozen historical run context remain intact. Synchronize after an edit to establish the revised current content.
 
 Search by title/content with role/type filters. Worker context uses bounded excerpts while the full indexed content remains available in the knowledge view. Retain verified lessons with the source run; do not turn every model sentence into project memory. A lesson or process improvement still needs supporting evidence.
 
