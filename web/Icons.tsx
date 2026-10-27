@@ -1,10 +1,11 @@
 import type {CSSProperties} from 'react';
 import type {WorkStatus} from '../src/contracts';
 
-export type IconName = 'arrow-left' | 'arrow-right' | 'arrow-up-right' | 'check' | 'check-circle' | 'chevron-down' | 'chevron-right' | 'circle' | 'clock' | 'close' | 'code' | 'cpu' | 'copy' | 'file' | 'folder' | 'graph' | 'info' | 'layers' | 'list' | 'pause' | 'play' | 'plus' | 'project' | 'refresh' | 'search' | 'settings' | 'shield' | 'stop' | 'team' | 'undo' | 'terminal' | 'warning' | 'workflow' | 'x-circle';
+export type IconName = 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-up-right' | 'check' | 'check-circle' | 'chevron-down' | 'chevron-right' | 'circle' | 'clock' | 'close' | 'code' | 'cpu' | 'copy' | 'file' | 'folder' | 'graph' | 'info' | 'layers' | 'list' | 'pause' | 'play' | 'plus' | 'project' | 'refresh' | 'search' | 'settings' | 'shield' | 'stop' | 'team' | 'undo' | 'terminal' | 'warning' | 'workflow' | 'x-circle';
 const paths: Record<IconName, string[]> = {
   'arrow-left': ['m10 4-6 6 6 6', 'M4 10h13'],
   'arrow-right': ['m10 4 6 6-6 6', 'M3 10h13'],
+  'arrow-up': ['m4 10 6-6 6 6', 'M10 4v13'],
   'arrow-up-right': ['M5 15 15 5', 'M5 5h10v10'],
   check: ['m4 10 4 4 8-8'],
   'check-circle': ['M17 10a7 7 0 1 1-3-5.7', 'm6 9 3 3 8-8'],

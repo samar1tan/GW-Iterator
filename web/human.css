@@ -274,7 +274,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-filter-group > button { padding: 5px 8px; font-size: 12px; border-radius: 5px; color: #8f9db2; }
 .pf-filter-group > button.selected { background: #263245; color: var(--text); }
 .pf-activity-toolbar > .button { min-height: 28px; font-size: 12px; }
-.pf-activity-scroll { padding: 6px 18px; }
+.pf-activity-scroll { padding: 6px 18px; overflow-anchor: none; }
 .pf-timeline-event { padding: 18px 0; }
 .pf-timeline-icon { border-color: #3c4859; background: #202936; width: 24px; height: 24px; color: #95a7c1; }
 .category-review .pf-timeline-icon { color: var(--attention); border-color: #d9b46c45; }

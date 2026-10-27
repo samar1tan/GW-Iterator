@@ -10,15 +10,15 @@ const humanEventTypes = new Set([
 export function isHumanActivity(event: AuditEvent): boolean {
   return humanEventTypes.has(event.type) || /(?:^|\.)verification\.(prepared|checked)$/.test(event.type);
 }
-export type ActivityGroup = {key:number; event:AuditEvent; count:number; lastSeq:number};
+export type ActivityGroup = {key:number; event:AuditEvent; count:number; lastSeq:number;lastAt:string};
 export function groupHumanActivity(events: AuditEvent[]): ActivityGroup[] {
   const groups: ActivityGroup[] = [];
   for (const event of events.filter(isHumanActivity)) {
     const previous = groups.at(-1);
     const sameResult = !!previous && ['stage.result','manual.completed'].includes(previous.event.type) && ['stage.result','manual.completed'].includes(event.type);
-    if (previous && previous.event.stageId === event.stageId && previous.event.message === event.message && (sameResult || (previous.event.type === event.type && previous.event.actor === event.actor))) {
-      previous.count++; if (!sameResult || event.type === 'manual.completed') previous.event = event; previous.lastSeq = event.seq;
-    } else groups.push({key:event.seq,event,count:1,lastSeq:event.seq});
+    if (previous && previous.event.projectId === event.projectId && previous.event.runId === event.runId && previous.event.stageId === event.stageId && previous.event.message === event.message && (sameResult || (previous.event.type === event.type && previous.event.actor === event.actor))) {
+      previous.count++; if (!sameResult || event.type === 'manual.completed') previous.event = event; previous.lastSeq = event.seq;previous.lastAt=event.at;
+    } else groups.push({key:event.seq,event,count:1,lastSeq:event.seq,lastAt:event.at});
   }
   return groups;
 }

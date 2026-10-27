@@ -42,6 +42,15 @@ test('provider deltas remain technical while repeated workflow observations grou
   assert.equal(resultGroups[0].count,2);
 });
 
+test('activity groups keep project/run identities and the latest observation time',()=>{
+  const first=event(1),next={...first,seq:2,at:'2026-01-01T12:01:00Z'};
+  const groups=groupHumanActivity([first,next,{...next,seq:3,runId:'another-run'},{...next,seq:4,projectId:'another-project'}]);
+  assert.deepEqual(groups.map(group=>[group.key,group.lastSeq,group.count]),[[1,2,2],[3,3,1],[4,4,1]]);
+  assert.equal(groups[0].lastAt,next.at);assert.equal(first.at,'2026-01-01T12:00:00Z');
+  const manual={...event(5,'manual.completed'),message:'Accepted synthetic result.',actor:'Synthetic reviewer'},result={...manual,type:'stage.result',seq:6,actor:'scheduler',at:'2026-01-01T12:02:00Z'};
+  const grouped=groupHumanActivity([manual,result])[0];assert.equal(grouped.event.actor,'Synthetic reviewer');assert.equal(grouped.key,5);assert.equal(grouped.lastAt,result.at);
+});
+
 const project:Project={id:'example',name:'Example project',description:'Independently authored example',workspace:'/example-project',repository:'example/project',revision:1,createdAt:'2026-01-01T12:00:00Z',updatedAt:'2026-01-01T12:00:00Z',knowledgeSources:[],roles:[{id:'owner',name:'Example owner',description:'Prepare and inspect the requested result.',instructions:'Use the recorded requirements.',model:'example-model',effort:'max',sandbox:'read-only',skills:[],tools:['context.read','run.read']}]};
 const pipeline:Pipeline={id:'example-flow',projectId:project.id,revision:1,name:'Example workflow',description:'Prepare and review a focused change.',roleId:'owner',stages:[{id:'prepare',name:'Prepare change',roleId:'owner',executor:'codex',dependsOn:[],prompt:'Prepare the requested change.',review:true,checks:['Check the requested behavior.']},{id:'deliver',name:'Inspect delivery',roleId:'owner',executor:'manual',dependsOn:['prepare'],prompt:'Inspect the actual result.',review:false}],policy:{concurrency:1,maxAttempts:2,maxIterations:1,timeoutSeconds:300,tokenBudget:20000},updatedAt:project.updatedAt};
 const run:Run={id:'example-run',projectId:project.id,pipelineId:pipeline.id,goal:'Correct the example navigation and verify the affected links.',baseline:'Example baseline',trigger:{kind:'human',actor:'Example owner'},status:'review',iteration:1,mode:'once',createdAt:project.createdAt,updatedAt:project.updatedAt,dependsOnRunIds:[],idempotencyKey:'example-key',inputHash:'example-hash',snapshot:{project,pipeline,pipelines:[pipeline],knowledge:[]},stages:[{stageId:'prepare',status:'review',attempts:[{id:'example-attempt',number:1,iteration:1,status:'review',startedAt:project.createdAt,endedAt:project.updatedAt,provider:'manual',output:{outcome:'done',summary:'Prepared the example navigation change.',artifacts:[{label:'Example evidence',path:'evidence.md'}],observations:[]}}]},{stageId:'deliver',status:'queued',attempts:[]}]};
@@ -64,6 +73,10 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
     for(const locale of ['en','zh-CN']){
       const render=(element:ReturnType<typeof createElement>)=>renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},element));
       const html=render(createElement(RunWorkspace,{run,events:[event(1),event(2,'stage.result')],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
+      const activity=render(createElement(ActivityTimeline,{events:[event(1),event(2,'stage.result'),event(3,'stage.failed')]}));
+      assert.ok(activity.indexOf('data-activity-key="3"')<activity.indexOf('data-activity-key="2"'));
+      assert.ok(activity.indexOf('data-activity-key="2"')<activity.indexOf('data-activity-key="1"'));
+      assert.ok(activity.includes(locale==='en'?'Latest first':'最新在前'));
       assert.ok(html.includes('pf-step-list'));
       assert.ok(!html.includes('react-flow__renderer'));
       assert.ok(html.includes('Prepared the example navigation change.'));
