@@ -141,3 +141,9 @@ Each agent attempt uses a unique issue title and the explicit upstream duplicate
 ### Native reasoning effort
 
 Role `effort` and connected-agent `thinking_level` accept `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. New role/agent creation defaults to `max` when no explicit effort is provided. Updates preserve existing effort when omitted; duplicate/import operations preserve explicit source settings. Project serialization and Codex/Multica execution preserve the native value without substitution. This does not migrate private configurations or frozen snapshots; actual model availability and supported efforts are determined by the installed catalog and execution runtime.
+
+## Informational request results
+
+A coordinator can return `IntakeDecision` with `action:"answer"`, an empty `tasks` array and a nonempty `response` of at most 16,000 characters, alongside the usual concise `rationale` and `expectedGain`. This is a read-only informational result, not artifact delivery. It is rejected after any recorded dispatch/retry or actual ordinary delegated execution in the durable run family, including a child omitted from the target list. Current execution scope, Stop and authoritative completion/cleanup checks still apply. Native and connected planners use the same decision boundary.
+
+After verified execution termination, the request has `status:"completed"`, `resultKind:"answer"` and its response in `outcome`; the final event is `goal.answered`. Existing requests and delegated `complete` decisions retain their prior semantics and acceptance checks. Viewing a completed coordinator's retained output on a failed historical request changes no persisted state and starts no model work.

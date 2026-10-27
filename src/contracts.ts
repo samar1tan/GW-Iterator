@@ -103,7 +103,7 @@ export type Intake = {
   id: string; projectId: string; request: string; baseline: string;
   status: 'routing' | 'dispatched' | 'clarification' | 'failed' | 'completed' | 'stopped' | 'retry_wait'; createdAt: string; updatedAt: string;
   routerRunId: string; targetRunId?: string; pipelineId?: string; rationale?: string; question?: string; error?: string;
-  idempotencyKey: string; targetRunIds: string[]; rounds: IntakeRound[]; policy: IntakePolicy; outcome?: string;
+  idempotencyKey: string; targetRunIds: string[]; rounds: IntakeRound[]; policy: IntakePolicy; outcome?: string; resultKind?: 'answer';
   supervisorRunIds?: string[]; basisRevision?:number; recoveryHistory?:GoalRecoveryRecord[]; nextRetryAt?:string;
   lastFailure?:GoalFailure; canRetry?:boolean; retryBlockedReason?:string;
   retryBlockedCode?:string;retryBlockedScope?:RecoveryScope;retryBlockedStageId?:string;allowance?:GoalAllowance;
@@ -125,7 +125,7 @@ export type GoalRecoveryRecord = {
   approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation};
 };
 export type IntakeRetryInput = {resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string;note?:string; model?:string; refreshConfiguration?:boolean;recoveryKey?:string;approveRecommendation?:boolean; policy?:{maxRounds?:number; maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
-export type IntakeDecision = {action: 'dispatch' | 'retry' | 'complete' | 'clarify' | 'stop'; rationale: string; expectedGain: string; tasks: {pipelineId: string; goal: string}[]; question?: string; retry?:{runId:string;stageId:string;note:string}};
+export type IntakeDecision = {action: 'dispatch' | 'retry' | 'complete' | 'answer' | 'clarify' | 'stop'; rationale: string; expectedGain: string; tasks: {pipelineId: string; goal: string}[]; response?: string; question?: string; retry?:{runId:string;stageId:string;note:string}};
 export type IntakeRound = {number: number; routerRunId: string; targetRunIds: string[]; decision?: IntakeDecision};
 export type ProjectDetail = {project: Project; pipelines: Pipeline[]; runs: Run[]; knowledge: KnowledgeEntry[]; proposals: Proposal[]; events: AuditEvent[]; intakes: Intake[]};
 export type Actor = {name: string; kind: 'human' | 'agent'; projectId?: string; tools?: ControlTool[]};

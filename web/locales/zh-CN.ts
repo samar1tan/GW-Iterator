@@ -1,6 +1,9 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  intakeAnswered:'已回答', directAnswer:'回答', retainedGoalResult:'已生成的结果',
+  retainedGoalResultHelp:'流程结束校验失败，已生成的结果仍保留在下方。查看不需要重新执行，也不代表工作已经验收。',
+  noActionsDispatched:'本次没有派发任务。', noAcceptedGoalResult:'本次尚未记录已确认的结果。',
   markdownFootnotes:'脚注', markdownFootnoteBack:'返回引用处', markdownImage:'图片引用', markdownTable:'表格', markdownCodeBlock:'代码块',
   knowledgeFileLink:'文件链接：{path}。请在本地项目中打开。',
   knowledgeIndexUnverified:'有 {count} 个来源的同步状态尚未确认；已有本地知识仍可查看。',

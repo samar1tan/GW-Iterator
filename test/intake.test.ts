@@ -846,3 +846,49 @@ test('stopping during an account approval cancels a pending legacy-goal migratio
   await immediate();h.intake.cancel(item.id,'Synthetic owner cancels pending account check.',OWNER);gate.resolve(syntheticAccountReading());
   await assert.rejects(continuation,code('RECOVERY_CANCELLED'));assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');
 });
+
+const directAnswer = ():IntakeDecision => ({action:'answer',rationale:'The informational question needs no artifact changes.',expectedGain:'Explain the recorded status without a child workflow.',tasks:[],response:'## Recorded status\n\nNo active actions are recorded. Delivery is **not** established by this answer.'});
+
+test('a native informational answer waits for native completion and retains its response without child work', async t => {
+  const h=await fixture(t),item=create(h),goal=h.codex.goals[0],answer=directAnswer();
+  const recorded=await goal.input.onTool('intake.route',answer) as {accepted:boolean};assert.equal(recorded.accepted,true);
+  assert.equal(current(h,item).status,'routing');assert.equal(current(h,item).outcome,undefined);assert.equal(h.codex.tasks.length,0);
+  goal.completion.resolve({status:'complete',summary:'A short provider closing summary.'});
+  await pump(h,()=>current(h,item).status==='completed','the native answer terminal result');
+  const ended=current(h,item);assert.equal(ended.resultKind,'answer');assert.equal(ended.outcome,answer.response);assert.equal(ended.rounds[0].decision?.response,answer.response);
+  assert.equal(ended.targetRunIds.length,0);assert.equal(h.codex.goals.length,1);assert.equal(h.engine.run(item.routerRunId).stages[0].attempts[0].nativeCleanupConfirmed,true);
+  assert.ok(h.engine.store.events({runId:item.routerRunId}).some(event=>event.type==='goal.answered'));
+});
+
+test('one connected decision can answer without child runs, another paid decision or delivery acceptance', async t => {
+  const h=await plannerFixture(t),item=create(h),answer=directAnswer();
+  h.planner.calls[0].completion.resolve({decision:answer});
+  await pump(h,()=>current(h,item).status==='completed','one verified read-only decision');
+  const ended=current(h,item);assert.equal(ended.resultKind,'answer');assert.equal(ended.outcome,answer.response);assert.equal(h.planner.calls.length,1);assert.equal(h.codex.tasks.length,0);assert.deepEqual(ended.targetRunIds,[]);
+  assert.equal(h.engine.run(item.routerRunId).stages[0].attempts[0].output?.summary,answer.response);
+  assert.equal(h.engine.store.list<Run>('run').filter(run=>!run.executionKind).length,0);
+});
+
+test('answer cannot bypass earlier dispatch/retry or a partially registered durable child', async t => {
+  for(const variant of ['dispatch','retry','orphan-child'] as const)await t.test(variant,async sub=>{
+    const h=await fixture(sub),item=create(h),goal=h.codex.goals[0];
+    if(variant==='orphan-child')h.engine.startRun({projectId:h.project.id,pipelineId:h.flows[0].id,goal:'Synthetic partly registered child.',baseline:'Synthetic baseline.',parentRunId:item.routerRunId,idempotencyKey:'orphan-child'},OWNER);
+    else {const stored=h.engine.store.get<Intake>('intake',item.id)!;stored.rounds.push({number:1,routerRunId:item.routerRunId,targetRunIds:[],decision:{...decision('stop'),action:variant}});h.engine.store.put('intake',stored);}
+    await assert.rejects(goal.input.onTool('intake.route',directAnswer()),code('ANSWER_AFTER_ACTION'));
+    assert.notEqual(current(h,item).resultKind,'answer');
+  });
+});
+
+test('a stopped native answer and an unconfirmed connected task cannot acquire answered status', async t => {
+  await t.test('Stop wins over the pending native answer',async sub=>{
+    const h=await fixture(sub),item=create(h);await h.codex.goals[0].input.onTool('intake.route',directAnswer());h.intake.cancel(item.id,'Stop the synthetic pending answer.',OWNER);
+    await immediate();assert.equal(current(h,item).status,'stopped');assert.equal(current(h,item).resultKind,undefined);
+    await assert.rejects(h.codex.goals[0].input.onTool('intake.route',directAnswer()),code('INTAKE_SCOPE'));
+  });
+  await t.test('unknown external cleanup remains a blocker',async sub=>{
+    const h=await plannerFixture(sub);const original=h.planner.start.bind(h.planner);
+    h.engine.goalPlanner={async start(input){const execution=await original(input);return{...execution,completion:execution.completion.then(value=>{const record=h.engine.store.get<{id:string;cleanupConfirmed:boolean}>('multica-execution',input.executionId)!;record.cleanupConfirmed=false;h.engine.store.put('multica-execution',record);return value;})};}};
+    const item=create(h);h.planner.calls[0].completion.resolve({decision:directAnswer()});
+    await pump(h,()=>current(h,item).status==='failed','unconfirmed external answer rejection');assert.equal(current(h,item).resultKind,undefined);assert.deepEqual(current(h,item).rounds,[]);
+  });
+});

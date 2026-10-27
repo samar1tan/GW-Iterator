@@ -1,4 +1,7 @@
 export const en = {
+  intakeAnswered:'Answered', directAnswer:'Answer', retainedGoalResult:'Generated result',
+  retainedGoalResultHelp:'Workflow completion failed. The generated result is retained below; reading it does not require another execution or establish accepted delivery.',
+  noActionsDispatched:'No action was dispatched.', noAcceptedGoalResult:'No accepted result is recorded.',
   markdownFootnotes:'Footnotes', markdownFootnoteBack:'Back to reference', markdownImage:'Image reference', markdownTable:'Table', markdownCodeBlock:'Code block',
   knowledgeFileLink:'File link: {path}. Open it from the local project.',
   knowledgeIndexUnverified:'Sources with unconfirmed sync status: {count}. Existing local knowledge is available.',

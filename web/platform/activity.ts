@@ -4,7 +4,7 @@ export type ActivityCategory = 'work' | 'review' | 'system';
 const humanEventTypes = new Set([
   'run.started','run.account_policy','account.step_authorized','run.completed','run.cancelled','run.stopped','run.paused','run.resumed','run.recovered','run.limits_changed','run.dependency','run.loop',
   'stage.started','stage.result','stage.review','stage.failed','stage.retry','stage.limit','stage.timeout','stage.skipped','stage.linked',
-  'goal.created','goal.decision','goal.dispatched','goal.clarification','goal.handoff','goal.completed','goal.failed','goal.stopped','goal.interrupted','goal.planner_failed','goal.capacity_failed','goal.policy_approved','goal.policy_extended','goal.stage_retried','goal.recovery_scheduled','goal.recovery_started','goal.recovery_failed','goal.recovery_interrupted','goal.recovery_limit',
+  'goal.created','goal.decision','goal.dispatched','goal.clarification','goal.handoff','goal.completed','goal.answered','goal.failed','goal.stopped','goal.interrupted','goal.planner_failed','goal.capacity_failed','goal.policy_approved','goal.policy_extended','goal.stage_retried','goal.recovery_scheduled','goal.recovery_started','goal.recovery_failed','goal.recovery_interrupted','goal.recovery_limit',
   'manual.completed','github.observed','multica.steered','multica.steer_pending','codex.steered',
 ]);
 export function isHumanActivity(event: AuditEvent): boolean {
@@ -32,6 +32,7 @@ export function activityTitle(type: string) {
   if (type === 'stage.result' || type === 'manual.completed') return 'eventStageResult';
   if (/(?:^|\.)verification\.prepared$/.test(type)) return 'eventVerificationPrepared';
   if (/(?:^|\.)verification\.checked$/.test(type)) return 'eventVerificationChecked';
+  if (type === 'goal.answered') return 'eventAnswered';
   if (type === 'github.observed') return 'eventCiStatus';
   if (/handoff|dependency|stage\.linked/.test(type)) return 'eventHandoff';
   if (/steer|guidance/.test(type)) return 'eventGuidance';

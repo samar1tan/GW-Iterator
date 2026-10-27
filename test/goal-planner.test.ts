@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {validatePlannerDecision} from '../src/goal-planner.ts';
 import {AppError} from '../src/validation.ts';
+import {TOOL_DEFINITIONS} from '../src/adapters/codex.ts';
 
 const base = {rationale: 'The inspected evidence supports this action.', expectedGain: 'Resolve the remaining bounded question.', tasks: []};
 
@@ -23,4 +24,22 @@ test('planner output must describe one bounded action and required evidence', ()
     {action: 'dispatch', ...base, tasks: [1, 2, 3]}, {action: 'dispatch', ...base, tasks: [{pipelineId: '', goal: 'Missing target.'}]}]) {
     assert.throws(() => validatePlannerDecision(value), error => error instanceof AppError);
   }
+});
+
+test('read-only answers carry a bounded response and never hide dispatched work in tasks', () => {
+  const response = 'The recorded project has no active actions; release acceptance remains unverified.';
+  assert.deepEqual(validatePlannerDecision({action: 'answer', ...base, response}), {action: 'answer', ...base, response});
+  for (const value of [undefined, '', '   ', 'x'.repeat(16001)]) {
+    assert.throws(() => validatePlannerDecision({action: 'answer', ...base, response: value}), error => error instanceof AppError && error.code === 'ANSWER_REQUIRED');
+  }
+  assert.throws(() => validatePlannerDecision({action: 'answer', ...base, response, tasks: [{pipelineId: 'flow', goal: 'Hidden implementation.'}]}), error => error instanceof AppError && error.code === 'INVALID_DECISION');
+});
+
+
+test('native tool discovery exposes the same answer and retry decision contract', () => {
+  const properties=TOOL_DEFINITIONS['intake.route'].properties;
+  const action=properties.action as {enum:string[]};
+  assert.ok(action.enum.includes('answer'));assert.ok(action.enum.includes('retry'));
+  assert.deepEqual(properties.response,{type:'string'});
+  assert.ok(properties.retry);
 });
