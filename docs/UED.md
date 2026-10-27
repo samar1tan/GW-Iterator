@@ -16,13 +16,15 @@ Use the same object hierarchy everywhere: project → outcome or direct executio
 
 Use near-black canvas, distinct charcoal surfaces, blue selection and restrained status colors. Maintain readable type, aligned controls, clear density and adequate hit targets. Large empty cards do not replace hierarchy. Every visible item has a useful role and a working interaction.
 
+The [global workbench interaction](global-workbench-ued.md) extends Projects with cross-project observation and project-scoped interaction in place.
+
 ## Module and entry contract
 
 This is one navigation system, not a sequence of mandatory forms. The paths below already have corresponding frontend surfaces; the return, empty-state and feedback requirements are acceptance obligations rather than claims that every path has passed.
 
 | Entry / object | Primary content and action | Context, onward path and return | Empty or failed state |
 | --- | --- | --- | --- |
-| Projects | Actual connected projects; Connect project, with a quieter Connect manually alternative. | Select a project to enter Workbench; project switching clears unrelated object selections. | With no projects, explain the local project/team/pipeline purpose in two short sentences and offer Connect project. Distinguish initial loading and connection failure from an empty library. |
+| Projects / global workbench | Connected projects, scoped request entry, cross-project attention/current work and recent results; Connect project and quieter manual setup. | Filter by project or open work in the global shell. Reply, follow up, review and control work here; entering a dedicated project workspace is optional. | With no projects, retain the connect entry. Failed summaries preserve known work and locally confirmed receipts without inventing an empty workspace. |
 | Workbench | Outcome entry, current work, needed decisions and delivered evidence; saved-pipeline shortcuts. | A new outcome opens its goal; a direct run opens its execution. A decision opens the actual stage. | No work is an invitation to describe an outcome or use a saved pipeline, not a failure. Manual/review/account holds are counted truthfully. |
 | Goal / supervising outcome | Request, current interpretation, delegated runs, clarification and next useful action. | Open a child execution with a return to this goal. Return from the goal to Workbench. | Distinguish clarification, human/account wait, recoverable failure and stopped/completed history; act on the limiting scope. |
 | Pipelines: Library / Executions | Library is reusable definitions with Edit/Run; Executions is actual run history. | Preserve the active tab/filter when returning from an editor or execution. Run opens the concrete-outcome dialog before dispatch. | No definition, no matching filter and no executions are separate states with relevant existing actions. |

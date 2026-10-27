@@ -1,0 +1,81 @@
+import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
+import type {Intake,ModelInfo,ProjectDetail,ProjectOverview,WorkspaceDecision,WorkspaceSummary,WorkspaceWork,WorkStatus} from '../../src/contracts';
+import {currentWorkStatuses} from '../../src/contracts';
+import {api} from '../api';
+import {Button,Empty,Notice,Status} from '../components';
+import {Icon} from '../Icons';
+import {useCopy} from './copy';
+import {RequestComposer} from './RequestComposer';
+import {GoalWorkspace} from './GoalWorkspace';
+import {RunWorkspace} from './RunWorkspace';
+import {useTextDraft} from './useTextDraft';
+import {observeProjectWork,withCreatedWork} from './workObservations';
+import type {CreatedWork} from './workObservations';
+import {globalWorkRoute,observeWorkspace,knownWorkspace,unobservedWorkspaceReceipts,nextWorkspaceInteraction} from './globalWork';
+import {requestSummary} from './requestSummary';
+import {writeRoute} from './route';
+import type {Navigate,Route} from './route';
+import type {TeamData} from './types';
+import './global.css';
+
+export function GlobalWorkbench({projects,models,route,navigate,onConnect,onManual}:{projects:ProjectOverview[];models:ModelInfo[];route:Route;navigate:Navigate;onConnect:()=>void;onManual:()=>void}){
+  const {p,date}=useCopy();
+  const [summary,setSummary]=useState<WorkspaceSummary|null>(null),[summaryError,setSummaryError]=useState<unknown>(null),[detailError,setDetailError]=useState<unknown>(null),[,setCacheVersion]=useState(0),[expanded,setExpanded]=useState(false),[storedTarget,setTarget]=useTextDraft('global:target-project');
+  const cache=useRef(new Map<string,ProjectDetail>()),pending=useRef<CreatedWork[]>([]),summaryPending=useRef<CreatedWork[]>([]),observed=useRef(new Map<string,number>()),summaryState=useRef<WorkspaceSummary|null>(null),[steer,setSteer]=useState(false);
+  const mounted=useRef(true);useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;}},[]);
+  const routeStamp=writeRoute(route);
+  const selectedProjectId=route.contextProjectId,detailProject=projects.find(project=>project.id===selectedProjectId),detail=detailProject?cache.current.get(detailProject.id):undefined;
+  const target=projects.find(project=>project.id===storedTarget)??projects.find(project=>project.id===route.projectFilter)??(projects.length===1?projects[0]:undefined);
+  const interactionStamp=routeStamp+'|'+(target?.id??''),interaction=useRef({stamp:interactionStamp,generation:0});interaction.current=nextWorkspaceInteraction(interaction.current,interactionStamp);const interactionGeneration=interaction.current.generation;
+  const updateSummary=useCallback((incoming:WorkspaceSummary)=>{const next=observeWorkspace(summaryState.current,incoming);summaryState.current=next;if(next===incoming){summaryPending.current=unobservedWorkspaceReceipts(incoming,summaryPending.current);setSummaryError(null);}setSummary(next);},[]);
+  const refreshSummary=useCallback(async()=>{try{updateSummary(await api<WorkspaceSummary>('/api/workspace'));}catch(error){setSummaryError(error);throw error;}},[updateSummary]);
+  const observeDetail=useCallback((incoming:ProjectDetail)=>{const next=observeProjectWork(cache.current.get(incoming.project.id),incoming,pending.current);pending.current=next.pending;cache.current.set(incoming.project.id,next.detail);if(next.accepted)observed.current.set(incoming.project.id,Date.now());setCacheVersion(value=>value+1);return next.accepted;},[]);
+  const refreshDetail=useCallback(async()=>{if(!selectedProjectId)return;const generation=interactionGeneration;try{const incoming=await api<ProjectDetail>(`/api/projects/${encodeURIComponent(selectedProjectId)}`);if(observeDetail(incoming)&&interaction.current.generation===generation)setDetailError(null);}catch(error){if(interaction.current.generation===generation)setDetailError(error);throw error;}},[selectedProjectId,observeDetail,interactionGeneration]);
+  const changed=useCallback(async()=>{await refreshDetail();await refreshSummary();},[refreshDetail,refreshSummary]);
+  useEffect(()=>{let alive=true,busy=false;const controller=new AbortController();const load=async()=>{if(busy)return;busy=true;try{const incoming=await api<WorkspaceSummary>('/api/workspace',{signal:controller.signal});if(alive)updateSummary(incoming);}catch(error){if(alive)setSummaryError(error);}finally{busy=false;}};void load();const timer=setInterval(()=>{if(document.visibilityState==='visible')void load()},2500);return()=>{alive=false;controller.abort();clearInterval(timer)};},[updateSummary]);
+  useEffect(()=>{
+    setDetailError(null);setSteer(false);if(!selectedProjectId||!detailProject)return;
+    let alive=true,busy=false;const controller=new AbortController();
+    const load=async()=>{if(busy)return;busy=true;try{const incoming=await api<ProjectDetail>(`/api/projects/${encodeURIComponent(selectedProjectId)}`,{signal:controller.signal});if(alive&&observeDetail(incoming))setDetailError(null);}catch(error){if(alive)setDetailError(error);}finally{busy=false;}};
+    void load();void api<TeamData>(`/api/projects/${encodeURIComponent(selectedProjectId)}/team`,{signal:controller.signal}).then(team=>{if(alive)setSteer(team.capabilities?.steer===true)}).catch(()=>{});
+    const timer=setInterval(()=>{if(document.visibilityState==='visible')void load()},2500);return()=>{alive=false;controller.abort();clearInterval(timer)};
+  },[selectedProjectId,!!detailProject,observeDetail]);
+  const selectionKey=JSON.stringify([route.contextProjectId,route.intakeId,route.runId]);
+  useLayoutEffect(()=>{if(!route.intakeId&&!route.runId)return;const heading=document.querySelector<HTMLElement>('.pf-global-detail h1');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});window.scrollTo({top:0,behavior:'instant'});}},[selectionKey,!!detail]);
+  const record=(receipt:CreatedWork)=>{pending.current.push(receipt);summaryPending.current.push(receipt);const project=projects.find(project=>project.id===receipt.value.projectId);if(project){const base=cache.current.get(project.id)??{project,pipelines:[],runs:[],knowledge:[],proposals:[],events:[],intakes:[]};cache.current.set(project.id,withCreatedWork(base,receipt));setCacheVersion(value=>value+1);}};
+  const openGoal=(projectId:string,id:string)=>navigate(globalWorkRoute(route,projectId,'goal',id));
+  const openRun=(projectId:string,id:string,stageId?:string)=>navigate({...globalWorkRoute(route,projectId,'run',id,stageId),...(route.contextProjectId===projectId&&route.intakeId?{intakeId:route.intakeId}:{})});
+  const created=(goal:Intake)=>{record({kind:'intake',value:goal});if(mounted.current&&interaction.current.generation===interactionGeneration)openGoal(goal.projectId,goal.id);};
+  const continued=(goal:Intake,previous:Intake)=>{record({kind:'continued-intake',value:goal,previous});if(mounted.current&&interaction.current.generation===interactionGeneration)openGoal(goal.projectId,goal.id);};
+  const back=()=>navigate({surface:'workbench',role:'',projectFilter:route.projectFilter});
+  const enter=(id:string,surface:Route['surface']='workbench')=>navigate({projectId:id,surface,role:''});
+  const knownPending=summaryPending.current.map(receipt=>{const cached=cache.current.get(receipt.value.projectId),value=receipt.kind==='run'?cached?.runs.find(item=>item.id===receipt.value.id):cached?.intakes.find(item=>item.id===receipt.value.id);return value?{...receipt,value} as CreatedWork:receipt;});
+  const data=knownWorkspace(summary,projects.map(({id,name,repository,revision,pipelineCount})=>({id,name,repository,revision,pipelineCount})),knownPending);
+  const scoped=data?.work.filter(item=>!route.projectFilter||item.projectId===route.projectFilter)??[],decisions=data?.decisions.filter(item=>!route.projectFilter||item.projectId===route.projectFilter)??[];
+  const current=scoped.filter(item=>currentWorkStatuses.has(item.status)&&!item.waitingForInput),results=scoped.filter(item=>!currentWorkStatuses.has(item.status)&&!item.attention),failed=scoped.filter(item=>item.attention);
+  const selectedGoal=detail?.intakes.find(goal=>goal.id===route.intakeId),selectedRun=detail?.runs.find(run=>run.id===route.runId),hasSelection=!!(route.intakeId||route.runId),missing=hasSelection&&(!detailProject||!!detail&&!(route.runId?selectedRun:selectedGoal));
+  const projectName=(id:string)=>data?.projects.find(project=>project.id===id)?.name??projects.find(project=>project.id===id)?.name??id;
+  const openWork=(item:WorkspaceWork)=>item.kind==='goal'?openGoal(item.projectId,item.id):openRun(item.projectId,item.id);
+  const renderWork=(item:WorkspaceWork)=><button className="pf-global-work-row" key={item.projectId+':'+item.kind+':'+item.id} onClick={()=>openWork(item)}><span className="pf-global-project-tag">{projectName(item.projectId)}</span><span className="pf-global-work-body"><strong>{requestSummary(item.title)}</strong>{(item.stageName||item.pipelineName)&&<small>{item.stageName??item.pipelineName}</small>}</span><WorkState item={item}/><time dateTime={item.updatedAt}>{date(item.updatedAt)}</time><Icon name="chevron-right"/></button>;
+  return <main className="pf-global-workbench">
+    <header className="pf-view-header"><div><h1>{p('globalWorkbench')}</h1></div><div className="actions"><Button tone="quiet" onClick={onManual}>{p('manualSetup')}</Button><Button onClick={onConnect}><Icon name="plus"/>{p('connectProject')}</Button></div></header>
+    <div className="pf-global-layout"><aside className="pf-global-projects"><nav aria-label={p('projects')}><button className={!route.projectFilter?'selected':''} onClick={()=>navigate({surface:'workbench',role:''})}><Icon name="layers"/><span>{p('allProjects')}</span><span className="count">{projects.length}</span></button>{projects.map(project=><div className="pf-global-project-row" key={project.id}><button className={route.projectFilter===project.id?'selected':''} title={p('globalProjectWork',{project:project.name})} onClick={()=>{setTarget(project.id);navigate({surface:'workbench',role:'',projectFilter:project.id})}}><span className="pf-project-avatar">{project.name.slice(0,2)}</span><span><strong>{project.name}</strong><small>{project.repository}</small></span>{summary&&<span className="count">{(data?.work??summary.work).filter(item=>item.projectId===project.id&&currentWorkStatuses.has(item.status)).length}</span>}</button><Button tone="quiet" aria-label={p('openProject')+': '+project.name} title={p('openProject')} onClick={()=>enter(project.id)}><Icon name="arrow-up-right"/></Button></div>)}</nav></aside>
+    <div className="pf-global-main">{!!summaryError&&(!hasSelection||!detailError)&&<Notice tone="warning"><p>{p('globalRefreshFailed')}</p><Button onClick={()=>void refreshSummary().catch(()=>{})}>{p('refresh')}</Button></Notice>}
+    {hasSelection?<div className="pf-global-detail"><div className="pf-global-detail-context"><span><Icon name="project"/>{detailProject?.name??p('globalSourceProject')}</span>{detailProject&&<Button tone="quiet" onClick={()=>enter(detailProject.id)}>{p('openProject')}<Icon name="arrow-up-right"/></Button>}</div>{!!detailError&&<Notice tone="warning"><p>{p('globalDetailFailed')}</p><Button onClick={()=>void changed().catch(()=>{})}>{p('refresh')}</Button></Notice>}{missing?<Empty>{p('globalMissing')}<Button onClick={back}>{p('globalBack')}</Button></Empty>:!detail?<Empty>{p(detailError?'projectUnavailable':'loading')}<Button onClick={back}>{p('globalBack')}</Button></Empty>:selectedRun?<RunWorkspace key={selectedRun.id} run={selectedRun} events={detail.events.filter(event=>event.runId===selectedRun.id)} stageId={route.stageId} multicaSteer={steer} observedAt={observed.current.get(detail.project.id)} observationFailed={!!detailError} backLabel={route.intakeId?p('outcome'):p('globalBack')} showParentLink={!route.intakeId} parentGoalId={detail.intakes.find(goal=>goal.targetRunIds.includes(selectedRun.id))?.id} onGoal={id=>openGoal(detail.project.id,id)} onRun={id=>openRun(detail.project.id,id)} onSelect={stageId=>openRun(detail.project.id,selectedRun.id,stageId)} onBack={()=>route.intakeId?openGoal(detail.project.id,route.intakeId):back()} onChanged={changed}/>:selectedGoal?<GoalWorkspace key={selectedGoal.id} goal={selectedGoal} detail={detail} models={models} observedAt={observed.current.get(detail.project.id)} observationFailed={!!detailError} backLabel={p('globalBack')} documentHref={writeRoute(route)} onGoal={id=>openGoal(detail.project.id,id)} onCreated={created} onContinued={continued} onRun={(id,stageId)=>openRun(detail.project.id,id,stageId)} onBack={back} onChanged={changed} onSettings={()=>enter(detail.project.id,'settings')} onKnowledge={()=>enter(detail.project.id,'knowledge')}/>:null}</div>:<>
+      <section className="pf-global-entry"><label className="pf-global-target"><Icon name="project"/><span>{p('targetProject')}</span><select aria-label={p('targetProject')} value={target?.id??''} onChange={event=>setTarget(event.target.value)}><option value="" disabled>{p('chooseProject')}</option>{projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{target?<RequestComposer key={target.id} project={target} inputId={'pf-global-request-'+target.id} onCreated={created} onChanged={refreshSummary} onSettings={()=>enter(target.id,'settings')} onKnowledge={()=>enter(target.id,'knowledge')}/>:<p className="hint">{p('globalIdle')}</p>}</section>
+      {!data?(summaryError?null:<Empty>{p('loading')}</Empty>):<div className="pf-global-sections">{(!!decisions.length||!!failed.length)&&<section className="pf-section pf-global-attention"><div className="pf-section-heading"><h2><Icon name="info"/>{p('globalAttention')}</h2><span className="count">{decisions.length+failed.length}</span></div><div className="pf-global-work-list">{decisions.map(item=><button className="pf-global-work-row" key={item.id} onClick={()=>item.intakeId?openGoal(item.projectId,item.intakeId):openRun(item.projectId,item.runId!,item.stageId)}><span className="pf-global-project-tag">{projectName(item.projectId)}</span><span className="pf-global-work-body"><strong>{requestSummary(item.title)}</strong><small>{requestSummary(item.request)}</small></span><span className="pf-global-decision"><Icon name="info"/>{p(decisionLabel(item))}</span><Icon name="chevron-right"/></button>)}{failed.map(renderWork)}</div></section>}
+      {!!current.length&&<section className="pf-section"><div className="pf-section-heading"><h2><Icon name="layers"/>{p('globalCurrent')}</h2><span className="count">{current.length}</span></div><div className="pf-global-work-list">{current.map(renderWork)}</div></section>}
+      {(summary||!!results.length)&&<section className="pf-section"><div className="pf-section-heading"><h2><Icon name="check-circle"/>{p('globalResults')}</h2><span className="count">{results.length}</span></div>{results.length?<><div className="pf-global-work-list">{(expanded?results:results.slice(0,8)).map(renderWork)}</div>{results.length>8&&<Button tone="quiet" onClick={()=>setExpanded(!expanded)}>{p(expanded?'globalShowRecent':'globalShowAll',{count:results.length})}</Button>}</>:<Empty>{p('globalNoResults')}</Empty>}</section>}
+      {summary&&<p className="pf-global-observed">{p('globalObserved',{date:date(summary.observedAt)})}</p>}</div>}
+    </>}
+    </div></div>
+  </main>;
+}
+
+function decisionLabel(item:WorkspaceDecision){return item.kind==='clarification'?'globalQuestion':item.kind==='review'?'globalReview':item.kind==='account'?'globalAccount':'globalManual';}
+function WorkState({item}:{item:WorkspaceWork}){
+  const{t}=useCopy();
+  if(item.kind==='run')return <Status value={item.status as WorkStatus}/>;
+  const key=item.status==='completed'?(item.resultKind==='answer'?'intakeAnswered':'intakeCompleted'):item.status==='routing'?'intakeRouting':item.status==='dispatched'?'intakeDispatched':item.status==='clarification'?'intakeClarification':item.status==='retry_wait'?'recoveryRetryWait':item.status==='failed'?'intakeFailed':'intakeStopped';
+  return <span className={'pf-goal-state '+item.status}>{t(key)}</span>;
+}

@@ -781,11 +781,15 @@ test('development server blocks synthetic private files through direct, raw, enc
   const index = await readFile(path.join(root, 'index.html'), 'utf8');
   const entry = index.match(/<script[^>]+src="([^"]+)"/)?.[1];
   assert.ok(entry, 'The public entry script is declared.');
-  for (const route of ['/', '/@vite/client', '/src/contracts.ts', '/brand/gwi-mark.svg', entry]) {
+  for (const route of ['/', '/@vite/client', '/src/contracts.ts', '/brand/gwi-mark.svg', '/web/platform/GlobalWorkbench.tsx', '/web/platform/globalWork.ts', entry]) {
     const response = await fetch(origin + route, {redirect: 'manual'});
     assert.equal(response.status, 200, `Public application asset remains usable: ${route}`);
     await response.text();
   }
+  const globalModule=await (await fetch(origin+'/web/platform/GlobalWorkbench.tsx')).text();
+  const sharedImports=[...globalModule.matchAll(/(?:from|import)\s*["'](\/src\/[^"']+)["']/g)].map(match=>match[1]);
+  assert.ok(sharedImports.length>0);assert.ok(sharedImports.every(url=>url.split('?')[0]==='/src/contracts.ts'),'Frontend runtime imports stay within the existing shared-contract boundary.');
+  for(const dependency of sharedImports)assert.equal((await fetch(origin+dependency)).status,200);
   const relative = path.relative(root, privateFile).split(path.sep).join('/');
   const routes = [
     `/${relative}`, `/${relative}?raw`, `/${relative}?url`, `/${relative}?import`,
@@ -809,6 +813,7 @@ test('development server blocks synthetic private files through direct, raw, enc
     return await response.json();
   };
   const project=await localJSON('/api/projects','POST',{name:'Synthetic API project',workspace:directory}) as Project;
+  const globalSummary=await localJSON('/api/workspace');assert.deepEqual(globalSummary.projects.map((item:{id:string})=>item.id),[project.id]);assert.deepEqual(globalSummary.work,[]);assert.equal(JSON.stringify(globalSummary).includes(project.workspace),false);assert.equal((await fetch(origin+'/api/workspace')).status,401);
   const readiness=await localJSON('/api/projects/'+project.id+'/readiness');
   assert.equal(readiness.workspace.code,'GIT_REPOSITORY_REQUIRED');assert.equal(readiness.knowledge.status,'not_configured');
   const bindings=await localJSON('/api/projects/'+project.id+'/bindings','PATCH',{expectedRevision:project.revision,bindings:{name:'Synthetic renamed API project',description:project.description,workspace:project.workspace,repository:project.repository}}) as Project;

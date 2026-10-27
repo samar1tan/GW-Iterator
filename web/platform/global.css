@@ -1,0 +1,69 @@
+.pf-global-workbench { max-width: 1760px; margin: 0 auto; padding: 28px 32px 56px; min-width: 0; }
+.pf-global-workbench > .pf-view-header { margin-bottom: 24px; }
+.pf-global-layout { display: grid; grid-template-columns: 228px minmax(0,1fr); gap: 32px; align-items: start; }
+.pf-global-projects { position: sticky; top: 80px; min-width: 0; }
+.pf-global-projects nav { display: flex; flex-direction: column; gap: 6px; }
+.pf-global-projects nav > button,.pf-global-project-row > button:first-child { width: 100%; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid transparent; border-radius: 6px; background: none; text-align: left; color: var(--muted); }
+.pf-global-projects nav > button > span:not(.count) { flex: 1; }
+.pf-global-projects .selected { background: var(--surface-raised)!important; color: var(--text)!important; border-color: var(--line)!important; }
+.pf-global-project-row { display: flex; align-items: center; min-width: 0; gap: 2px; }
+.pf-global-project-row > button:first-child { flex: 1; padding-right: 5px; }
+.pf-global-project-row > button:first-child > span:not(.count):not(.pf-project-avatar) { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.pf-global-project-row strong { font-size: 14px; overflow-wrap: anywhere; }
+.pf-global-project-row small { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-global-project-row .pf-project-avatar { width: 28px; height: 28px; font-size: 10px; flex-shrink: 0; }
+.pf-platform .pf-global-project-row > .button { padding: 5px; min-height: 28px; flex-shrink: 0; }
+.pf-global-main,.pf-global-entry,.pf-global-detail { min-width: 0; }
+.pf-global-entry { margin-bottom: 28px; }
+.pf-global-target { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+.pf-global-target select { width: auto; max-width: min(360px,100%); min-width: 130px; }
+.pf-global-target > .ui-icon { flex-shrink: 0; }
+.pf-global-target > span { white-space: nowrap; }
+.pf-global-sections { display: flex; flex-direction: column; gap: 24px; }
+.pf-global-sections .pf-section { padding: 0; margin: 0; border: 0; }
+.pf-global-sections .pf-section-heading h2 { font-size: 15px; }
+.pf-global-sections .pf-section-heading { margin-bottom: 12px; }
+.pf-global-work-list { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.pf-global-work-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px; border: 0; border-bottom: 1px solid var(--line); background: var(--canvas); color: var(--text); text-align: left; min-width: 0; }
+.pf-global-work-row:last-child { border-bottom: 0; }
+.pf-global-work-row:hover { background: var(--surface); }
+.pf-global-project-tag { max-width: 125px; flex: 0 0 110px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.pf-global-work-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.pf-global-work-body strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pf-global-work-body small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.pf-global-work-row time { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.pf-global-work-row > .ui-icon { flex-shrink: 0; color: var(--muted); }
+.pf-global-decision { display: inline-flex; align-items: center; gap: 5px; color: var(--attention); font-size: 12px; }
+.pf-global-decision > .ui-icon { flex-shrink: 0; }
+.pf-global-observed { color: var(--muted); font-size: 12px; }
+.pf-global-detail-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+.pf-global-detail-context > span { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.pf-global-detail .pf-view-header { margin-bottom: 24px; }
+@media (max-width:1400px) {
+  .pf-global-detail .pf-goal-layout { grid-template-columns: minmax(0,1fr); }
+  .pf-global-detail .pf-goal-context { grid-row: auto; }
+  .pf-global-work-row time { display: none; }
+}
+@media (max-width:900px) {
+  .pf-global-workbench { padding: 22px 18px 40px; }
+  .pf-global-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
+  .pf-global-projects { position: static; }
+  .pf-global-projects nav { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .pf-global-projects nav > button { width: auto; }
+  .pf-global-project-row { max-width: 240px; }
+  .pf-global-project-row small { display: none; }
+  .pf-global-project-tag { flex-basis: 85px; }
+}
+@media (max-width:500px) {
+  .pf-global-workbench { padding: 18px 12px 32px; }
+  .pf-global-workbench > .pf-view-header { gap: 12px; }
+  .pf-global-workbench > .pf-view-header h1 { font-size: 24px!important; }
+  .pf-global-target { flex-wrap: wrap; }
+  .pf-global-target select { flex: 1; min-width: 0; }
+  .pf-global-work-row { flex-wrap: wrap; gap: 8px; padding: 12px; }
+  .pf-global-project-tag { flex: 0 0 100%; max-width: 100%; }
+  .pf-global-work-body { flex-basis: calc(100% - 24px); }
+  .pf-global-work-row .pf-goal-state,.pf-global-work-row .status { white-space: normal; }
+  .pf-global-work-row > .ui-icon:last-child { margin-left: auto; }
+  .pf-global-detail-context { flex-wrap: wrap; }
+}

@@ -2,7 +2,7 @@
 
 ## Connect a project
 
-After [local setup](multica-setup.md), start GWI and open `http://127.0.0.1:4318`. Projects is the top-level entry. A project has its own workspace, team, pipelines, knowledge and configuration; GitWorld and GWI can be managed independently.
+After [local setup](multica-setup.md), start GWI and open `http://127.0.0.1:4318`. Projects is the top-level entry. The global workbench shows work and decisions across projects. Choose a request target or open an item to reply, follow up, inspect evidence and handle decisions without entering a project workspace. Project filters limit observation; they do not authorize a request to change every project. Each project retains its own workspace, team, pipelines, knowledge and configuration.
 
 Choose an existing local workspace. Add a GitHub repository binding when the work needs it. Codex-assisted adoption reads bounded eligible sources and proposes project guidance, registered knowledge and workflows. Review the sources and proposal before applying it. Applying a new configuration also synchronizes its reviewed local knowledge sources, without starting model work or CI. If indexing fails, the created project remains available; resolve the source in Knowledge and synchronize again. Previously applied setup records are not silently resynchronized.
 
