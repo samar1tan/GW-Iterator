@@ -150,6 +150,8 @@ Acceptance uses rendered and operational checks on launch plus representative sh
 
 ## Observable execution, not only automatic refresh
 
+The human activity reader opens with the latest update at the top, including completed task history. New meaningful activity remains visible while following the top. Reading earlier entries pauses following and preserves the visible record and offset as newer entries arrive. Offer a count of new activity in the selected category and an explicit return to the latest entry. Changing categories begins with the latest relevant entry. Keep underlying audit sequence and execution behavior unchanged.
+
 A person waiting on an outcome must be able to identify the current executor, the last observed operation and whether work is running, queued or awaiting another party. Polling a page and increasing an elapsed counter are not sufficient feedback. Use current run/stage/attempt identity and actual provider events; never infer progress percentages, a healthy heartbeat or success from animation or absence of errors.
 
 Show a compact current-execution surface above the first coordinator decision and in the selected active step. Include the role, semantic operation icon, execution state, elapsed wall time and age of the latest meaningful activity. Surface supported command/tool activity and explicitly public commentary; never expose reasoning, raw transport fragments or structured final-result JSON as progress prose. Preserve exact records in technical history. Scope records to the current attempt; stale attempts and unrelated runs must not drive the display.

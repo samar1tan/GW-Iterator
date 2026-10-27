@@ -36,7 +36,7 @@ Default to a step list with status icon, stage name, owner, concise latest resul
 
 The selected step prioritizes actual result, evidence, pending decision and next action. Put raw IDs, policy numbers, provider state, attempt logs and native configuration behind descriptive disclosure. The complete request is available without repeating its full text in every card or heading.
 
-Use a GitHub-like timeline with stable event keys, short localized event titles, real message/evidence, actor/time and optional details. Filter meaningful categories and group related events where useful. Streaming updates must not move a reader inspecting older work; offer an explicit follow/new-events action when needed. Do not present raw event codes as the main title.
+Use a GitHub-like timeline with stable event keys, short localized event titles, real message/evidence, actor/time and optional details. Present human activity newest first, ordered by each group’s latest recorded sequence. Follow the top on entry. Scrolling down to earlier work pauses following; new entries and updated groups preserve the reader’s visible record and relative offset. The new-activity action counts relevant groups in the selected category and returns to the top. Category changes start at that category’s latest update. Keep details keyboard-operable, grouping and raw audit sequence intact. Do not present raw event codes as the main title.
 
 ## State feedback and motion
 
