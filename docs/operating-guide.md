@@ -8,13 +8,15 @@ Choose an existing local workspace. Add a GitHub repository binding when the wor
 
 ## Start and follow work
 
-In the project **Workbench**, describe what should change and how you will recognize a useful result. You can also run a saved pipeline directly. Ordinary starts inherit the project and role settings; models, skills and limits are deliberate configuration choices rather than required launch fields.
+In the project **Workbench**, describe what should change and how you will recognize a useful result. Running a saved pipeline opens a short dialog for this concrete outcome; cancelling or leaving it empty starts no work. Ordinary starts inherit the project and role settings. Inspect the role/model summary when useful; raw limits and native permissions are advanced controls, not required launch fields.
 
 A general outcome records one bounded coordination decision at a time. The coordinator can select several workflows or retry a failed owned stage from new evidence. GWI waits for their actual results before another decision. Inspect the reason, selected actions and remaining allowance; a successful provider task is not outcome acceptance.
 
-Open an action to see its stage canvas. Selecting a stage shows its responsibility, inputs, checks, actual result and permitted controls. **Inspect changes** reads the execution checkout's tracked diff and status. Relative text artifacts can be previewed without executing their contents. Technical details retain events, execution references, usage and the frozen basis.
+Open an action to see its steps and activity timeline. Selecting a step shows its owner, checks, actual result and permitted controls. Switch to the graph when dependencies or branches need inspection. Activity updates preserve selection and let you pause following while reading earlier events. **Inspect changes** reads the execution checkout's tracked diff and status. Relative text artifacts can be previewed without executing their contents. Technical details retain execution references, usage and the frozen basis.
 
 Work uses committed-source checkouts, not the original dirty working directory. Each run records its actual input commit. Dependencies must be installed inside that checkout when required; source, ignored configuration and dependency directories are not shared by a writable link. A configured delivery role or the supervising owner must integrate or publish the accepted result. Inspecting an artifact does not perform that operation.
+
+An independent QA stage can use a disposable copy of the actual prepared source, including eligible untracked files and deletions. Its input manifest is recorded. A no-model permission probe must demonstrate writes in the copy and denied writes to original source before dispatch. Test/build output may be written in ignored build/cache paths or `.gwi-verification/` scratch; changing its included source invalidates the review. This is task-scoped write confinement, not filesystem read isolation or a network domain allowlist. Unavailable browser, CI or dependency checks remain explicit work for a capable runner or the owner delivery gate.
 
 ## Review, return and stop
 
@@ -24,13 +26,13 @@ A manual stage waits for a recorded result. A review gate waits for an acceptanc
 
 A failed stage can be retried from its recorded scope. If external execution is uncertain, use **Check external state** first. Preparation that stopped before assignment is recorded as not dispatched. A lost assignment response remains uncertain until an exact existing task can be identified; the platform does not blindly repeat the POST.
 
-A stopped pipeline and its supervising outcome have separate ceilings. **Extend limits** changes only that pipeline execution, retains usage and attempts, and records a reason and revision. Saving does not start work. The outcome's **Continue** control retains earlier actions and consumption; its note becomes evidence for the next coordination decision. Stopped gaps and human review/manual waits do not count as model-execution time.
+A stopped pipeline and its supervising outcome have separate ceilings. When allowance remains, **Continue** retries the failed scope without requiring a quota form or note. At an actual ceiling, inspect the finite recommendation and its basis before approving continuation. Limits and approvals retain usage and attempts; they do not change the reusable definition. If the other scope is also blocked, resolve its named boundary next. Raw limits remain available in advanced settings. Unknown external execution must be checked before replacement work. Stopped gaps and human review/manual waits do not count as model-execution time.
 
 Capacity recovery is off by default. An enabled policy is finite and can use only its selected fallback models. Permission failures, ordinary blocked tasks and unknown cleanup are not capacity failures. Missing usage is unavailable, not zero; delayed provider counters cannot guarantee an exact pre-spend ceiling. Token limits use reported uncached input plus output, retaining the original cache counters for inspection. GWI does not invent fees.
 
 ## Adjust pipelines and teams
 
-The **Pipelines** library separates definitions from executions. Start with **Focused change** for a known bounded increment, or use the longer product, operations and knowledge templates when their handoffs are useful. In the visual editor, add stages, assign responsibility/actions, connect dependencies and configure checks, conditions, human gates or bounded return paths. Publishing a revision affects future runs; it does not overwrite older execution bases. Structured definitions remain available as an expert interface.
+The **Pipelines** library separates reusable definitions from executions. Start with **Focused change** for a known bounded increment, or use the longer product, operations and knowledge templates when their handoffs are useful. The editor shows the stage sequence first; select a step to change its action, responsibility or checks. Use the graph for dependencies and the advanced definition for conditions, child work and return paths. Publishing a revision affects future runs; it does not overwrite older execution bases. Ordinary project work does not require creating a new workflow.
 
 Process proposals record a definition revision, rationale and supporting run. Inspect them before applying. Stale revisions are rejected. Local configuration changes remain private; do not publish actual project, pipeline or role settings as examples.
 

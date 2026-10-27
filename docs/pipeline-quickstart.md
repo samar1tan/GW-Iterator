@@ -12,12 +12,13 @@ The [operating guide](operating-guide.md) explains controls and recovery in deta
    the evidence you expect: for example, “Correct the outdated setup instruction
    in one document; verify the replacement against current source and check
    its links.” For a known bounded change, run the saved **Focused change**
-   pipeline from Pipelines. Inspect its definition and assigned roles first.
-3. **Follow stages and owners.** Open the action's stage canvas and select a
+   pipeline from Pipelines, then enter the concrete correction in its launch
+   dialog. The workflow supplies the role, model and finite allowance defaults.
+3. **Follow stages and owners.** Open the action's steps and select a
    stage to inspect responsibility, inputs, checks, actual results and controls.
    The default Focused change path is **Prepare the bounded change**
    (Development), **Independently verify the change** (QA), then the manual
-   **Review and accept delivery** stage. Project definitions can differ; follow
+   **Owner delivery acceptance** stage. Project definitions can differ; follow
    the actual run rather than assuming these defaults are its live state.
 4. **Inspect the work.** Use **Inspect changes** to read the execution checkout's
    tracked diff and status, and preview the actual relative text artifact.

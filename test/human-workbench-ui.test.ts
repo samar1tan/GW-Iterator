@@ -1,0 +1,131 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {createElement} from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {createServer} from 'vite';
+import type {AuditEvent,Intake,Pipeline,Project,Run} from '../src/contracts.ts';
+import {activityCategory,activityTitle,groupHumanActivity,isHumanActivity,mergeActivity} from '../web/platform/activity.ts';
+
+function event(seq:number,type='stage.started'):AuditEvent{return{seq,at:'2026-01-01T12:00:00Z',projectId:'example',runId:'example-run',stageId:'prepare',type,actor:'Example owner',message:`Recorded activity ${seq}`};}
+test('activity appends in sequence order and keeps unchanged records stable',()=>{
+  const first=[event(1),event(3)];
+  assert.equal(mergeActivity(first,[event(1),event(3)]),first);
+  const combined=mergeActivity(first,[event(2),event(4)]);
+  assert.deepEqual(combined.map(item=>item.seq),[1,2,3,4]);
+  assert.equal(combined[0],first[0]);
+  assert.equal(activityCategory('stage.review'),'review');
+  assert.equal(activityTitle('stage.failed'),'eventFailed');
+  assert.equal(activityTitle('unknown.native_event'),'eventRecorded');
+  assert.equal(activityTitle('verification.prepared'),'eventVerificationPrepared');
+  assert.equal(activityTitle('stage.result'),'eventStageResult');
+  assert.equal(activityTitle('manual.completed'),'eventStageResult');
+  assert.equal(activityTitle('goal.policy_approved'),'eventRecovery');
+  assert.equal(isHumanActivity(event(5,'goal.policy_approved')),true);
+});
+
+test('provider deltas remain technical while repeated workflow observations group without claiming completion',()=>{
+  const records=[event(1),event(2,'codex.multica.message'),event(3,'codex.multica.message'),event(4,'stage.result')];
+  records[1].message='transport fragment marker';records[2].message='{';
+  assert.equal(isHumanActivity(records[1]),false);
+  assert.equal(isHumanActivity(event(5,'codex.verification.prepared')),true);
+  const repeated={...event(6),message:records[0].message};
+  const groups=groupHumanActivity([records[0],records[1],repeated,records[3]]);
+  assert.deepEqual(groups.map(group=>[group.key,group.count,group.event.type]),[[1,2,'stage.started'],[4,1,'stage.result']]);
+  assert.equal(records.length,4);
+  assert.equal(records[1].message,'transport fragment marker');
+  const manualResult={...event(7,'manual.completed'),actor:'Example human',message:'Example blocker'};
+  const stageResult={...event(8,'stage.result'),actor:'engine',message:'Example blocker'};
+  const resultGroups=groupHumanActivity([manualResult,stageResult]);
+  assert.equal(resultGroups.length,1);
+  assert.equal(resultGroups[0].event.actor,'Example human');
+  assert.equal(resultGroups[0].count,2);
+});
+
+const project:Project={id:'example',name:'Example project',description:'Independently authored example',workspace:'/example-project',repository:'example/project',revision:1,createdAt:'2026-01-01T12:00:00Z',updatedAt:'2026-01-01T12:00:00Z',knowledgeSources:[],roles:[{id:'owner',name:'Example owner',description:'Prepare and inspect the requested result.',instructions:'Use the recorded requirements.',model:'example-model',effort:'max',sandbox:'read-only',skills:[],tools:['context.read','run.read']}]};
+const pipeline:Pipeline={id:'example-flow',projectId:project.id,revision:1,name:'Example workflow',description:'Prepare and review a focused change.',roleId:'owner',stages:[{id:'prepare',name:'Prepare change',roleId:'owner',executor:'codex',dependsOn:[],prompt:'Prepare the requested change.',review:true,checks:['Check the requested behavior.']},{id:'deliver',name:'Inspect delivery',roleId:'owner',executor:'manual',dependsOn:['prepare'],prompt:'Inspect the actual result.',review:false}],policy:{concurrency:1,maxAttempts:2,maxIterations:1,timeoutSeconds:300,tokenBudget:20000},updatedAt:project.updatedAt};
+const run:Run={id:'example-run',projectId:project.id,pipelineId:pipeline.id,goal:'Correct the example navigation and verify the affected links.',baseline:'Example baseline',trigger:{kind:'human',actor:'Example owner'},status:'review',iteration:1,mode:'once',createdAt:project.createdAt,updatedAt:project.updatedAt,dependsOnRunIds:[],idempotencyKey:'example-key',inputHash:'example-hash',snapshot:{project,pipeline,pipelines:[pipeline],knowledge:[]},stages:[{stageId:'prepare',status:'review',attempts:[{id:'example-attempt',number:1,iteration:1,status:'review',startedAt:project.createdAt,endedAt:project.updatedAt,provider:'manual',output:{outcome:'done',summary:'Prepared the example navigation change.',artifacts:[{label:'Example evidence',path:'evidence.md'}],observations:[]}}]},{stageId:'deliver',status:'queued',attempts:[]}]};
+const intake:Intake={id:'example-goal',projectId:project.id,request:run.goal,baseline:run.baseline,status:'failed',createdAt:project.createdAt,updatedAt:project.updatedAt,routerRunId:'example-coordinator',idempotencyKey:'example-goal-key',targetRunIds:[run.id],rounds:[],policy:{maxRounds:2,maxParallel:1,maxTotalTokens:50000,maxElapsedSeconds:600},canRetry:true};
+
+test('ordinary views render steps, real evidence and progressive recovery in both locales',async()=>{
+  const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom'});
+  try{
+    const {I18nContext,makeI18n}=await server.ssrLoadModule('/web/i18n.tsx');
+    const {RunWorkspace}=await server.ssrLoadModule('/web/platform/RunWorkspace.tsx');
+    const {LaunchPipeline}=await server.ssrLoadModule('/web/platform/LaunchPipeline.tsx');
+    const {GoalRetryForm,canOpenGoalRecovery,GoalRecommendationSummary}=await server.ssrLoadModule('/web/GoalRecovery.tsx');
+    const {RunRecommendationSummary}=await server.ssrLoadModule('/web/platform/StageRecovery.tsx');
+    const {orderedStages}=await server.ssrLoadModule('/web/platform/PipelineSteps.tsx');
+    const {ActivityTimeline}=await server.ssrLoadModule('/web/platform/ActivityTimeline.tsx');
+    assert.deepEqual(orderedStages([...pipeline.stages].reverse()).map((stage:{id:string})=>stage.id),['prepare','deliver']);
+    for(const locale of ['en','zh-CN']){
+      const render=(element:ReturnType<typeof createElement>)=>renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},element));
+      const html=render(createElement(RunWorkspace,{run,events:[event(1),event(2,'stage.result')],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
+      assert.ok(html.includes('pf-step-list'));
+      assert.ok(!html.includes('react-flow__renderer'));
+      assert.ok(html.includes('Prepared the example navigation change.'));
+      assert.ok(html.includes('Example evidence'));
+      assert.ok(html.includes('pf-timeline'));
+      assert.ok(html.includes(locale==='en'?'Request changes':'要求修改'));
+      assert.ok(/<button[^>]*disabled[^>]*>(?:Request changes|要求修改)<\/button>/.test(html));
+      assert.ok(html.includes('example-model'));
+      assert.ok(html.includes('Max'));
+      assert.ok(html.includes(locale==='en'?'Role used for this execution':'本次执行的角色'));
+      const launch=render(createElement(LaunchPipeline,{pipeline,project,onClose:()=>{},onStarted:async()=>{}}));
+      assert.ok(launch.includes('required="" rows="4"'));
+      assert.ok(launch.match(/<button[^>]*type="submit"[^>]*>[^]*?<\/button>/)?.[0].includes('disabled'));
+      assert.ok(!launch.includes('type="number"'));
+      assert.ok(launch.includes('Prepare change'));
+      const manualLaunch=render(createElement(LaunchPipeline,{pipeline:{...pipeline,stages:pipeline.stages.map(stage=>({...stage,executor:'manual'}))},project,onClose:()=>{},onStarted:async()=>{}}));
+      assert.ok(!manualLaunch.includes('example-model'));
+      assert.ok(manualLaunch.includes(locale==='en'?'This workflow uses human steps and does not call a model.':'此流程由人工步骤完成，不会调用模型。'));
+      const retry=render(createElement(GoalRetryForm,{intake,models:[],onRetry:async()=>{},onClose:()=>{}}));
+      assert.ok(!retry.includes('textarea required'));
+      assert.ok(!retry.match(/<button[^>]*type="submit"[^>]*>[^]*?<\/button>/)?.[0].includes('disabled'));
+      assert.ok(retry.indexOf(locale==='en'?'Advanced settings':'高级设置')<retry.indexOf('type="number"'));
+      const runProposal=render(createElement(RunRecommendationSummary,{usageComplete:true,recommendation:{limits:{tokenBudget:38000,maxAttempts:3},note:'Example scoped continuation',basis:{usedTokens:19000,reservedTokens:0,previousAttemptTokens:9000,attempts:2,previousPolicy:pipeline.policy,purpose:'one-failed-stage'}}}));
+      assert.ok(runProposal.includes('19,000'));
+      assert.ok(runProposal.includes('20,000'));
+      assert.ok(runProposal.includes('38,000'));
+      assert.ok(runProposal.includes('9,000'));
+      assert.ok(!runProposal.includes('<details'));
+      assert.ok(!runProposal.includes('<input'));
+      const manualProposal=render(createElement(RunRecommendationSummary,{showTokenUse:false,usageComplete:true,recommendation:{limits:{maxAttempts:3},note:'Example manual retry',basis:{usedTokens:0,reservedTokens:0,attempts:2,previousPolicy:pipeline.policy,purpose:'one-failed-stage'}}}));
+      assert.ok(!manualProposal.includes('20,000'));
+      assert.ok(!manualProposal.toLowerCase().includes('token'));
+      assert.ok(manualProposal.includes('2 → 3'));
+      const goalProposal=render(createElement(GoalRecommendationSummary,{recommendation:{policy:{maxTotalTokens:75000,maxRounds:3},basis:{usedTokens:48000,reservedTokens:1000,usedSeconds:180,actionRounds:2,previousPolicy:intake.policy},purpose:'one-focused-continuation'}}));
+      assert.ok(goalProposal.includes('48,000'));
+      assert.ok(goalProposal.includes('50,000'));
+      assert.ok(goalProposal.includes('75,000'));
+      assert.ok(!goalProposal.includes('<details'));
+      assert.ok(!goalProposal.includes('<input'));
+      const history=render(createElement(ActivityTimeline,{events:[event(1)],active:false}));
+      assert.ok(history.includes(locale==='en'?'Recorded history':'历史记录'));
+      assert.ok(!history.includes('connection-dot ok'));
+      const transport=render(createElement(ActivityTimeline,{events:[{...event(3,'codex.multica.message'),message:'transport fragment marker'}],active:false}));
+      assert.ok(!transport.includes('transport fragment marker'));
+      assert.ok(transport.includes(locale==='en'?'Execution stream and technical records':'执行流与技术记录'));
+      const manualRun={...run,snapshot:{...run.snapshot,pipeline:{...pipeline,stages:pipeline.stages.map(stage=>({...stage,executor:'manual'}))}}};
+      const manualStage=render(createElement(RunWorkspace,{run:manualRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
+      const ownerCard=manualStage.split('<div class="pf-owner-card">')[1].split('</div></div>')[0];
+      assert.ok(!ownerCard.includes('example-model'));
+      assert.ok(!ownerCard.includes('Max'));
+      assert.ok(ownerCard.includes(locale==='en'?'Human task':'人工任务'));
+      const blockedSummary='Example input is unavailable.';
+      const blockedRun={...run,status:'failed',stopReason:blockedSummary,stages:[{...run.stages[0],status:'failed',attempts:[{...run.stages[0].attempts[0],error:blockedSummary,output:{...run.stages[0].attempts[0].output,outcome:'blocked',summary:blockedSummary}}]},run.stages[1]]};
+      const blocked=render(createElement(RunWorkspace,{run:blockedRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
+      assert.ok(!blocked.includes('notice error'));
+      assert.ok(!blocked.includes('notice warning'));
+      assert.ok(blocked.includes('<p class="pre-wrap">'+blockedSummary+'</p>'));
+      const distinctError='Example permission check failed.';
+      const distinctRun={...blockedRun,stopReason:distinctError,stages:[{...blockedRun.stages[0],attempts:[{...blockedRun.stages[0].attempts[0],error:distinctError}]},blockedRun.stages[1]]};
+      const distinct=render(createElement(RunWorkspace,{run:distinctRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
+      assert.equal((distinct.match(/notice error/g)??[]).length,1);
+      assert.ok(!distinct.includes('notice warning'));
+      const completed=render(createElement(RunWorkspace,{run:{...run,status:'completed',stopReason:'All stages completed.'},events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));
+      assert.ok(!completed.includes('notice warning'));
+    }
+    assert.equal(canOpenGoalRecovery({...intake,canRetry:false,retryBlockedCode:'EXTERNAL_RECONCILIATION_REQUIRED'}),false);
+    assert.equal(canOpenGoalRecovery({...intake,canRetry:false,retryBlockedCode:'GOAL_TOKEN_BUDGET'}),true);
+  }finally{await server.close();}
+});

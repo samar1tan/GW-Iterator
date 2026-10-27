@@ -7,7 +7,7 @@ export type CodexExecutionInput = {
   onTool: (tool: ControlTool, args: Record<string, unknown>) => Promise<unknown>;
 };
 export type CodexExecution = {ref: ExecutionRef; completion: Promise<{output: TaskOutput; usage?: Usage}>};
-export type AgentExecutionInput = CodexExecutionInput & {project:Project;runId:string;stageId:string;attemptId:string};
+export type AgentExecutionInput = CodexExecutionInput & {project:Project;runId:string;stageId:string;attemptId:string;executionPurpose?:'review'};
 export interface AgentExecutor {
   start(input:AgentExecutionInput):Promise<CodexExecution>;
   steer(ref:ExecutionRef,text:string):Promise<void|{id:string;status:string}>;

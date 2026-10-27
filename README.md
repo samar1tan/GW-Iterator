@@ -1,8 +1,16 @@
+<img src="public/brand/gwi-mark.svg" width="56" height="56" alt="GW-Iterator icon">
+
 # GW-Iterator
 
 GW-Iterator (GWI) is a local workbench for advancing project work through configurable teams, pipelines and feedback loops. It uses [Multica](https://github.com/multica-ai/multica) for agent execution and keeps project context, dependencies, review, limits and delivery evidence in one interface.
 
-Choose a project, describe an outcome or run a saved pipeline, then follow the work on its stage canvas. Inspect actual changes and artifacts, return a finding to its owner, and accept delivery from evidence. The interface supports English and Simplified Chinese.
+Choose a project, describe an outcome or run a saved pipeline, then follow the steps and activity. Inspect actual changes, return a finding to its owner, and review delivery from evidence. The interface supports English and Simplified Chinese.
+
+[Project website](https://samar1tan.github.io/GW-Iterator/) · [Setup](docs/multica-setup.md) · [Operating guide](docs/operating-guide.md)
+
+![Illustrative workflow: a website language-parity fix moves through product review, implementation, independent QA and owner delivery.](site/assets/workbench-example.svg)
+
+*Illustrative workflow example; contains no actual project configuration or run data.*
 
 ## Run locally
 
@@ -29,8 +37,8 @@ The [setup guide](docs/multica-setup.md) covers prerequisites, native permission
 
 GWI waits for human and CI results without repeatedly invoking the model. Execution and outcome completion remain separate. A prepared change does not establish publication: a delivery step must perform and record the required integration or release.
 
-Agent work uses isolated checkouts of committed source. Dirty files, ignored state and installed dependencies are not copied. Inspect the recorded source revision, diff and artifact previews before accepting work. The original working directory is not silently overwritten.
+Agent work starts in isolated checkouts of committed source. Development does not silently import the original working directory's dirty files, ignored state or installed dependencies. Review can use a disposable verification copy of the actual prepared changes, including eligible untracked source. Inspect the recorded input, diff and check results before accepting work; the original working directory is not silently overwritten.
 
-State, credentials, knowledge, transcripts and captures stay under ignored `.local/` directories by default. Services bind to loopback. Codex and GitHub manage their own authentication. Multica is a separately installed dependency with its [own license conditions](THIRD_PARTY_NOTICES.md).
+State, credentials, knowledge, transcripts and captures are stored under ignored `.local/` directories by default. Selected project context is sent to the configured model provider during agent execution. Services bind to loopback. Codex and GitHub manage their own authentication. Multica is a separately installed dependency with its [own license conditions](THIRD_PARTY_NOTICES.md).
 
 Start with the [pipeline quickstart](docs/pipeline-quickstart.md). See the [operating guide](docs/operating-guide.md), [API reference](docs/API.md), [product requirements](docs/PRD.md) and [integration architecture](docs/architecture/multica-reuse.md).

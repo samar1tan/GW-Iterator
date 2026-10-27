@@ -26,12 +26,17 @@ function deferred<T>() {
 }
 class SyntheticNativeAdapter implements CodexAdapter {
   deferTaskAbort=false;
+  reportTerminalUsage=true;
   goals: {input: CodexGoalInput; ref: ExecutionRef; completion: ReturnType<typeof deferred<CodexGoalResult>>; aborted: boolean}[] = [];
-  tasks: {input: CodexExecutionInput; completion: ReturnType<typeof deferred<{output: TaskOutput}>>; aborted: boolean}[] = [];
+  tasks: {input: CodexExecutionInput; completion: ReturnType<typeof deferred<{output: TaskOutput;usage?:Usage}>>; aborted: boolean}[] = [];
   async info() {return {available: true, connected: true, authenticated: true, models: ['synthetic-primary','synthetic-fallback','synthetic-other'].map(id=>({id,name:id,efforts:['low','medium']}))};}
   async skills() {return [];}
   async start(input: CodexExecutionInput) {
-    const completion = deferred<{output: TaskOutput}>(), task = {input, completion, aborted: false};
+    let reported:Usage|undefined;const onEvent=input.onEvent;input.onEvent=event=>{if(event.usage)reported=event.usage;onEvent(event);};
+    const completion = deferred<{output: TaskOutput;usage?:Usage}>(), task = {input, completion, aborted: false};
+    const complete=completion.resolve.bind(completion),fail=completion.reject.bind(completion);
+    completion.resolve=value=>complete(this.reportTerminalUsage?{...value,usage:value.usage??reported??{input:0,output:0,total:0}}:value);
+    completion.reject=error=>{if(this.reportTerminalUsage&&!reported)input.onEvent({type:'usage',message:'Synthetic final zero-cost meter.',usage:{input:0,output:0,total:0}});fail(error);};
     this.tasks.push(task);
     input.signal.addEventListener('abort', () => {task.aborted = true; if(!this.deferTaskAbort)completion.reject(new Error('Synthetic delegated task cancelled.'));}, {once: true});
     return {ref: {threadId: `synthetic-task-${this.tasks.length}`, turnId: `synthetic-task-turn-${this.tasks.length}`}, completion: completion.promise};
@@ -43,6 +48,7 @@ class SyntheticNativeAdapter implements CodexAdapter {
     input.signal.addEventListener('abort', () => {goal.aborted = true; completion.resolve({status: 'cleared', summary: 'Synthetic owned goal was cleared.'});}, {once: true});
     input.onEvent({type: 'thread/goal/updated', message: 'Synthetic native goal is active.', ref, data: {goal: {threadId: ref.threadId, objective: input.objective, status: 'active', tokenBudget: input.tokenBudget, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 100, updatedAt: 100}}});
     input.onEvent({type:'codex.thread_configuration',message:'Synthetic effective native model.',ref,data:{model:input.role.model??'synthetic-primary',reasoningEffort:input.role.effort,serviceTier:'default'}});
+    input.onEvent({type:'usage',message:'Synthetic goal reports an explicit zero-cost initial meter.',ref,usage:{input:0,output:0,total:0}});
     return {ref, completion: completion.promise};
   }
   async steer() {}
@@ -101,6 +107,10 @@ test('one native goal dispatches multiple workflows, waits for evidence and reco
   const observations = goal.input.onTool('intake.route', decision('dispatch', h.flows.map((flow, index) => task(flow, `Complete distinct synthetic action ${index + 1}.`))));
   await pump(h, () => h.codex.tasks.length === 2, 'two delegated workflows');
   assert.equal(current(h, item).status, 'dispatched');
+  const allocations=current(h,item).targetRunIds.map(id=>h.engine.run(id));
+  assert.deepEqual(allocations.map(run=>run.approvedPolicy?.tokenBudget),[5000,5000]);
+  assert.deepEqual(allocations.map(run=>run.snapshot.pipeline.policy.tokenBudget),[10000,10000]);
+  assert.equal(current(h,item).allowance?.reservedTokens,10000);assert.equal(current(h,item).allowance?.remainingTokens,0);
   await assert.rejects(goal.input.onTool('intake.route', decision('dispatch', [task(h.flows[0])])), code('ACTION_IN_PROGRESS'));
   assert.equal(h.engine.store.list<Run>('run').length, 3);
   h.codex.tasks[0].completion.resolve({output: {...OUTPUT, summary: 'First accepted synthetic action.'}});
@@ -123,7 +133,7 @@ test('one native goal dispatches multiple workflows, waits for evidence and reco
   const ended = h.engine.run(item.routerRunId);
   assert.equal(ended.status, 'completed');
   assert.equal(ended.stages[0].attempts[0].nativeGoal?.tokensUsed, 99);
-  assert.equal(ended.stages[0].attempts[0].usage, undefined);
+  assert.deepEqual(ended.stages[0].attempts[0].usage,{input:0,output:0,total:0});
   assert.deepEqual(current(h, item).rounds.map(round => round.routerRunId), [item.routerRunId, item.routerRunId]);
   assert.equal(h.codex.goals.length, 1);
 });
@@ -279,12 +289,56 @@ test('manual recovery retains evidence, usage, identity and immutable old snapsh
 
 test('manual policy extension is explicit and a fresh execution receives only the remainder', async t=>{
   const h=await fixture(t),item=create(h);await capacityFailure(h,item,{input:9000,output:500,total:9500});
+  assert.equal(current(h,item).canRetry,false);assert.equal(current(h,item).retryBlockedCode,'GOAL_TOKEN_BUDGET');
   await assert.rejects(h.intake.retry(item.id,{note:'Attempt without more budget.',model:'synthetic-primary'},OWNER),code('GOAL_BOUNDARY'));
   const recovered=await h.intake.retry(item.id,{note:'Approve a larger cumulative synthetic allowance.',model:'synthetic-primary',policy:{maxTotalTokens:20000,maxElapsedSeconds:600}},OWNER);
   assert.equal(h.codex.goals[1].input.tokenBudget,10500);assert.ok(h.codex.goals[1].input.timeoutSeconds>590&&h.codex.goals[1].input.timeoutSeconds<=600);
   assert.equal(recovered.policy.maxTotalTokens,20000);assert.equal(h.engine.run(item.routerRunId).snapshot.pipeline.policy.tokenBudget,10000);
   assert.equal(recovered.recoveryHistory?.[0].previousPolicy?.maxTotalTokens,10000);assert.equal(recovered.recoveryHistory?.[0].newPolicy?.maxTotalTokens,20000);
   assert.ok(h.engine.store.events({runId:recovered.routerRunId}).some(event=>event.type==='goal.policy_extended'));
+});
+
+test('an outcome can explicitly approve its current finite recommendation without estimating tokens',async t=>{
+  const h=await fixture(t),item=create(h);await capacityFailure(h,item,{input:9000,output:500,total:9500});
+  const stopped=current(h,item),recommendation=stopped.recoveryRecommendation!;
+  assert.equal(recommendation.purpose,'one-focused-continuation');assert.equal(recommendation.basis.usedTokens,9500);
+  assert.ok(recommendation.policy.maxTotalTokens!>stopped.policy.maxTotalTokens&&recommendation.policy.maxTotalTokens!<=1000000);
+  await assert.rejects(h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:'stale'},OWNER),code('RECOVERY_CONFLICT'));
+  assert.equal(h.codex.goals.length,1);
+  const resumed=await h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:stopped.recoveryKey},OWNER);
+  assert.equal(h.codex.goals.length,2);assert.equal(resumed.policy.maxTotalTokens,recommendation.policy.maxTotalTokens);
+  assert.deepEqual(resumed.recoveryHistory?.at(-1)?.approvedRecommendation,{key:stopped.recoveryKey,recommendation});
+  assert.equal(h.codex.goals[1].input.tokenBudget,resumed.policy.maxTotalTokens-9500);
+});
+
+test('separate outcome and pipeline ceilings can be approved without a deadlock or a doomed coordinator',async t=>{
+  const h=await fixture(t),original=h.flows[0],flow=h.engine.updatePipeline(original.id,original.revision,{...original,policy:{...original.policy,tokenBudget:100,maxAttempts:1}},OWNER);
+  const item=create(h,{maxTotalTokens:1000}),native=h.codex.goals[0];
+  const observed=native.input.onTool('intake.route',decision('dispatch',[task(flow)]));await pump(h,()=>h.codex.tasks.length===1,'the bounded child');
+  h.codex.tasks[0].input.onEvent({type:'usage',message:'Synthetic delayed final usage report.',usage:{input:1190,output:10,total:1200}});
+  h.codex.tasks[0].completion.reject(new Error('Synthetic child crossed its reported ceiling.'));
+  await observed;native.completion.resolve({status:'budgetLimited',summary:'Synthetic supervising allowance ended.'});
+  await pump(h,()=>current(h,item).status==='stopped','the two known-ended ceilings');
+  const before=current(h,item),targetId=before.targetRunIds[0];assert.equal(before.retryBlockedScope?.kind,'goal');
+  const approved=await h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:before.recoveryKey},OWNER);
+  assert.equal(h.codex.goals.length,1);assert.equal(approved.status,'stopped');assert.equal(approved.limitRevisions?.length,1);
+  assert.equal(approved.retryBlockedCode,'RUN_TOKEN_BUDGET');assert.deepEqual(approved.retryBlockedScope,{kind:'run',id:targetId});
+  const recovery=h.engine.recovery(targetId,'inspect',OWNER);assert.equal(recovery.action,'approve');
+  h.engine.continueRun(targetId,{stageId:'inspect',recoveryKey:recovery.recoveryKey,approveRecommendation:true},OWNER);
+  await pump(h,()=>h.codex.tasks.length===2,'the separately approved child');h.codex.tasks[1].completion.resolve({output:OUTPUT});
+  await pump(h,()=>h.engine.run(targetId).status==='completed','the accepted child');
+  await h.intake.retry(item.id,{},OWNER);assert.equal(h.codex.goals.length,2);
+});
+
+test('legacy coordinator history without a usage meter is never treated as free allowance',async t=>{
+  const h=await fixture(t),item=create(h),native=h.codex.goals[0];
+  native.completion.resolve({status:'blocked',summary:'Synthetic known-ended legacy coordinator.'});
+  await pump(h,()=>current(h,item).status==='clarification','the ended legacy coordinator');
+  const legacy=h.engine.run(item.routerRunId);delete legacy.stages[0].attempts[0].usage;delete legacy.stages[0].attempts[0].tokenReservation;
+  h.engine.store.put('run',legacy);
+  const stopped=current(h,item);assert.equal(stopped.allowance?.usedTokens,0);assert.equal(stopped.allowance?.reservedTokens,item.policy.maxTotalTokens);
+  assert.equal(stopped.canRetry,false);assert.equal(stopped.retryBlockedCode,'GOAL_TOKEN_BUDGET');
+  await assert.rejects(h.intake.retry(item.id,{},OWNER),code('GOAL_BOUNDARY'));assert.equal(h.codex.goals.length,1);
 });
 
 test('manual model selection is catalog validated and concurrent retries cannot duplicate execution', async t=>{
@@ -442,6 +496,31 @@ test('stopping retry_wait during manual catalog validation cannot start a fresh 
   assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');assert.equal(current(h,item).nextRetryAt,undefined);
 });
 
+test('stopping clarification while manual continuation checks the catalog invalidates that continuation',async t=>{
+  const h=await fixture(t),item=create(h);
+  h.codex.goals[0].completion.resolve({status:'blocked',summary:'Synthetic clarification requires a human choice.'});
+  await pump(h,()=>current(h,item).status==='clarification'&&current(h,item).canRetry===true,'the recoverable clarification');
+  const catalog=await h.codex.info(),pending=deferred<typeof catalog>();h.codex.info=()=>pending.promise;
+  const continuing=h.intake.retry(item.id,{},OWNER),rejected=assert.rejects(continuing,code('RECOVERY_CANCELLED'));
+  h.intake.cancel(item.id,'Owner stopped this outcome while continuation was being checked.',OWNER);
+  pending.resolve(catalog);await rejected;
+  assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');
+});
+
+test('stop supersedes pending continuation even from an already stopped or failed outcome',async t=>{
+  for(const status of ['stopped','failed'] as const)await t.test(status,async sub=>{
+    const h=await fixture(sub),item=create(h);
+    if(status==='failed')await capacityFailure(h,item);
+    else{h.intake.cancel(item.id,'Stop the synthetic outcome before a later continuation.',OWNER);await pump(h,()=>current(h,item).canRetry===true,'the settled stop');}
+    const before=current(h,item),catalog=await h.codex.info(),pending=deferred<typeof catalog>();h.codex.info=()=>pending.promise;
+    const continuing=h.intake.retry(item.id,{},OWNER),rejected=assert.rejects(continuing,code('RECOVERY_CANCELLED'));
+    h.intake.cancel(item.id,'Stop the pending continuation as well.',OWNER);
+    assert.equal(current(h,item).controlRevision,(before.controlRevision??0)+1);
+    pending.resolve(catalog);await rejected;
+    assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');
+  });
+});
+
 test('manual recovery extends action rounds only explicitly and never resets consumed actions',async t=>{
   const h=await fixture(t),item=create(h,{maxRounds:2});
   for(let index=0;index<2;index++){
@@ -453,7 +532,8 @@ test('manual recovery extends action rounds only explicitly and never resets con
   const sameBounds=await h.intake.retry(item.id,{note:'Continue without changing any action limit.',model:'synthetic-primary'},OWNER);
   assert.equal(sameBounds.policy.maxRounds,2);assert.equal(sameBounds.rounds.filter(round=>round.decision?.action==='dispatch').length,oldDispatches);
   await assert.rejects(h.codex.goals[1].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'A third distinct synthetic action.')])),code('GOAL_ROUND_LIMIT'));
-  await pump(h,()=>current(h,item).canRetry===true,'the unchanged round-limit stop');assert.equal(h.codex.tasks.length,2);
+  await pump(h,()=>current(h,item).retryBlockedCode==='GOAL_ROUND_LIMIT','the unchanged round-limit stop');assert.equal(h.codex.tasks.length,2);
+  assert.equal(current(h,item).recoveryRecommendation?.policy.maxRounds,3);
   await assert.rejects(h.intake.retry(item.id,{note:'',model:'synthetic-primary',policy:{maxRounds:3}},OWNER),code('RECOVERY_NOTE_REQUIRED'));
   await assert.rejects(h.intake.retry(item.id,{note:'Do not shrink the action allowance.',model:'synthetic-primary',policy:{maxRounds:1}},OWNER),code('INVALID_POLICY_EXTENSION'));
   for(const maxRounds of [0,11])await assert.rejects(h.intake.retry(item.id,{note:'Reject an invalid action allowance.',model:'synthetic-primary',policy:{maxRounds}},OWNER),code('INVALID_GOAL_POLICY'));
@@ -542,6 +622,7 @@ class SyntheticDecisionPlanner implements GoalPlanner {
   private engine: Engine;
   constructor(engine: Engine) {this.engine = engine;}
   async start(input: GoalPlannerInput) {
+    let reported:Usage|undefined;const onEvent=input.onEvent;input.onEvent=event=>{if(event.usage)reported=event.usage;onEvent(event);};
     const ref: ExecutionRef = {provider: 'multica', externalId: `synthetic-planner-task-${this.calls.length + 1}`, issueId: `synthetic-planner-issue-${this.calls.length + 1}`};
     const record = {id: input.executionId, projectId: input.project.id, runId: input.executionId, stageId: `decision-${input.rounds.length + 1}`, taskId: ref.externalId, issueId: ref.issueId, status: 'running', cleanupConfirmed: false};
     this.engine.store.put('multica-execution', record);
@@ -549,7 +630,7 @@ class SyntheticDecisionPlanner implements GoalPlanner {
     this.calls.push({input, ref, completion});
     input.signal.addEventListener('abort', () => {if (!completion.settled) {record.status = 'cancelled'; record.cleanupConfirmed = true; this.engine.store.put('multica-execution', record); completion.reject(new Error('Synthetic planner task authoritatively cancelled.'));}}, {once: true});
     input.onEvent({type: 'planner.task.started', message: 'A synthetic one-decision task started.', ref});
-    return {ref, completion: completion.promise.then(value => {record.status = 'completed'; record.cleanupConfirmed = true; this.engine.store.put('multica-execution', record); return value;})};
+    return {ref, completion: completion.promise.then(value => {record.status = 'completed'; record.cleanupConfirmed = true; this.engine.store.put('multica-execution', record); return{...value,usage:value.usage??reported??{input:0,output:0,total:0}};})};
   }
 }
 async function plannerFixture(t: TestContext) {
@@ -657,20 +738,23 @@ test('planner stage retries reject unowned work and cumulative action-round exha
   });
 });
 
-test('planner retries use explicit run limit revisions and report quota facts without consuming doomed attempts', async t=>{
+test('pipeline limits stop coordination before another paid decision and preserve explicit recovery', async t=>{
   const h=await plannerFixture(t),initial=h.flows[0],flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,policy:{...initial.policy,tokenBudget:100,maxAttempts:1}},OWNER),item=create(h,{maxRounds:3});
   h.planner.calls[0].completion.resolve({decision:decision('dispatch',[task(flow)])});await pump(h,()=>h.codex.tasks.length===1,'the limited worker');
   h.codex.tasks[0].input.onEvent({type:'usage',message:'Synthetic known usage exhausts the original run allowance.',usage:{input:120,output:5,total:125}});h.codex.tasks[0].completion.reject(new Error('The synthetic allowance is exhausted.'));
-  await pump(h,()=>h.planner.calls.length===2,'the actual limit observation');
-  const targetId=current(h,item).targetRunIds[0],frozen=structuredClone(h.engine.run(targetId).snapshot),observed=h.planner.calls[1].input.observations[0];
-  assert.deepEqual(observed.limits,{tokenBudget:100,usedTokens:125,remainingTokens:0,maxAttempts:1});assert.equal(observed.stages[0].attemptCount,1);
-  const retry={...decision('stop'),action:'retry',retry:{runId:targetId,stageId:'inspect',note:'Use the explicitly extended allowance for one focused retry.'}};
-  await assert.rejects(h.intake.route(current(h,item).routerRunId,'supervise',retry),code('RUN_TOKEN_BUDGET'));
+  await pump(h,()=>current(h,item).status==='stopped','the preflighted child boundary');
+  const targetId=current(h,item).targetRunIds[0],frozen=structuredClone(h.engine.run(targetId).snapshot);
+  assert.equal(h.planner.calls.length,1);assert.equal(current(h,item).canRetry,false);
+  assert.equal(current(h,item).retryBlockedCode,'RUN_TOKEN_BUDGET');assert.deepEqual(current(h,item).retryBlockedScope,{kind:'run',id:targetId});
+  await assert.rejects(h.intake.retry(item.id,{},OWNER),code('RECOVERY_NOT_READY'));
   h.engine.changeLimits(targetId,0,{tokenBudget:300},'Authorize a finite additional token allowance.',OWNER);
-  await assert.rejects(h.intake.route(current(h,item).routerRunId,'supervise',retry),code('STAGE_ATTEMPT_LIMIT'));
-  assert.equal(h.codex.tasks.length,1);assert.equal(current(h,item).rounds.length,1);assert.equal(h.engine.run(targetId).stages[0].attempts.length,1);
+  assert.equal(current(h,item).retryBlockedCode,'STAGE_ATTEMPT_LIMIT');assert.equal(h.planner.calls.length,1);
   h.engine.changeLimits(targetId,1,{maxAttempts:2},'Authorize one additional attempt without resetting consumption.',OWNER);
-  h.planner.calls[1].completion.resolve({decision:{...retry,action:'retry'}});await pump(h,()=>h.codex.tasks.length===2,'the authorized focused retry');assert.equal(h.codex.tasks[1].input.tokenBudget,175);
+  await h.intake.retry(item.id,{},OWNER);await pump(h,()=>h.planner.calls.length===2,'the approved continuation decision');
+  const observed=h.planner.calls[1].input.observations[0];
+  assert.deepEqual(observed.limits,{tokenBudget:300,usedTokens:125,remainingTokens:175,maxAttempts:2});assert.equal(observed.stages[0].attemptCount,1);
+  h.planner.calls[1].completion.resolve({decision:{...decision('stop'),action:'retry',retry:{runId:targetId,stageId:'inspect',note:'Use the explicitly extended allowance for one focused retry.'}}});
+  await pump(h,()=>h.codex.tasks.length===2,'the authorized focused retry');assert.equal(h.codex.tasks[1].input.tokenBudget,175);
   h.codex.tasks[1].input.onEvent({type:'usage',message:'Actual synthetic retry usage.',usage:{input:25,output:5,total:30}});h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>h.planner.calls.length===3,'the retained cumulative quota');
   assert.deepEqual(h.planner.calls[2].input.observations[0].limits,{tokenBudget:300,usedTokens:155,remainingTokens:145,maxAttempts:2});assert.equal(h.planner.calls[2].input.observations[0].stages[0].attemptCount,2);assert.deepEqual(h.engine.run(targetId).snapshot,frozen);
   h.planner.calls[2].completion.resolve({decision:decision('complete')});await pump(h,()=>current(h,item).status==='completed','the limit-aware completion');

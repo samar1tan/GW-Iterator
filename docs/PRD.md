@@ -1,5 +1,7 @@
 # GW-Iterator: integrated iteration pipelines
 
+Current interaction revision: [Human workbench](human-workbench-prd.md). It supersedes the earlier default-canvas, exposed-configuration and separate manual-top-up interactions. Historical execution/configuration bases remain intact.
+
 Status: replacement product baseline. Technical integration exists, but product acceptance remains open. This supersedes the first version's form-and-log-centered experience; it is not a completion claim.
 
 ## Purpose and ordinary use

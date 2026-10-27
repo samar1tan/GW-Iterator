@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="A local workbench for project iteration with Codex and Multica. Follow work, review changes, and keep decisions together.">
+  <link rel="icon" type="image/svg+xml" href="./brand/gwi-mark.svg">
+  <link rel="stylesheet" href="./style.css">
+  <title>GW-Iterator — A workbench for project iteration</title>
+  <script src="./site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main" data-i18n="skip">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#" aria-label="GW-Iterator"><img src="./brand/gwi-mark.svg" width="32" height="32" alt=""><span>GW-Iterator</span></a>
+    <nav aria-label="Main navigation" data-i18n-aria="navigationLabel">
+      <a href="#workflow" data-i18n="navWorkflow">Workflow</a>
+      <a href="#start" data-i18n="navSetup">Run locally</a>
+      <a href="https://github.com/samar1tan/GW-Iterator" class="source-link">GitHub <span aria-hidden="true">↗</span></a>
+      <button id="language" type="button" lang="zh-CN">简体中文</button>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow" data-i18n="eyebrow">LOCAL PROJECT ITERATION</p>
+        <h1 data-i18n="title">A local workbench<br>for projects using Codex.</h1>
+        <p class="lede" data-i18n="intro">Use Codex to move a project forward. Follow the implementation, independent checks and delivery decisions in one local workbench.</p>
+        <div class="actions"><a class="button primary" href="#start" data-i18n="setup">Run GWI locally</a><a class="button" href="https://github.com/samar1tan/GW-Iterator/blob/main/docs/operating-guide.md" data-i18n="guide">Read the guide</a></div>
+        <p class="hero-note" data-i18n="heroNote">Configuration and run history are stored locally. Selected context goes to your model provider.</p>
+      </div>
+      <div class="hero-aside"><img src="./brand/gwi-mark.svg" width="72" height="72" alt=""><p data-i18n="balance">Room for Codex to adapt.<br>Clear boundaries for the work.</p><a href="https://github.com/samar1tan/GW-Iterator/blob/main/docs/human-workbench-prd.md" data-i18n="principle">Read the product approach →</a></div>
+    </section>
+
+    <section id="workflow" class="workflow-section" aria-labelledby="workflow-heading">
+      <div class="section-heading"><div><p class="eyebrow" data-i18n="exampleLabel">ILLUSTRATIVE EXAMPLE</p><h2 id="workflow-heading" data-i18n="exampleTitle">A website fix, from request to review</h2></div><p data-i18n="exampleNote">An authored example of the workflow.<br>No project or run data is included.</p></div>
+      <div class="workbench-example">
+        <div class="example-topbar"><span><img src="./brand/gwi-mark.svg" width="22" height="22" alt=""><b data-i18n="exampleProject">Project website</b><span class="slash">/</span><span data-i18n="exampleWork">Language parity</span></span><span class="example-badge" data-i18n="exampleState">Ready for review</span></div>
+        <div class="example-request"><span class="request-icon" aria-hidden="true">↳</span><p data-i18n="request">“Keep the English and Chinese demo aligned when I switch languages.”</p></div>
+        <div class="example-body">
+          <ol class="example-stages" aria-label="Example workflow" data-i18n-aria="workflowLabel" id="example-stages">
+            <li><span class="stage-icon done" aria-hidden="true">✓</span><div><b data-i18n="stage1">Understand the mismatch</b><span data-i18n="stage1sub">Product · scope and expected result</span></div></li>
+            <li><span class="stage-icon done" aria-hidden="true">✓</span><div><b data-i18n="stage2">Prepare the change</b><span data-i18n="stage2sub">Development · shared demo content</span></div></li>
+            <li><span class="stage-icon done" aria-hidden="true">✓</span><div><b data-i18n="stage3">Check both languages</b><span data-i18n="stage3sub">QA · behavior, copy and layout</span></div></li>
+            <li class="current"><span class="stage-icon review" aria-hidden="true">4</span><div><b data-i18n="stage4">Review delivery</b><span data-i18n="stage4sub">Owner · inspect the result</span></div></li>
+          </ol>
+          <div class="example-detail">
+            <div class="detail-title"><span class="small-label" data-i18n="prepared">PREPARED CHANGE</span><span class="file-label">website / demo</span></div>
+            <h3 data-i18n="changeTitle">One case. Two languages.</h3>
+            <p data-i18n="changeBody">Both pages use the same example, commands and evidence. Only the displayed language changes.</p>
+            <div class="parity"><div><span lang="en">English</span><b data-i18n="caseEn">Compare two historical states</b><code>compare A B</code></div><div><span lang="zh-CN">简体中文</span><b data-i18n="caseZh">比较两个历史状态</b><code>compare A B</code></div></div>
+            <ul class="example-checks"><li data-i18n="check1">Equivalent content and interactions</li><li data-i18n="check2">Language switch preserves the investigation</li><li data-i18n="check3">Changed pages checked at desktop and narrow widths</li></ul>
+            <div class="example-artifact"><span aria-hidden="true">↗</span><span data-i18n="artifact">Change preview · Check results · Delivery record</span></div>
+          </div>
+        </div>
+        <div class="example-footer"><span class="timeline-dot"></span><span data-i18n="exampleFooter">If a check fails, return the finding to its owner and continue from that step.</span></div>
+      </div>
+    </section>
+
+    <section class="principles" aria-labelledby="work-heading">
+      <div><p class="eyebrow" data-i18n="workEyebrow">FROM PROJECT TO DELIVERED WORK</p><h2 id="work-heading" data-i18n="workTitle">Use the workbench.<br>Adjust the process when it matters.</h2></div>
+      <dl>
+        <div><dt><span>01</span><b data-i18n="point1">Start with the outcome</b></dt><dd data-i18n="point1body">Describe the work or select a reusable pipeline. State the concrete result before execution starts.</dd></div>
+        <div><dt><span>02</span><b data-i18n="point2">Follow work across roles</b></dt><dd data-i18n="point2body">Inspect stages, handoffs, changes and checks. People and agents use the same recorded work.</dd></div>
+        <div><dt><span>03</span><b data-i18n="point3">Continue with context</b></dt><dd data-i18n="point3body">Keep completed work and earlier attempts. A retry uses the remaining allowance; a higher ceiling needs an explicit decision.</dd></div>
+        <div><dt><span>04</span><b data-i18n="point4">Keep the useful knowledge</b></dt><dd data-i18n="point4body">Connect selected project documents and reviewed lessons. Pipeline and role revisions remain inspectable.</dd></div>
+      </dl>
+    </section>
+
+    <section id="start" class="start-section" aria-labelledby="start-heading">
+      <div><p class="eyebrow" data-i18n="startEyebrow">ON YOUR MACHINE</p><h2 id="start-heading" data-i18n="startTitle">Run GW-Iterator locally</h2><p data-i18n="startBody">GWI connects a local web interface to Multica and your authenticated Codex installation. It does not require a hosted GWI account.</p><p class="requirements" data-i18n="requirements">Node.js 24–26 · Git · curl · Docker Compose · Codex<br>GitHub operations also require an authenticated gh CLI.</p><p class="platform-note" data-i18n="platformNote">Native execution is verified on macOS. Other hosts must pass the setup checks.</p><a href="https://github.com/samar1tan/GW-Iterator/blob/main/docs/multica-setup.md" class="text-link" data-i18n="setupDetails">Prerequisites and setup checks →</a></div>
+      <div class="terminal"><div class="terminal-heading"><span data-i18n="terminal">Terminal</span><button type="button" id="copy" data-i18n="copy">Copy</button></div><pre><code id="commands">git clone https://github.com/samar1tan/GW-Iterator.git
+cd GW-Iterator
+npm ci --ignore-scripts
+node scripts/setup-multica.mjs
+npm run build
+npm start</code></pre><div class="terminal-footer"><span data-i18n="openLocal">Then open</span> <a href="http://127.0.0.1:4318">127.0.0.1:4318</a></div><p id="copy-status" role="status" aria-live="polite"></p></div>
+    </section>
+  </main>
+  <footer class="site-footer"><a class="brand" href="#"><img src="./brand/gwi-mark.svg" width="24" height="24" alt=""><span>GW-Iterator</span></a><p data-i18n="footer">Built with Codex and Multica. GWI source: Apache-2.0; dependencies have their own terms.</p><nav aria-label="Resources" data-i18n-aria="resourcesLabel"><a href="https://github.com/samar1tan/GW-Iterator" data-i18n="source">Source</a><a href="https://github.com/samar1tan/GW-Iterator/tree/main/docs" data-i18n="docs">Docs</a><a href="https://github.com/samar1tan/GW-Iterator/issues" data-i18n="issues">Issues</a><a href="https://github.com/samar1tan/GW-Iterator/blob/main/THIRD_PARTY_NOTICES.md" data-i18n="notices">Notices</a></nav></footer>
+</body>
+</html>

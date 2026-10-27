@@ -3,5 +3,5 @@ import {EFFORTS, EFFORT_LABELS} from '../src/contracts';
 import type {ModelInfo} from '../src/contracts';
 
 export function effortSupported(value:string, model?:ModelInfo){return !model?.efforts.length || model.efforts.includes(value);}
-export function EffortOptions({model,value}:{model?:ModelInfo;value:string}){return <>{!EFFORTS.some(effort=>effort===value)&&<option value={value}>{value}</option>}{EFFORTS.map(effort=><option key={effort} value={effort} disabled={!effortSupported(effort,model)}>{EFFORT_LABELS[effort]}</option>)}</>;}
+export function EffortOptions({model,value}:{model?:ModelInfo;value:string}){const {t}=useI18n();return <>{!EFFORTS.some(effort=>effort===value)&&<option value={value} disabled={!value}>{value||t('effortNotReported')}</option>}{EFFORTS.map(effort=><option key={effort} value={effort} disabled={!effortSupported(effort,model)}>{EFFORT_LABELS[effort]}</option>)}</>;}
 export function ReasoningHelp(){const {locale,t}=useI18n();return <p className="hint" lang={locale}>{t('reasoningHelp')}{' '}<a href="https://codexradar.com/?station=codex" target="_blank" rel="noreferrer">CodexRadar</a>{' '}{t('reasoningAdvisory')}</p>;}

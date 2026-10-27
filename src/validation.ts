@@ -33,6 +33,8 @@ export function validatePipeline(pipeline:Pipeline,project:Project,others:Pipeli
   for(const stage of pipeline.stages){
     demand(id(stage.id)&&text(stage.name,180)&&project.roles.some(role=>role.id===stage.roleId)&&EXECUTORS.includes(stage.executor)&&typeof stage.prompt==='string'&&stage.prompt.length<=40000&&typeof stage.review==='boolean'&&Array.isArray(stage.dependsOn)&&unique(stage.dependsOn)&&stage.dependsOn.every(dependency=>stages.has(dependency)&&dependency!==stage.id),'INVALID_STAGE','Check stage roles, executors and dependencies.');
     if(stage.executor==='github')demand(!stage.options?.repository||stage.options.repository===project.repository,'PROJECT_SCOPE','GitHub stages must use this project repository.');
+    demand(stage.executionPurpose===undefined||(stage.executionPurpose==='review'&&stage.executor==='codex'),'INVALID_EXECUTION_PURPOSE','Review execution requires a Codex worker.');
+    demand(stage.ownerGate===undefined||(typeof stage.ownerGate==='boolean'&&stage.executor==='manual'),'INVALID_OWNER_GATE','Owner gates require a manual stage.');
     if(stage.executor==='pipeline')demand(text(stage.options?.pipelineId,100)&&stage.options?.pipelineId!==pipeline.id,'INVALID_CHILD_PIPELINE','Choose another pipeline in this project.');
     demand(contractList(stage.inputs)&&contractList(stage.outputs)&&contractList(stage.checks),'INVALID_STAGE_CONTRACT','Provide bounded input, output and acceptance descriptions.');
     if(stage.position)demand(isObject(stage.position)&&Number.isFinite(stage.position.x)&&Number.isFinite(stage.position.y)&&Math.abs(stage.position.x)<100000&&Math.abs(stage.position.y)<100000,'INVALID_STAGE_POSITION','Provide finite stage canvas coordinates.');
