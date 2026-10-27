@@ -31,7 +31,7 @@ test('completed results and clarification expose an inline composer and navigabl
     const render=(component:unknown,props:Record<string,unknown>)=>renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(component as typeof GoalWorkspace,props)));
     const html=render(GoalWorkspace,{goal:parent,detail,models:[],onRun(){},onGoal(){},onBack(){},onChanged:async()=>{}});
     assert.ok(html.includes('pf-request-composer'));assert.ok(html.indexOf('Inspect the navigation guide')<html.indexOf('pf-request-composer'));
-    assert.ok(html.includes(locale==='en'?'Continue here':'接着说'));assert.ok(html.includes('maxLength="4000"'));assert.ok(html.includes('Meta+Enter Control+Enter'));assert.ok(!html.includes('type="number"'));
+    assert.ok(html.includes(locale==='en'?'Continue here':'接着说'));assert.ok(html.includes('maxLength="4000"'));assert.ok(html.includes('Enter Meta+Enter Control+Enter'));assert.ok(html.includes(locale==='en'?'Enter to send · Shift+Enter for a new line':'Enter 发送 · Shift+Enter 换行'));assert.ok(html.includes('aria-describedby="pf-followup-'+parent.id+'-keys"'));assert.ok(!html.includes('type="number"'));
     assert.ok(html.includes('Check the guide you identified.'));
     const linked=render(GoalWorkspace,{goal:child,detail,models:[],onRun(){},onGoal(){},onBack(){},onChanged:async()=>{}});
     assert.ok(linked.includes('pf-conversation-link'));assert.ok(linked.includes('What should be investigated next?'));assert.ok(linked.includes(locale==='en'?'Conversation context':'对话上下文'));

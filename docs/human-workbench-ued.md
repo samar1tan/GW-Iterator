@@ -169,3 +169,8 @@ Completed results have a compact Continue here composer before Activity/history.
 A linked result identifies its preceding request in a concise navigation row and lists the included source requests and any omissions in a collapsed disclosure. Those links open the original completed results; exact frozen execution context remains available in the recorded snapshot. Show existing follow-ups as direct links beside that relationship. Do not repeat complete answers as a stack of open cards. Navigating between linked entries preserves the project, drafts and normal Back/Forward behavior. A new result keeps its own execution/decision history while the earlier result remains intact.
 
 Clarification uses a Reply field in the same location and the guarded continuation path. Keep the actual question visible, omit duplicate Continue controls when the inline reply is ready, and preserve explicit recovery/approval controls when additional action is required. Announce submission/busy/error states without adding a tutorial or treating a normal reply as a new independent project task.
+
+
+## Request-entry keys
+
+Use Enter to send and Shift+Enter for a new line in the shared message textarea. Keep Command/Ctrl+Enter as an equivalent send shortcut. A short localized hint beside the input's actions makes this discoverable; the hint and accessible description do not replace the normal action button. Input-method candidate confirmation follows native composition behavior, and a held Enter cannot create repeated requests. Focus on account refresh, disclosure controls or action buttons retains native behavior.

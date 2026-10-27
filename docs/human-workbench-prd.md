@@ -167,3 +167,10 @@ Each follow-up creates a bounded, linked Intake. Preserve its completed predeces
 When GWI asks for clarification, an inline reply instead continues the same Intake through the existing recovery checks and cumulative allowance. A reply is required on both client and server. Keep its question/response association in existing decision/recovery records. A blocked cleanup, active child, stale approval or required boundary adjustment retains the existing recovery action rather than bypassing it through a new Intake.
 
 Preserve unsent text by project and parent/clarification execution. A confirmed write remains recorded even if observation fails, and a late response must not override newer navigation. Acceptance covers two related questions, answer-to-work context, prior-result immutability, independent/new and cross-project isolation, bounded history, duplicate/uncertain submissions, clarification replies, both execution adapters, both locales and actual browser navigation/keyboard/layout. Use controlled execution when no paid provider check is needed.
+
+
+## Request-entry keyboard behavior
+
+The shared request composer on project/global workbenches, result follow-ups and clarification replies sends with Enter and inserts a line break with Shift+Enter. Existing Command/Ctrl+Enter remains supported. Show the ordinary shortcut in both UI locales. Handle the shortcut only in the message textarea; buttons and other controls retain their native keyboard behavior.
+
+Input-method composition/candidate confirmation must not submit. Suppress held-key repetition and retain all existing empty-input, pending, source/account, idempotency and receipt guards. This correction adds no configuration or execution behavior. Verify ordinary Enter, multiline input, composition/repeat guards and disabled submission, with actual model-free browser operation separate from OS input-method validation.
