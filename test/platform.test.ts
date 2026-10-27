@@ -484,6 +484,20 @@ test('an issued MCP capability expires after authoritative task completion and n
   assert.equal((await rpc()).status, 401); assert.equal(h.execution.records('synthetic-run')[0].cleanupConfirmed, true);
 });
 
+test('connected HTTP planner carries a direct answer through authoritative completion without a workflow', async t => {
+  const h=await fixture(t);h.engine.goalPlanner=h.execution.planner;h.engine.agentExecutor=h.execution.agent;
+  const intake=new IntakeService(h.engine);t.after(()=>intake.close());
+  const response='The recorded synthetic project is idle; this answer does not establish delivery.';
+  h.state.taskResult=()=>JSON.stringify({action:'answer',rationale:'An informational response needs no child work.',expectedGain:'Answer from the supplied evidence.',tasks:[],response});
+  const item=intake.create(h.project.id,{request:'Explain the recorded synthetic project status.',idempotencyKey:'synthetic-direct-answer'},OWNER);
+  await eventually(()=>intake.list(h.project.id).find(value=>value.id===item.id)?.status==='completed','the read-only answer');
+  const ended=intake.list(h.project.id).find(value=>value.id===item.id)!;
+  assert.equal(ended.resultKind,'answer');assert.equal(ended.outcome,response);assert.deepEqual(ended.targetRunIds,[]);
+  assert.equal(h.engine.store.list<Run>('run').filter(run=>!run.executionKind).length,0);
+  const prompt=String(h.state.requests.find(request=>request.method==='POST'&&request.path==='/api/issues')!.body.description);
+  assert.match(prompt,/For an informational question/);assert.match(prompt,/"response":"only for answer/);
+});
+
 test('planner context carries continuation and role sandboxes while bounding knowledge without losing provenance', async t => {
   const h = await fixture(t), project = structuredClone(h.project);
   project.roles.push({...project.roles[0], id: 'synthetic-retired-role', name: 'Retired synthetic role', retired: true});
