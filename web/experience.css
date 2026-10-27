@@ -1,0 +1,99 @@
+/* Execution feedback follows recorded state, independently of selection. */
+@property --pf-running-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.pf-step-button,
+.pf-stage-card {
+  position: relative;
+  isolation: isolate;
+}
+
+.pf-step-button.state-running,
+.pf-stage-card.state-running {
+  border-color: var(--blue);
+}
+
+.pf-step-button.state-running::after,
+.pf-stage-card.state-running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(from var(--pf-running-angle), transparent 0deg 210deg, #388bfd55 250deg, #a5d6ff 290deg, transparent 335deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: pf-running-border 3.5s linear infinite;
+}
+
+@keyframes pf-running-border {
+  to { --pf-running-angle: 360deg; }
+}
+
+.pf-step-button:focus-visible,
+.pf-stage-card.selected {
+  outline-offset: 3px;
+}
+
+.pf-step-title strong { color: var(--text); }
+.pf-platform .button { white-space: nowrap; }
+.pf-platform .actions { flex-wrap: wrap; row-gap: 8px; }
+.pf-platform [aria-busy='true'] { cursor: progress; }
+.pf-draft-label { color: var(--attention); margin-inline-start: 12px; }
+
+.pf-first-project,
+.pf-missing-selection {
+  max-width: 620px;
+  margin: 50px auto;
+  padding: 40px 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.pf-first-project-icon {
+  display: inline-flex;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--blue);
+  margin-bottom: 18px;
+}
+.pf-first-project-icon .ui-icon { width: 24px; height: 24px; }
+.pf-first-project h2 { font-size: 22px; }
+.pf-first-project p,
+.pf-missing-selection p { color: var(--muted); margin: 12px 0 24px; line-height: 1.8; }
+.pf-workbench-columns.is-new-project { grid-template-columns: 1fr; grid-template-areas: 'shortcuts'; }
+.is-new-project > :is(.pf-current-work, .pf-decision-section, .pf-delivery-section, .pf-history-section) { display: none; }
+
+@media (max-width: 760px) {
+  .pf-first-project, .pf-missing-selection { margin: 24px auto; padding: 28px 20px; }
+  .pf-platform .form-actions { flex-wrap: wrap; gap: 8px; }
+  .pf-activity-toolbar { flex-wrap: wrap; gap: 8px; }
+  .pf-filter-group { max-width: 100%; flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-step-button.state-running::after,
+  .pf-stage-card.state-running::after { animation: none; background: var(--blue); }
+  .pf-platform .state-running .state-icon,
+  .pf-platform .react-flow__edge.animated path { animation: none; }
+}
+
+.pf-outcome-entry .pf-account-allowance {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 10px 0 0;
+}
+
+.pf-platform .source-item .issue-dot.missing { background: var(--attention); }

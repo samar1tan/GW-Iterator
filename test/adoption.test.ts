@@ -138,6 +138,26 @@ test('invalid source kind gives one actionable correction and repaired kinds der
   assert.equal(h.codex.calls.length, 1); assert.equal(h.engine.store.list('project').length, 0);
 });
 
+test('scanned evidence cannot register unsupported Knowledge inputs and a corrected proposal stays usable', async t => {
+  for (const filename of ['README', 'README.adoc', 'docs/auth.md', 'docs/settings.md', '.github/workflows/auth-check.yml']) await t.test(filename, async sub => {
+    const h = await fixture(sub); await writeFile(path.join(h.workspace, filename), 'Synthetic setup evidence.');
+    const item = await h.service.create(input(h.workspace), OWNER), call = h.codex.calls[0];
+    const source = item.sources.find(source => source.path === filename && source.transformation === 'text-excerpt');
+    assert.ok(source);
+    const proposed = proposal(); proposed.knowledgeSources.push({path: filename, kind: source.kind, roles: []});
+    await assert.rejects(call.input.onTool('project.bootstrap', {proposal: proposed, sources: ['README.md', 'docs/usage.md', filename]}), error => {
+      assert.ok(error instanceof AppError); assert.equal(error.code, 'INVALID_ADOPTION_SOURCES');
+      const feedback = error.details as {allowedPaths: string[]};
+      assert.equal(feedback.allowedPaths.includes(filename), false); assert.ok(feedback.allowedPaths.includes('README.md')); return true;
+    });
+    const ready = await recordProposal(h, item), project = await h.service.apply(item.id, ready.revision, OWNER);
+    const synced = await h.engine.sync(project.id, OWNER);
+    assert.equal(synced.stats.errors, 0); assert.equal(synced.stats.added, 2);
+    assert.equal(project.knowledgeSources.some(source => source.path.endsWith('/'+filename)), false);
+    assert.equal(h.codex.calls.length, 1);
+  });
+});
+
 test('proposal corrections stop after two calls and a failed scan retains its actual blocked output', async t => {
   const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), call = h.codex.calls[0];
   const wrong = proposal() as unknown as Record<string, unknown>; (wrong.knowledgeSources as Record<string, unknown>[])[0].kind = 'file';

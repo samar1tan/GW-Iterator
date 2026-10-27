@@ -6,6 +6,8 @@ After [local setup](multica-setup.md), start GWI and open `http://127.0.0.1:4318
 
 Choose an existing local workspace. Add a GitHub repository binding when the work needs it. Codex-assisted adoption reads bounded eligible sources and proposes project guidance, registered knowledge and workflows. Review the sources and proposal before applying it. Applying a configuration does not start project work or synchronize knowledge.
 
+**Connect manually** creates the project with reusable defaults without a model scan. Repository binding and description are optional; team and workflow settings remain editable afterward.
+
 ## Start and follow work
 
 In the project **Workbench**, describe what should change and how you will recognize a useful result. Running a saved pipeline opens a short dialog for this concrete outcome; cancelling or leaving it empty starts no work. Ordinary starts inherit the project and role settings. Inspect the role/model summary when useful; attempt/time bounds and native permissions are advanced controls, not required launch fields. Codex allowance shows the actual account windows, remaining percentages and reset times; Refresh reads them without starting a model task.
@@ -13,6 +15,8 @@ In the project **Workbench**, describe what should change and how you will recog
 A general outcome records one bounded coordination decision at a time. The coordinator can select several workflows or retry a failed owned stage from new evidence. GWI waits for their actual results before another decision. Inspect the reason, selected actions and remaining allowance; a successful provider task is not outcome acceptance.
 
 Open an action to see its steps and activity timeline. Selecting a step shows its owner, checks, actual result and permitted controls. Switch to the graph when dependencies or branches need inspection. Activity updates preserve selection and let you pause following while reading earlier events. **Inspect changes** reads the execution checkout's tracked diff and status. Relative text artifacts can be previewed without executing their contents. Technical details retain execution references, usage and the frozen basis.
+
+Only a recorded running stage has a moving blue border. Waiting, paused, completed and editing states stay still; a paused run can still have an in-flight stage finishing. The reduced-motion style retains a static state border and label. Execution details identify the Multica task and native session. These jobs are separate from chats in the Codex desktop app; GWI currently has no desktop-chat bridge.
 
 Work uses committed-source checkouts, not the original dirty working directory. Each run records its actual input commit. Dependencies must be installed inside that checkout when required; source, ignored configuration and dependency directories are not shared by a writable link. A configured delivery role or the supervising owner must integrate or publish the accepted result. Inspecting an artifact does not perform that operation.
 
@@ -40,13 +44,19 @@ Process proposals record a definition revision, rationale and supporting run. In
 
 In **Team**, role contracts describe responsibilities, inputs, outputs and acceptance checks. Select actual agents, skills, tools and runtimes. A shared agent is a template for a project copy. Materialized role agents are immutable; use role settings to create another revision. Project custom templates can be edited. Native configuration that may contain credentials is write-only in the browser.
 
+If a batch role import stops partway through, confirmed roles are already saved. The form reports progress and retains only the remaining roles; correct those entries and retry. Do not resubmit the original batch.
+
 GWI control-tool permissions and native file permissions are separate. Each worker gets only its selected project-scoped control capabilities. The verified native runtime governs filesystem access and network behavior. Read-only instructions alone do not establish enforcement; see the setup guide for the tested policies and their limits.
 
 ## Maintain knowledge
 
 In **Knowledge**, register deliberate local sources and relevant roles, then synchronize. Supported text documents and selected memory-heading subtrees retain source identity, revision and hash. Missing or failed sources remain inspectable but do not enter new execution context. Synchronization does not crawl the home directory or translate arbitrary material.
 
+Source paths can be absolute or relative to the project's workspace, such as `docs` or `README.md`. Synchronization indexes eligible formats and excludes private configuration and credential paths. If a missing directory later becomes available, synchronize again to replace its missing-source placeholder with the current documents.
+
 Search by title/content with role/type filters. Worker context uses bounded excerpts while the full indexed content remains available in the knowledge view. Retain verified lessons with the source run; do not turn every model sentence into project memory. A lesson or process improvement still needs supporting evidence.
+
+Opening a lesson's source execution and returning preserves the selected knowledge entry and filters. A confirmed save remains saved even if the following metadata refresh fails; use Refresh to observe it rather than submitting the mutation again. Pipeline and Settings drafts are protected on navigation, and stale revision errors preserve the draft for reconciliation.
 
 ## Private API and runtime settings
 

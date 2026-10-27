@@ -1,6 +1,7 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  invalidRole: '请检查角色名称、指令、模型和执行设置。推理强度须使用受支持的值，例如 Max。', invalidSource: '请检查来源路径、类型及所选角色。私人配置或凭据文件不能建立索引。', workspaceTooBroad: '请选择具体的项目文件夹，不能使用文件系统根目录或主目录。',
   effortNotReported:'代理未报告',
   reasoningHelp: '新角色和代理默认 Max。更高强度可能耗时更长；支持范围取决于已安装模型。', reasoningAdvisory: '（仅供参考）',
   intakeDecisionRetry: '重试对应工作',

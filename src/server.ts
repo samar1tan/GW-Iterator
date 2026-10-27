@@ -131,8 +131,7 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
       let revision='';try{revision=(await promisify(execFile)('git',['-C',project.workspace,'rev-parse','HEAD'],{timeout:5000})).stdout.trim();}catch{}
       input.baseline=revision?`${project.repository||project.name} @ ${revision}`:`${project.name} · configuration ${project.revision}`;
     }
-    const target=await accountTarget({projectId:project.id,pipelineId:String(input.pipelineId)},actor);
-    const approval=input.approveAccountStep===true?await engine.approveAccountStep(target,typeof input.accountAssessmentKey==='string'?input.accountAssessmentKey:undefined,actor):undefined;
+    const approval=input.approveAccountStep===true?await engine.approveAccountStep(await accountTarget({projectId:project.id,pipelineId:String(input.pipelineId)},actor),typeof input.accountAssessmentKey==='string'?input.accountAssessmentKey:undefined,actor):undefined;
     json(response,engine.startRun(input as StartRunInput,actor,undefined,undefined,approval),201);return;
   }
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry)$/);
@@ -151,7 +150,7 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
 
 const development=process.argv.includes('--dev');
 const brandAsset=path.join(root,'public/brand/gwi-mark.svg');
-const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'node_modules'),brandAsset],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
+const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,watch:{ignored:['**/.local/**','**/.git/**']},fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'node_modules'),brandAsset],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
 async function publicDevelopmentPath(url:URL):Promise<boolean>{
   let decoded=url.pathname;for(let count=0;count<3;count++){try{const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}catch{return false;}}
   decoded=decoded.replaceAll('\\','/');

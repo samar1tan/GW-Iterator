@@ -23,6 +23,7 @@ export class Store {
   }
   list<T>(kind:string):T[] {return this.db.prepare('SELECT document FROM records WHERE kind=? ORDER BY rowid').all(kind).map(row=>JSON.parse(String(row.document)) as T);}
   put<T extends {id:string}>(kind:string,value:T):void {this.db.prepare('INSERT INTO records(kind,id,document) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET document=excluded.document').run(kind,value.id,JSON.stringify(value));}
+  delete(kind:string,id:string):void {this.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind,id);}
   transaction<T>(operation:()=>T):T {
     const depth=this.transactionDepth++,marker=`nested_${depth}`;
     this.db.exec(depth?`SAVEPOINT ${marker}`:'BEGIN IMMEDIATE');

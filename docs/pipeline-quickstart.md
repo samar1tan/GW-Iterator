@@ -7,7 +7,8 @@ The [operating guide](operating-guide.md) explains controls and recovery in deta
 1. **Choose the project.** From Projects, select the workspace that owns the
    document. Each project has its own team, pipelines and knowledge. If it is
    new, connect its local location and review the adoption proposal before
-   applying it; applying configuration does not start work.
+   applying it; applying configuration does not start work. **Connect manually**
+   uses reusable defaults without a model scan.
 2. **State the outcome.** In Workbench, describe the correction, its scope and
    the evidence you expect: for example, “Correct the outdated setup instruction
    in one document; verify the replacement against current source and check
@@ -40,6 +41,9 @@ Unchanged human or CI waits spend no model turns: retain the recorded state
 until new evidence or a decision arrives. Do not repeatedly prompt an agent
 to ask whether anything has changed. Use the recorded review or manual-stage
 result when it is ready; use Pause, Resume or Stop to control further work.
+Known human-only workflows, including their human-only child workflows, do not
+need Codex account admission. Native jobs are inspected in GWI's execution
+details; they do not appear as chats in the Codex desktop app.
 
 Isolated changes are **not published automatically**. A configured delivery
 role or the supervising owner must integrate or publish the accepted result

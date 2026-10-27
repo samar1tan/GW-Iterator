@@ -59,6 +59,11 @@ function isWorkflowFile(path: string): boolean {
     && ['.yml', '.yaml'].includes(extname(path).toLowerCase());
 }
 
+/** Pure path eligibility; realpath, file, content and size checks still apply when reading. */
+export function isKnowledgePathEligible(path: string, kind: KnowledgeSource['kind']): boolean {
+  return !isCredentialPath(path) && (TEXT_EXTENSIONS.has(extname(path).toLowerCase()) || kind === 'artifact' && isWorkflowFile(path));
+}
+
 function readableError(error: unknown): SourceError {
   if (error instanceof SourceError) return error;
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
@@ -124,7 +129,7 @@ async function readText(path: string, root: string, budget: { bytes: number }, e
   const before = await realpath(path);
   if (!isWithin(root, before)) throw new SourceError('A symbolic link leaves the configured source root.');
   if (isCredentialPath(before)) throw new SourceError('Credential and runtime configuration files cannot be indexed.');
-  if (!TEXT_EXTENSIONS.has(extname(before).toLowerCase()) && !(explicitWorkflowArtifact && isWorkflowFile(before))) {
+  if (!isKnowledgePathEligible(before, explicitWorkflowArtifact ? 'artifact' : 'document')) {
     throw new SourceError('Use Markdown, text, reStructuredText or an explicitly registered workflow artifact.');
   }
   const handle = await open(before, constants.O_RDONLY | constants.O_NOFOLLOW);
