@@ -139,6 +139,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-outcome-entry:focus-within { border-color: #7298d7; }
 .pf-outcome-entry > label { display: flex; align-items: center; gap: 9px; color: #cdd9eb; font-size: 13px; font-weight: 550; }
 .pf-outcome-entry > label .ui-icon { color: var(--blue); width: 17px; height: 17px; }
+.pf-platform .pf-outcome-help { margin-top: 8px; font-size: 12px; max-width: 900px; }
 .pf-platform .pf-outcome-entry > textarea { min-height: 78px; padding: 12px 0 10px; border: 0; border-radius: 0; box-shadow: none; background: transparent; font-size: 16px; line-height: 1.65; outline: none; }
 .pf-outcome-footer { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 24px; align-items: end; border-top: 1px solid var(--line); padding-top: 12px; }
 .pf-platform .pf-outcome-footer .pf-account-allowance { margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: auto auto minmax(0,1fr); gap: 3px 12px; background: transparent; }
@@ -177,6 +178,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-recent-list > button { padding: 15px 18px; gap: 16px; border-color: var(--line-subtle); }
 .pf-recent-list strong { font-size: 13px; font-weight: 500; }
 .pf-recent-list time { font-size: 12px; color: #7f8da2; }
+.pf-history-toggle { margin-top: 12px; }
 
 /* Reusable definitions and actual work share a deliberate row vocabulary. */
 .pf-catalog-bar { margin-bottom: 24px; gap: 20px; border-color: var(--line); }
@@ -363,6 +365,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-platform .modal.wide { width: 880px; }
 .pf-platform .modal-header { padding: 19px 24px; top: 0; background: #1a222e; border-bottom-color: var(--line); gap: 16px; }
 .pf-platform .modal-header h2 { font-size: 18px; font-weight: 600; line-height: 1.4; letter-spacing: -.3px; }
+.pf-platform .modal-progress { margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .pf-platform .modal-header > .button { padding: 5px; min-width: 30px; min-height: 30px; }
 .pf-platform .modal-content { padding: 24px; }
 .pf-platform .form-actions { border-top: 1px solid var(--line); padding-top: 20px; margin-top: 4px; }

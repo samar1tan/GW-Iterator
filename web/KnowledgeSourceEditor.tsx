@@ -13,7 +13,7 @@ export function KnowledgeSourceEditor({project, source, scopedRole, onClose, onC
   const [basis, setBasis] = useState(project), [id] = useState(() => source?.id ?? `source-${uid()}`);
   const [kind, setKind] = useState<KnowledgeSource['kind']>(source?.kind ?? 'document');
   const [path, setPath] = useState(source?.path ?? ''), [section, setSection] = useState(source?.section ?? '');
-  const [roles, setRoles] = useState(source?.roles ?? (scopedRole ? [scopedRole] : project.roles.filter(role=>!role.retired).map(role=>role.id)));
+  const [roles, setRoles] = useState(source?.roles ?? (scopedRole ? [scopedRole] : []));
   const [busy, setBusy] = useState(false), [confirmed, setConfirmed] = useState(false), [error, setError] = useState<unknown>(null);
   const present = !source || basis.knowledgeSources.some(item => item.id === id);
   const submit = async (event: React.FormEvent) => {

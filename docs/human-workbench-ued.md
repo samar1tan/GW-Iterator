@@ -113,3 +113,17 @@ Lists use quiet dividers and aligned action groups; independent cards are reserv
 Hover/focus/selection changes are short and stationary. Running borders keep their existing authoritative-state and reduced-motion contract. Responsive layouts deliberately stack in document order; important actions and reading text remain visible at 390px and the 320px minimum. Inspect actual long names, failures and both languages rather than using edited marketing text as visual proof.
 
 Maintain the visual foundation in the existing human.css layer, with platform.css retaining structural layout and experience.css retaining state/interaction rules. Do not add a parallel theme stylesheet per page. All screen changes must be checked in a real browser; design images are not substitutes for functioning controls.
+
+## Human journey continuity
+
+Outcome and saved-workflow request fields keep a tab-local draft on navigation, dismissal and reload. Review guidance is scoped to the stage attempt, so inspecting another step does not lose a finding and a later attempt does not inherit it. Inputs stay private on the loopback origin; they are cleared after a confirmed write, not after an attempted submission. A short draft hint explains this behavior without a confirmation dialog. A successful start opens its recorded object even when the subsequent refresh fails; the existing observation error and refresh action describe that gap rather than reporting another failed start.
+
+Manual task instructions are ordinary task content, visible above its Record result or Review delivery action. Show the human's actual prompt, without expanding raw role configuration. Keep upstream results inspectable alongside it. Pending role saves use the same busy/dismissal contract as other mutating dialogs.
+
+Add stage appends after the selected stage (or the last stage when none is selected), exposes that dependency in the step row, and chooses free graph space. Duplicating a stage retains its existing dependencies but also chooses free space. Explicit dependency controls still support parallel work; no existing saved definition is rewritten.
+
+Workbench history expands in place to all recorded outcomes and direct executions; older unsuccessful outcomes remain reachable through that list instead of disappearing after six items. Retaining a lesson provides an Open saved entry action that deliberately clears conflicting filters for that navigation, while ordinary browsing retains its current filters. Manual project connection explains the existing local-directory requirement before submission and renders validation errors in the chosen UI language.
+
+Project sidebar destinations open their project-wide scope. A selected Team role is not an implicit Pipelines or Knowledge filter; contextual role links and browser history still preserve their explicit selection and return context.
+
+The prepared-change preview and provider-backed owner delivery step explicitly identify the execution-workspace boundary: acceptance does not write back to the original project directory or establish integration/publication. Do not let a successful task state imply those effects.

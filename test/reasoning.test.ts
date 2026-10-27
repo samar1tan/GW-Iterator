@@ -47,6 +47,10 @@ test('rendered choices have fixed labels and preserve catalog capability restric
       assert.equal(help.includes('新角色和代理默认 Max。'), locale === 'zh-CN');
       assert.equal(help.includes('(advisory)'), locale === 'en');
       assert.equal(help.includes('（仅供参考）'), locale === 'zh-CN');
+      const incompatible=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(ReasoningHelp,{value:'max',model:{id:'limited',name:'Limited model',efforts:['low']}})));
+      assert.ok(incompatible.includes(locale==='en'?'Limited model does not support Max.':'Limited model 不支持 Max。'));
+      const unknown=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(ReasoningHelp,{value:'max',model:{id:'unknown',name:'Unknown model',efforts:[]}})));
+      assert.ok(!unknown.includes('notice warning'));
     }
   } finally {await server.close();}
 });

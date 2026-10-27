@@ -126,6 +126,10 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       assert.ok(heldWorkbench.replace(/<svg\b[^]*?<\/svg>/g,'').includes('<h2>'+decisionTitle+'</h2><span class="count">1</span>'));
       assert.ok(heldWorkbench.includes(locale==='en'?'Approve one bounded execution':'批准一次有界执行'));
       assert.ok(heldWorkbench.includes('Example account approval is required.'));
+      const olderGoals=Array.from({length:7},(_,index)=>({...intake,id:'archived-'+index,status:'stopped',request:'Archived outcome '+index,canRetry:false,targetRunIds:[]}));
+      const archived=render(createElement(Workbench,{detail:{project,pipelines:[pipeline],runs:[],knowledge:[],proposals:[],events:[],intakes:olderGoals},onGoal:()=>{},onRun:()=>{},onPipeline:()=>{},onLibrary:()=>{},onStartPipeline:async()=>{},onChanged:async()=>{}}));
+      assert.ok(archived.includes('Archived outcome 0'));
+      assert.ok(archived.includes(locale==='en'?'Show all history (7)':'显示全部历史（7）'));
       const blockedSummary='Example input is unavailable.';
       const blockedRun={...run,status:'failed',stopReason:blockedSummary,stages:[{...run.stages[0],status:'failed',attempts:[{...run.stages[0].attempts[0],error:blockedSummary,output:{...run.stages[0].attempts[0].output,outcome:'blocked',summary:blockedSummary}}]},run.stages[1]]};
       const blocked=render(createElement(RunWorkspace,{run:blockedRun,events:[],onSelect:()=>{},onRun:()=>{},onBack:()=>{},onChanged:async()=>{}}));

@@ -1,4 +1,9 @@
 export const en = {
+  processing:'Processing…',
+  unsupportedEffort:'{model} does not support {effort}. Choose a supported effort or another model before running work.',
+  invalidProject:'Enter a project name and the full absolute path to its local directory.',
+  projectWorkspaceHint:'Use the full path to an existing project directory. Connecting does not move files or start model work.',
+  roleSaved:'Role saved. Refresh the team to inspect the current settings.',
   sourceSectionHelp: 'Optional exact Markdown heading. Leave blank to index the whole document. This scope is preserved when other source settings change.', noSourcesForRole: 'No sources apply to this role. Choose All roles to manage the project’s sources.',
   sourceNeedsSync: 'The source configuration changed. This retained text is excluded from new work.', staleSourceRemoval: 'This project changed after you opened this confirmation. Close it and inspect the current source before removing it.', sourceRolesHelp: 'No selection makes this source available to all project roles.',
   adoptionIndexing: 'Project configuration is saved. Indexing the selected local sources…', adoptionIndexed: 'Initial knowledge synchronization recorded. Any missing or unreadable sources can be handled in Knowledge.', adoptionIndexingFailed: 'Project configuration is saved, but initial indexing could not finish. Open the project and synchronize its sources in Knowledge.',
