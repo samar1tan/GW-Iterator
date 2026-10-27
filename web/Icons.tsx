@@ -1,7 +1,7 @@
 import type {CSSProperties} from 'react';
 import type {WorkStatus} from '../src/contracts';
 
-export type IconName = 'arrow-left' | 'arrow-right' | 'arrow-up-right' | 'check' | 'check-circle' | 'chevron-down' | 'chevron-right' | 'circle' | 'clock' | 'close' | 'code' | 'copy' | 'file' | 'folder' | 'graph' | 'info' | 'layers' | 'list' | 'pause' | 'play' | 'plus' | 'project' | 'refresh' | 'search' | 'settings' | 'shield' | 'stop' | 'team' | 'terminal' | 'warning' | 'workflow' | 'x-circle';
+export type IconName = 'arrow-left' | 'arrow-right' | 'arrow-up-right' | 'check' | 'check-circle' | 'chevron-down' | 'chevron-right' | 'circle' | 'clock' | 'close' | 'code' | 'cpu' | 'copy' | 'file' | 'folder' | 'graph' | 'info' | 'layers' | 'list' | 'pause' | 'play' | 'plus' | 'project' | 'refresh' | 'search' | 'settings' | 'shield' | 'stop' | 'team' | 'undo' | 'terminal' | 'warning' | 'workflow' | 'x-circle';
 const paths: Record<IconName, string[]> = {
   'arrow-left': ['m10 4-6 6 6 6', 'M4 10h13'],
   'arrow-right': ['m10 4 6 6-6 6', 'M3 10h13'],
@@ -14,6 +14,7 @@ const paths: Record<IconName, string[]> = {
   clock: ['M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0', 'M10 6v4l3 2'],
   close: ['m5 5 10 10', 'm15 5-10 10'],
   code: ['m6 6-4 4 4 4', 'm14 6 4 4-4 4', 'm12 3-4 14'],
+  cpu: ['M5 5h10v10H5z', 'M8 8h4v4H8z', 'M7 2v3m6-3v3M7 15v3m6-3v3M2 7h3m-3 6h3m10-6h3m-3 6h3'],
   copy: ['M7 7h10v10H7z', 'M3 13V3h10'],
   file: ['M5 2h6l4 4v12H5z', 'M11 2v5h4', 'M8 11h4', 'M8 14h4'],
   folder: ['M2 5h6l2 2h8v10H2z'],
@@ -31,6 +32,7 @@ const paths: Record<IconName, string[]> = {
   shield: ['m10 2 7 3v5c0 4-7 8-7 8s-7-4-7-8V5z', 'm6 10 3 3 5-6'],
   stop: ['M5 5h10v10H5z'],
   team: ['M13 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0', 'M4 18v-3a6 6 0 0 1 12 0v3', 'M16 3a3 3 0 0 1 0 6', 'M17 12a5 5 0 0 1 2 4'],
+  undo: ['m7 4-4 4 4 4', 'M3 8h9a5 5 0 0 1 0 10h-2'],
   terminal: ['M2 3h16v14H2z', 'm5 7 3 3-3 3', 'M11 13h4'],
   warning: ['m10 2 9 16H1z', 'M10 7v5', 'M10 15v.1'],
   workflow: ['M3 2h5v5H3z', 'M12 13h5v5h-5z', 'M5.5 7v7h6.5', 'M8 4.5h6.5V13'],

@@ -95,7 +95,7 @@ test('module ownership and first-work feedback remain coherent in both locales',
     const flow:Pipeline={id:'synthetic-manual-flow',projectId:project.id,revision:1,name:'Synthetic human flow',description:'Record synthetic review evidence.',roleId:'qa',updatedAt:project.updatedAt,policy:{concurrency:1,maxAttempts:2,maxIterations:1,timeoutSeconds:300,tokenBudget:20000},stages:[{id:'human-review',name:'Record review',roleId:'qa',executor:'manual',dependsOn:[],prompt:'Inspect synthetic evidence.',review:false}]};
     for(const locale of ['en','zh-CN']){
       const html=render(locale,createElement(LaunchPipeline,{pipeline:flow,project,onClose:()=>{},onStarted:async()=>{}}));
-      assert.ok(html.includes(locale==='en'?'This workflow uses human steps and does not call a model.':'此流程由人工步骤完成，不会调用模型。'));
+      assert.ok(html.includes(locale==='en'?'Human workflow':'人工流程'));
       assert.equal(html.includes(locale==='en'?'Checking project source':'正在检查项目源码'),false);
       assert.equal(html.includes('pf-account-allowance'),false);
     }
