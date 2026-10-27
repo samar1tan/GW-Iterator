@@ -174,3 +174,10 @@ Clarification uses a Reply field in the same location and the guarded continuati
 ## Request-entry keys
 
 Use Enter to send and Shift+Enter for a new line in the shared message textarea. Keep Command/Ctrl+Enter as an equivalent send shortcut. A short localized hint beside the input's actions makes this discoverable; the hint and accessible description do not replace the normal action button. Input-method candidate confirmation follows native composition behavior, and a held Enter cannot create repeated requests. Focus on account refresh, disclosure controls or action buttons retains native behavior.
+
+
+## Request heading hierarchy
+
+Use the same short request preview in project/global work lists and goal/execution details. The detail header has a compact 20px, semibold heading, limited to two visible lines; status and project/workflow remain smaller context. The preview selects the first text-bearing line/first sentence, skips empty list/heading markers and is bounded to 64 grapheme clusters, adding an ellipsis for length truncation. It identifies the task without interpreting or rewriting the request.
+
+Full request remains a separate, keyboard-operable disclosure directly below the header, closed on entry. Opening it reveals the exact original multiline input in a normal reading style, with long text wrapping inside the content area. Do not repeat the complete input as a display heading or add another preview card. Header actions remain reachable alongside or below the heading without squeezing its text; the current execution/result follows the collapsed disclosure. Apply the same hierarchy to both UI locales and the global detail shell.
