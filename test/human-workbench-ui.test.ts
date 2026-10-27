@@ -123,7 +123,7 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       const heldRun={...run,status:'waiting',stages:[{...run.stages[0],status:'waiting',allowanceHold:{code:'ACCOUNT_STEP_APPROVAL_REQUIRED'},attempts:[{...run.stages[0].attempts[0],output:undefined,error:'Example account approval is required.'}]},run.stages[1]]};
       const heldWorkbench=render(createElement(Workbench,{detail:{project,pipelines:[pipeline],runs:[heldRun],knowledge:[],proposals:[],events:[],intakes:[]},onGoal:()=>{},onRun:()=>{},onPipeline:()=>{},onLibrary:()=>{},onStartPipeline:async()=>{},onChanged:async()=>{}}));
       const decisionTitle=locale==='en'?'Needs your decision':'等待你的决策';
-      assert.ok(heldWorkbench.includes('<h2>'+decisionTitle+'</h2><span class="count">1</span>'));
+      assert.ok(heldWorkbench.replace(/<svg\b[^]*?<\/svg>/g,'').includes('<h2>'+decisionTitle+'</h2><span class="count">1</span>'));
       assert.ok(heldWorkbench.includes(locale==='en'?'Approve one bounded execution':'批准一次有界执行'));
       assert.ok(heldWorkbench.includes('Example account approval is required.'));
       const blockedSummary='Example input is unavailable.';

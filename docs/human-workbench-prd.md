@@ -89,3 +89,11 @@ A model-free project readiness observation identifies the selected workspace's c
 Remove unreachable superseded frontend pages once the current application import graph and typecheck confirm they are unused. Keep shared recovery components and backward-compatible routes/APIs that are still used. Correct stale normative documentation; historical check counts do not describe current acceptance.
 
 Acceptance: operate project-binding save/conflict, role capability round-trip, source edit/remove/sync and invalidation, adoption initial sync/retry, missing Git baseline and a human-only start in an isolated project. Add focused synthetic fault/concurrency tests without another paid scan. Inspect both locales and normal/narrow layouts, independently review and record untested branches.
+
+## Visual language refinement
+
+The workbench should feel like a finished engineering product through hierarchy, proportion and a maintained visual system. Preserve the five destinations, domain state, permissions and existing operations. This is a visual refinement, not another information-architecture or workflow expansion.
+
+Replace the flat, evenly bordered form treatment with a unified page masthead, clear primary/secondary columns, restrained content surfaces and readable rows. Give outcome entry, live steps/results and project settings distinct task-appropriate compositions using the same tokens. Keep real warnings, action names, keyboard focus, long content and both locales readable. No invented metrics, decorative data, extra configuration, remote fonts or paid model work are needed to prove the visual design.
+
+Acceptance is rendered and operational: compare the actual Workbench, execution and Settings journeys; inspect the remaining project/library/team/knowledge/modal surfaces in English and Simplified Chinese at ordinary desktop and narrow widths. Existing tests/build validate regressions, not artistic quality. Independent visual review must inspect the new screens, with actual findings resolved.
