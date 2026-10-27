@@ -1,4 +1,5 @@
 import type {Artifact, ControlTool, ExecutionRef, ModelInfo, RoleProfile, TaskOutput, Usage, CodexInfo,Project} from '../contracts.ts';
+import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
 
 export type AdapterEvent = {type: string; message: string; ref?: ExecutionRef; usage?: Usage; data?: unknown};
 export type CodexExecutionInput = {
@@ -22,6 +23,7 @@ export type CodexGoalInput = CodexExecutionInput & {objective: string};
 export type CodexGoalResult = {status: 'complete' | 'blocked' | 'budgetLimited' | 'usageLimited' | 'cleared'; summary: string; usage?: Usage; nativeGoal?: CodexNativeGoal};
 export type CodexGoalExecution = {ref: ExecutionRef; completion: Promise<CodexGoalResult>};
 export interface CodexAdapter {
+  readAccountAllowance?():Promise<AccountAllowanceObservation>;
   info(): Promise<CodexInfo>;
   skills(workspace: string): Promise<{name: string; path: string; description: string}[]>;
   start(input: CodexExecutionInput): Promise<CodexExecution>;

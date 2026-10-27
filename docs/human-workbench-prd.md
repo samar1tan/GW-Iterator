@@ -1,5 +1,7 @@
 # Human workbench
 
+Allowance revision: [Account-aware execution allowance](account-allowance-prd.md) defines the current ordinary execution policy. Earlier execution and configuration records remain historical evidence.
+
 Status: authorized iteration; implementation and observed acceptance must be recorded separately. Read with the core [PRD](PRD.md) and [interaction design](human-workbench-ued.md).
 
 ## User outcome
@@ -31,7 +33,7 @@ The preceding reasoning-settings run exposed three defects: a saved pipeline sta
 
 - Offer one context-sensitive recovery action. A known-ended failed stage with sufficient approved allowance can retry directly, using a useful recorded/default note rather than mandatory explanatory prose.
 - Reuse completed independent work and cumulative consumption. Do not restart a whole workflow to repair one stage.
-- If an actual finite ceiling is exhausted, show one concrete recommended continuation proposal. The owner can approve a bounded increment with one action or inspect/edit advanced limits. Do not silently increase an explicit hard ceiling, reset usage or enable unlimited retries.
+- Use Codex account availability and comparable task trends for ordinary admission. Exhaustion offers wait/refresh, not a token refill. Unavailable or caution readings need one explicit bounded owner step. Attempt/time/round ceilings offer a concrete continuation recommendation; retain finite limits and earlier usage.
 - A supervising outcome and its delegated runs expose their relationship. Recovery must identify the limiting scope before accepting work; it must not fail only after another paid turn. Allocations within a preapproved shared envelope are auditable and cannot double-promise the same remaining allowance to parallel workers.
 - Unknown external execution is reconciled before any replacement task. A connection, authorization or capability error is distinct from a model-capacity failure. Unchanged waits cause no model turns.
 - Preserve existing run/configuration snapshots and explicit historical limits. New run-specific approvals must be recorded separately from workflow definitions.

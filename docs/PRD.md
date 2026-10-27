@@ -1,5 +1,7 @@
 # GW-Iterator: integrated iteration pipelines
 
+Current allowance revision: [Account-aware execution allowance](account-allowance-prd.md). Ordinary allowance decisions use Codex account availability and observed task trends; raw token counters are technical diagnostics.
+
 Current interaction revision: [Human workbench](human-workbench-prd.md). It supersedes the earlier default-canvas, exposed-configuration and separate manual-top-up interactions. Historical execution/configuration bases remain intact.
 
 Status: replacement product baseline. Technical integration exists, but product acceptance remains open. This supersedes the first version's form-and-log-centered experience; it is not a completion claim.
@@ -58,9 +60,9 @@ Distinguish worker correction loops, cross-role review/delivery loops and projec
 
 Independent checks must substantiate the requested outcome. A completion message, successful process or passing unit suite cannot replace configured product review or live evidence. Detect repeated actions and unchanged failures; stop or escalate when further work has no supported benefit. Record the useful next human action.
 
-Bound concurrency, attempts, newly processed tokens and active execution time. Human/CI waits do not spend model tokens. Capacity recovery is finite and uses an allowed model pool; permission and task blockers are distinct. Reconcile authoritative work after restart before resuming; never blindly relaunch uncertain external operations.
+Bound concurrency, attempts, rounds and active execution time. Ordinary admission uses current Codex account allowance and comparable task trends; token counts remain diagnostics and explicit expert safeguards. Human/CI waits do not spend model tokens. Capacity recovery is finite and uses an allowed model pool; permission and task blockers are distinct. Reconcile authoritative work after restart before resuming; never blindly relaunch uncertain external operations.
 
-When a finite run limit prevents further work, show the consumed allowance and the limiting scope: a pipeline run and its supervising outcome have separate ceilings. The owner can explicitly extend tokens, attempts or execution time for a stopped pipeline, with a note and revision check. Retain the original definition, prior limits, consumption and attempts; an extension neither starts work nor resets usage. Retry must reject exhausted limits before creating another attempt. Stopped gaps, human review and manual waiting must not become model-execution time when an old run is reopened.
+When an attempt, round or time limit prevents further work, identify the limiting pipeline or supervising outcome and offer a concrete bounded continuation. Account exhaustion blocks paid dispatch; unavailable or caution readings require a deliberate owner step, with shared-account uncertainty visible. Retain original definitions, prior limits, consumption and attempts. Stop invalidates pending continuation; stopped gaps, human review and manual waiting do not become model-execution time. See the account-aware allowance revision for admission and compatibility rules.
 
 Retain verified findings as project/role knowledge. Loop/team/pipeline improvements are reviewable revisions linked to their evidence; self-improvement cannot grant broader permissions or waive checks.
 

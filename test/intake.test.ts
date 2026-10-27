@@ -9,6 +9,8 @@ import type {TestContext} from 'node:test';
 import {Engine} from '../src/engine.ts';
 import {IntakeService, isNativeCapacityFailure} from '../src/intake.ts';
 import {Store} from '../src/store.ts';
+import {AccountAllowanceService} from '../src/account-allowance.ts';
+import type {AccountAllowanceObservation} from '../src/account-allowance-types.ts';
 import {AppError} from '../src/validation.ts';
 import type {Actor, ExecutionRef, Intake, IntakeDecision, Pipeline, Run, TaskOutput, Usage} from '../src/contracts.ts';
 import type {CodexAdapter, CodexExecutionInput, CodexGoalInput, CodexGoalResult} from '../src/adapters/types.ts';
@@ -812,4 +814,35 @@ test('planner transport uncertainty cannot recover into a new run until the exac
   h.engine.store.put('multica-execution', record); assert.equal(current(h, item).canRetry, true);
   await h.intake.retry(item.id, {note: 'The exact previous task is now authoritatively terminal.', model: 'synthetic-primary'}, OWNER);
   assert.equal(h.planner.calls.length, 2); assert.equal(h.planner.calls[1].input.remaining.tokens, 9940); assert.deepEqual(h.engine.run(item.routerRunId), before);
+});
+
+
+function syntheticAccountReading():AccountAllowanceObservation {
+  const now=Date.now();return{id:'synthetic-account-window',accountKey:'a'.repeat(64),status:'available',observedAt:new Date(now).toISOString(),expiresAt:new Date(now+60000).toISOString(),source:'local-codex',exhausted:false,windows:[{bucketId:'codex',slot:'primary',usedPercent:20,remainingPercent:80,windowDurationMins:10080,resetsAt:Math.floor((now+604800000)/604800000)*604800}]};
+}
+
+test('account-aware coordination uses account availability beyond historical token counters without extending them',async t=>{
+  const h=await plannerFixture(t);h.engine.accountAllowances=new AccountAllowanceService(h.engine.store,{readAccountAllowance:async()=>syntheticAccountReading()});
+  const manual=deliveryFlow(h),item=h.intake.create(h.project.id,{request:'Synthetic account-aware delivery.',idempotencyKey:randomUUID(),resourceMode:'account'},OWNER);
+  await pump(h,()=>h.planner.calls.length===1,'account-aware first decision');
+  assert.equal(h.planner.calls[0].input.resourceMode,'account');assert.equal(h.planner.calls[0].input.account?.account.status,'available');
+  h.planner.calls[0].completion.resolve({decision:decision('dispatch',[task(manual)]),usage:{input:650000,output:1,total:650001}});
+  await pump(h,()=>current(h,item).targetRunIds.length===1&&h.engine.run(current(h,item).targetRunIds[0]).status==='waiting','account-aware human delivery');
+  const child=current(h,item).targetRunIds[0];h.engine.completeManual(child,'delivery',OUTPUT,OWNER);
+  await pump(h,()=>h.planner.calls.length===2,'next decision despite historical token counter');
+  assert.equal(current(h,item).policy.maxTotalTokens,600000);assert.equal(current(h,item).limitRevisions,undefined);
+  assert.equal(h.planner.calls[1].input.observations[0].resourceMode,'account');assert.equal(h.planner.calls[1].input.observations[0].limits,undefined);
+  h.planner.calls[1].completion.resolve({decision:decision('complete'),usage:{input:20,output:1,total:21}});
+  await pump(h,()=>current(h,item).status==='completed','account-aware accepted completion');
+});
+
+test('stopping during an account approval cancels a pending legacy-goal migration before another execution',async t=>{
+  const h=await fixture(t),item=create(h);h.codex.goals[0].completion.resolve({status:'budgetLimited',summary:'Synthetic legacy boundary.'});
+  await pump(h,()=>current(h,item).status==='stopped','legacy stop');
+  let pendingRead=false;const gate=deferred<AccountAllowanceObservation>();
+  h.engine.accountAllowances=new AccountAllowanceService(h.engine.store,{readAccountAllowance:async()=>pendingRead?gate.promise:syntheticAccountReading()});
+  const target=await h.intake.accountTarget(h.project.id,item.id),assessment=await h.engine.accountAllowances.assess(target);pendingRead=true;
+  const continuation=h.intake.retry(item.id,{resourceMode:'account',approveAccountStep:true,accountAssessmentKey:assessment.key,recoveryKey:current(h,item).recoveryKey},OWNER);
+  await immediate();h.intake.cancel(item.id,'Synthetic owner cancels pending account check.',OWNER);gate.resolve(syntheticAccountReading());
+  await assert.rejects(continuation,code('RECOVERY_CANCELLED'));assert.equal(h.codex.goals.length,1);assert.equal(current(h,item).status,'stopped');
 });

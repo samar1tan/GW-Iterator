@@ -2,7 +2,7 @@ import type {AuditEvent} from '../../src/contracts';
 
 export type ActivityCategory = 'work' | 'review' | 'system';
 const humanEventTypes = new Set([
-  'run.started','run.completed','run.cancelled','run.stopped','run.paused','run.resumed','run.recovered','run.limits_changed','run.dependency','run.loop',
+  'run.started','run.account_policy','account.step_authorized','run.completed','run.cancelled','run.stopped','run.paused','run.resumed','run.recovered','run.limits_changed','run.dependency','run.loop',
   'stage.started','stage.result','stage.review','stage.failed','stage.retry','stage.limit','stage.timeout','stage.skipped','stage.linked',
   'goal.created','goal.decision','goal.dispatched','goal.clarification','goal.handoff','goal.completed','goal.failed','goal.stopped','goal.interrupted','goal.planner_failed','goal.capacity_failed','goal.policy_approved','goal.policy_extended','goal.stage_retried','goal.recovery_scheduled','goal.recovery_started','goal.recovery_failed','goal.recovery_interrupted','goal.recovery_limit',
   'manual.completed','github.observed','multica.steered','multica.steer_pending','codex.steered',
@@ -28,6 +28,7 @@ export function activityCategory(type: string): ActivityCategory {
   return 'system';
 }
 export function activityTitle(type: string) {
+  if (type === 'account.step_authorized' || type === 'run.account_policy') return 'eventAccountDecision';
   if (type === 'stage.result' || type === 'manual.completed') return 'eventStageResult';
   if (/(?:^|\.)verification\.prepared$/.test(type)) return 'eventVerificationPrepared';
   if (/(?:^|\.)verification\.checked$/.test(type)) return 'eventVerificationChecked';

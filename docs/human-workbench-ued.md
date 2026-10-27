@@ -1,5 +1,7 @@
 # Human workbench interaction and visual design
 
+Allowance revision: [Account allowance interaction](account-allowance-ued.md) defines the current ordinary execution policy. Earlier execution and configuration records remain historical evidence.
+
 Status: implementation baseline for the current iteration. This replaces the earlier default live canvas and configuration-heavy ordinary paths.
 
 ## Visual contract
@@ -35,7 +37,7 @@ Use a GitHub-like timeline with stable event keys, short localized event titles,
 ## Continue, review and stop
 
 - Continue identifies the failed scope and preserves accepted work. Sufficient approved allowance needs no separate top-up form.
-- A true ceiling presents a concise finite recommendation and one explicit approval; advanced policy fields are optional.
+- Attempt/time/round ceilings present a concise finite recommendation. Account exhaustion offers wait/refresh; unavailable or caution readings name the uncertainty before one-step approval. Token diagnostics remain expandable history.
 - An uncertain external task offers Check state with a useful explanation, not an ordinary retry button that duplicates work.
 - Review offers Accept or Request changes with relevant evidence. A requested revision needs a concrete finding, not generic mandatory prose for every normal action.
 - Manual delivery provides a short result/checklist and artifact inputs. Distinguish prepared, reviewed, integrated and published facts.

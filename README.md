@@ -35,6 +35,8 @@ The [setup guide](docs/multica-setup.md) covers prerequisites, native permission
 - **Knowledge** indexes selected documents, artifacts, memory sections and verified lessons with provenance.
 - **Settings** holds project bindings and deliberate configuration changes.
 
+Starts and continuations use Codex account availability and recent comparable task trends, without asking for a token estimate. Shared-account observations are ranges, not exact task charges; absent history stays explicit.
+
 GWI waits for human and CI results without repeatedly invoking the model. Execution and outcome completion remain separate. A prepared change does not establish publication: a delivery step must perform and record the required integration or release.
 
 Agent work starts in isolated checkouts of committed source. Development does not silently import the original working directory's dirty files, ignored state or installed dependencies. Review can use a disposable verification copy of the actual prepared changes, including eligible untracked source. Inspect the recorded input, diff and check results before accepting work; the original working directory is not silently overwritten.

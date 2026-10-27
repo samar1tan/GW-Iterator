@@ -5,6 +5,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Store} from './store.ts';
 import {Engine} from './engine.ts';
+import {AccountAllowanceService} from './account-allowance.ts';
+import type {AllowanceTarget} from './account-allowance-types.ts';
 import {IntakeService} from './intake.ts';
 import {AdoptionService,type AdoptionInput} from './adoption.ts';
 import {createCodexAdapter} from './adapters/codex.ts';
@@ -31,10 +33,12 @@ let runtime:{codexBinary?:string;defaultModel?:string}={};
 try{const parsed:unknown=JSON.parse(await readFile(path.join(dataDirectory,'runtime.json'),'utf8'));demand(isObject(parsed)&&Object.keys(parsed).every(key=>key==='codexBinary'||key==='defaultModel')&&(parsed.codexBinary===undefined||(typeof parsed.codexBinary==='string'&&path.isAbsolute(parsed.codexBinary)&&parsed.codexBinary.length<=4096)),'INVALID_RUNTIME_CONFIG','Check the local runtime executable and default model.');demand(parsed.defaultModel===undefined||(typeof parsed.defaultModel==='string'&&parsed.defaultModel.length>0&&parsed.defaultModel.length<=160),'INVALID_RUNTIME_MODEL','Choose a model ID from the installed Codex catalog.');runtime=parsed;}
 catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
 const engine=new Engine(new Store(dataDirectory),createCodexAdapter({binary:process.env.GWI_CODEX_BIN??runtime.codexBinary,defaultModel:process.env.GWI_CODEX_MODEL??runtime.defaultModel}),createGithubAdapter());
+engine.accountAllowances=new AccountAllowanceService(engine.store,{readAccountAllowance:()=>engine.codex.readAccountAllowance!()});
 const controls=new ControlMcp(`http://127.0.0.1:${port}`);
 const platform=process.env.GWI_MULTICA_CONNECTION?await loadPlatform(engine,dataDirectory,process.env.GWI_MULTICA_CONNECTION,process.env.GWI_CODEX_MODEL??runtime.defaultModel):await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel)??await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica-runtime/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel);
 const execution=platform?new PlatformExecution(platform,controls):undefined;
 if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.planner;}
+engine.accountModelResolver=async(project,role)=>platform?platform.effectiveRoleModel(project,role):role.model??process.env.GWI_CODEX_MODEL??runtime.defaultModel??(await engine.codex.info()).models.find(model=>model.isDefault)?.id??null;
 const intakeService=new IntakeService(engine);
 const adoptionService=new AdoptionService(engine);adoptionService.recover();
 let integrationCache:{at:number;value:Promise<IntegrationInfo>}|null=null;
@@ -53,6 +57,21 @@ function actorFor(request:IncomingMessage):Actor {
 }
 async function body(request:IncomingMessage):Promise<Record<string,unknown>>{let length=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);length+=bytes.length;demand(length<=2*1024*1024,'BODY_TOO_LARGE','Request exceeds two MiB.',413);chunks.push(bytes);}if(!length)return{};let value:unknown;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new AppError('INVALID_JSON','Send a JSON object.');}demand(isObject(value),'INVALID_JSON','Send a JSON object.');return value;}
 function json(response:ServerResponse,value:unknown,statusCode=200){response.writeHead(statusCode,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});response.end(JSON.stringify(value));}
+async function accountTarget(input:Record<string,unknown>,actor:Actor):Promise<AllowanceTarget>{
+  if(typeof input.runId==='string'){
+    const run=engine.run(input.runId);engine.detail(run.projectId,actor);
+    if(typeof input.projectId==='string')demand(input.projectId===run.projectId,'PROJECT_SCOPE','Choose the run project.',403);
+    return engine.resolvedAllowanceTarget(run,typeof input.stageId==='string'?input.stageId:undefined);
+  }
+  const projectId=String(input.projectId??'');engine.detail(projectId,actor);
+  if(typeof input.intakeId==='string')return intakeService.accountTarget(projectId,input.intakeId,typeof input.model==='string'?input.model:undefined);
+  if(typeof input.pipelineId==='string'){
+    const project=engine.project(projectId),pipeline=engine.pipeline(input.pipelineId);demand(pipeline.projectId===projectId,'PROJECT_SCOPE','Choose a pipeline in this project.',403);
+    const stage=pipeline.stages.find(value=>value.id===input.stageId)??pipeline.stages.find(value=>value.executor==='codex')??pipeline.stages[0],role=project.roles.find(value=>value.id===stage.roleId)!;
+    return{projectId,pipelineId:pipeline.id,stageId:stage.id,roleId:role.id,model:role.model??await engine.accountModelResolver!(project,role),effort:role.effort,kind:'stage'};
+  }
+  return intakeService.accountTarget(projectId);
+}
 async function api(request:IncomingMessage,response:ServerResponse,url:URL):Promise<void>{
   const method=request.method??'GET',route=url.pathname;
   demand(allowedHosts.has(request.headers.host??''),'INVALID_HOST','This server accepts its local loopback host only.',403);
@@ -60,6 +79,10 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   if(route==='/mcp/control'){await controls.handle(request,response);return;}
   if(route==='/api/session'&&method==='GET'){response.setHeader('set-cookie',`${sessionCookie}=${token}; Path=/; HttpOnly; SameSite=Strict`);json(response,{authenticated:true});return;}
   const actor=actorFor(request),input=method==='GET'?{}:await body(request);
+  if(route==='/api/account-allowance'&&(method==='GET'||method==='POST')){
+    const context=method==='GET'?Object.fromEntries(url.searchParams):input,target=await accountTarget(context,actor);
+    json(response,await engine.accountAllowances!.assess(target,{refresh:method==='POST'&&input.refresh===true}));return;
+  }
   if(route==='/api/overview'&&method==='GET'){json(response,{projects:engine.overview(actor),integrations:await integrations(),events:engine.store.events({limit:50})});return;}
   if(route==='/api/integrations'&&method==='GET'){json(response,await integrations());return;}
   if(route==='/api/platform'&&method==='GET'){json(response,platform?await platform.connection():{connected:false,available:false,authenticated:false,error:{code:'MULTICA_NOT_CONFIGURED',message:'Connect the local Multica service.'}});return;}
@@ -96,7 +119,7 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     if(resource==='knowledge/lessons'&&method==='POST'){json(response,engine.lesson(id,input as {title:string;content:string;roles?:string[];runId?:string},actor),201);return;}
     if(resource==='revisions'&&method==='GET'){engine.project(id);json(response,{project:engine.store.list<{id:string;projectId:string}>('project-revision').filter(item=>item.projectId===id),pipelines:engine.store.list<{id:string;projectId:string}>('pipeline-revision').filter(item=>item.projectId===id)});return;}
     if(resource==='intakes'&&method==='GET'){json(response,{intakes:intakeService.list(id)});return;}
-    if(resource==='intakes'&&method==='POST'){json(response,intakeService.create(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
+    if(resource==='intakes'&&method==='POST'){json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
   }
   if(route==='/api/pipelines'&&method==='POST'){json(response,engine.createPipeline(input as {projectId:string;roleId:string;name?:string;description?:string;template?:string},actor),201);return;}
   const pipeline=route.match(/^\/api\/pipelines\/([^/]+)(?:\/(proposals))?$/);
@@ -108,13 +131,15 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
       let revision='';try{revision=(await promisify(execFile)('git',['-C',project.workspace,'rev-parse','HEAD'],{timeout:5000})).stdout.trim();}catch{}
       input.baseline=revision?`${project.repository||project.name} @ ${revision}`:`${project.name} · configuration ${project.revision}`;
     }
-    json(response,engine.startRun(input as StartRunInput,actor),201);return;
+    const target=await accountTarget({projectId:project.id,pipelineId:String(input.pipelineId)},actor);
+    const approval=input.approveAccountStep===true?await engine.approveAccountStep(target,typeof input.accountAssessmentKey==='string'?input.accountAssessmentKey:undefined,actor):undefined;
+    json(response,engine.startRun(input as StartRunInput,actor,undefined,undefined,approval),201);return;
   }
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry)$/);
   if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
-  if(run&&run[2]==='recovery'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,engine.recovery(id,url.searchParams.get('stageId')??undefined,actor));return;}
-  if(run&&run[2]==='continue'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,engine.continueRun(id,input as ContinueRunInput,actor));return;}
+  if(run&&run[2]==='recovery'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.recoveryWithAccount(id,url.searchParams.get('stageId')??undefined,actor,url.searchParams.get('resourceMode')==='account'));return;}
+  if(run&&run[2]==='continue'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.continueWithAccount(id,input as ContinueRunInput,actor));return;}
   if(run){const id=decodeURIComponent(run[1]),resource=run[2];engine.detail(engine.run(id).projectId,actor);if(resource==='changes'&&method==='GET'){demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await platform.workspaces.changes(id));return;}if(resource==='artifacts'&&method==='GET'){demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local execution service.',503);json(response,await platform.workspaces.artifact(id,url.searchParams.get('path')??''));return;}if(!resource&&method==='GET'){json(response,{run:engine.run(id),events:engine.store.events({runId:id,limit:300})});return;}if(resource==='cancel'&&method==='POST'){json(response,await engine.cancel(id,String(input.note??''),actor));return;}if(resource==='pause'&&method==='POST'){json(response,engine.pause(id,String(input.note??''),actor));return;}if(resource==='resume'&&method==='POST'){json(response,engine.resume(id,actor));return;}
     if(resource==='limits'&&method==='POST'){demand(isObject(input.limits),'INVALID_RUN_LIMITS','Provide the finite new execution limits.');json(response,engine.changeLimits(id,Number(input.expectedRevision),input.limits,String(input.note??''),actor));return;}
     if(resource==='executions'&&method==='GET'){json(response,{executions:execution?.records(id)??[]});return;}

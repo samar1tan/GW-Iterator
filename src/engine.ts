@@ -8,6 +8,9 @@ import {Store} from './store.ts';
 import {AppError,demand,isObject,text,validateOutput,validatePipeline,validateProject} from './validation.ts';
 import {defaultPipeline,defaultRoles,newId} from './defaults.ts';
 import {searchKnowledge,syncKnowledge} from './knowledge.ts';
+import type {AccountAllowanceService} from './account-allowance.ts';
+import type {AllowanceAssessment,AllowanceExecution,AllowanceFinish,AllowanceTarget} from './account-allowance-types.ts';
+import type {AccountStepApproval} from './contracts.ts';
 
 const now=()=>new Date().toISOString();
 const terminal=(status:WorkStatus)=>['completed','failed','cancelled','interrupted','skipped'].includes(status);
@@ -19,9 +22,12 @@ type Active={controller:AbortController;runId:string;stageId:string;attemptId:st
 
 export class Engine {
   readonly store:Store; readonly codex:CodexAdapter; readonly github:GithubAdapter;
-  agentExecutor?:AgentExecutor; goalPlanner?:GoalPlanner;
+  agentExecutor?:AgentExecutor; goalPlanner?:GoalPlanner; accountAllowances?:AccountAllowanceService; accountModelResolver?:(project:Project,role:Project['roles'][number])=>Promise<string|null>;
   intake?: {route: (runId:string,stageId:string,args:Record<string,unknown>)=>unknown; reconcile:()=>void; allowance?:(runId:string)=>GoalAllowance|undefined; cancelRun?:(runId:string,note:string)=>Promise<void>; close?:()=>Promise<void>};
   private active=new Map<string,Active>(); private ticking=false; private timer:ReturnType<typeof setInterval>|null=null; private closed=false;
+  private accountAdmission:Promise<void>=Promise.resolve();
+  private accountContinuations=new Set<string>();
+  private nativeAccountFinishes=new Map<string,Promise<void>>();
   private pending=new Set<Promise<void>>(); private closing?:Promise<void>;
   private syncing=new Set<string>(); private githubPollAt=new Map<string,number>();
   constructor(store:Store,codex:CodexAdapter,github:GithubAdapter){this.store=store;this.codex=codex;this.github=github;}
@@ -76,20 +82,23 @@ export class Engine {
   }
   search(id:string,query:string,role?:string,kind?:string):KnowledgeEntry[]{return searchKnowledge(this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===id),query,role,kind);}
   lesson(id:string,input:{title:string;content:string;roles?:string[];runId?:string},actor:Actor):KnowledgeEntry{this.scope(actor,id,'knowledge.write');const project=this.project(id);demand(text(input.title,300)&&text(input.content,200000),'INVALID_LESSON','Provide a title and useful lesson.');const roles=input.roles??[];demand(roles.every(role=>project.roles.some(item=>item.id===role)),'INVALID_ROLES','Choose project roles.');if(input.runId)demand(this.run(input.runId).projectId===id,'PROJECT_SCOPE','Source run belongs to another project.');const entry:KnowledgeEntry={id:newId(),projectId:id,sourceId:'run-lessons',kind:'lesson',roles,title:input.title,content:input.content,hash:digest(input.content),revision:1,syncedAt:now(),status:'current',...(input.runId?{originRunId:input.runId}:{})};this.store.transaction(()=>{this.store.put('knowledge',entry);this.audit(actor,id,'knowledge.lesson',input.title,{runId:input.runId,data:{entryId:entry.id}});});return entry;}
-  startRun(input:StartRunInput,actor:Actor,basis?:Run['snapshot'],allocation?:RunPolicy):Run{
+  startRun(input:StartRunInput,actor:Actor,basis?:Run['snapshot'],allocation?:RunPolicy,accountApproval?:AccountStepApproval):Run{
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     this.scope(actor,input.projectId,'run.start');demand(text(input.goal,20000)&&text(input.baseline,2000)&&text(input.idempotencyKey,160),'INVALID_RUN','Provide a goal, baseline and idempotency key.');
     const project=basis?.project??this.project(input.projectId),pipelines=basis?.pipelines??this.store.list<Pipeline>('pipeline').filter(item=>item.projectId===project.id),pipeline=pipelines.find(item=>item.id===input.pipelineId);demand(pipeline&&pipeline.projectId===project.id,'PIPELINE_NOT_FOUND','Choose a pipeline in this project.',404);
     if(input.limits)demand(actor.kind==='human'&&!actor.projectId,'OWNER_REQUIRED','Initial execution-limit changes require the local owner.',403);
     demand(input.limits===undefined||(isObject(input.limits)&&Object.keys(input.limits).length>0&&Object.keys(input.limits).every(key=>['tokenBudget','maxAttempts','timeoutSeconds','maxIterations'].includes(key))),'INVALID_RUN_LIMITS','Provide finite run-specific limits.');
+    demand(input.resourceMode===undefined||['account','tokens'].includes(input.resourceMode),'INVALID_RESOURCE_MODE','Choose account allowance or an explicit technical token safeguard.');
+    demand(!(input.resourceMode==='account'&&input.limits?.tokenBudget!==undefined),'CONFLICTING_ALLOWANCE_POLICY','Use account allowance or an explicit technical token cap, not both.');
+    const resourceMode=(input.parentRunId&&this.run(input.parentRunId).resourceMode==='tokens'?'tokens':input.resourceMode)??(input.limits?.tokenBudget!==undefined?'tokens':input.parentRunId?this.run(input.parentRunId).resourceMode:undefined)??(this.accountAllowances?'account':undefined);
     const approvedPolicy={...pipeline.policy,...input.limits,...allocation};validatePipeline({...pipeline,policy:approvedPolicy},project,pipelines);
     if(allocation)demand(Object.entries(allocation).every(([key,value])=>value<=pipeline.policy[key as keyof RunPolicy]),'INVALID_ALLOCATION','A delegated allocation cannot extend its workflow limits.',403);
     const dependsOnRunIds=[...new Set(input.dependsOnRunIds??[])];demand(dependsOnRunIds.length<=20,'TOO_MANY_DEPENDENCIES','Use at most twenty run dependencies.');for(const id of dependsOnRunIds){const dependency=this.run(id);if(actor.projectId)demand(dependency.projectId===actor.projectId,'PROJECT_SCOPE','Agent dependencies must stay in this project.');}
     let depth=0,parent=input.parentRunId;while(parent){demand(++depth<=8,'CALL_DEPTH','Linked pipeline depth limit reached.');parent=this.run(parent).parentRunId;}
-    const hash=digest({pipelineId:input.pipelineId,goal:input.goal,baseline:input.baseline,mode:input.mode??'once',dependsOnRunIds,knowledgeIds:input.knowledgeIds??[],...(input.limits?{limits:input.limits}:{})});
+    const hash=digest({pipelineId:input.pipelineId,goal:input.goal,baseline:input.baseline,mode:input.mode??'once',dependsOnRunIds,knowledgeIds:input.knowledgeIds??[],...(input.limits?{limits:input.limits}:{}),...(input.resourceMode?{resourceMode:input.resourceMode}:{})});
     const previous=this.store.list<Run>('run').find(run=>run.projectId===project.id&&run.idempotencyKey===input.idempotencyKey);if(previous){demand(previous.inputHash===hash,'IDEMPOTENCY_CONFLICT','This key already identifies different work.',409);return previous;}
     const allKnowledge=basis?.knowledge??this.store.list<KnowledgeEntry>('knowledge').filter(entry=>entry.projectId===project.id&&entry.status==='current');const knowledge=input.knowledgeIds?.length?allKnowledge.filter(entry=>input.knowledgeIds!.includes(entry.id)):allKnowledge;
-    const at=now(),run:Run={id:newId(),projectId:project.id,pipelineId:pipeline.id,goal:input.goal,baseline:input.baseline,trigger:input.trigger??{kind:actor.kind,actor:actor.name},status:'queued',iteration:1,mode:input.mode??'once',createdAt:at,updatedAt:at,dependsOnRunIds,idempotencyKey:input.idempotencyKey,inputHash:hash,approvedPolicy,snapshot:structuredClone({project,pipeline,pipelines,knowledge}),stages:pipeline.stages.map(stage=>({stageId:stage.id,status:'queued',attempts:[]})),...(input.parentRunId?{parentRunId:input.parentRunId,parentStageId:input.parentStageId}:{})};
+    const at=now(),run:Run={id:newId(),projectId:project.id,pipelineId:pipeline.id,goal:input.goal,baseline:input.baseline,trigger:input.trigger??{kind:actor.kind,actor:actor.name},status:'queued',iteration:1,mode:input.mode??'once',createdAt:at,updatedAt:at,dependsOnRunIds,idempotencyKey:input.idempotencyKey,inputHash:hash,approvedPolicy,...(resourceMode?{resourceMode}:{}),...(accountApproval?{accountApprovals:[accountApproval]}:{}),snapshot:structuredClone({project,pipeline,pipelines,knowledge}),stages:pipeline.stages.map(stage=>({stageId:stage.id,status:'queued',attempts:[]})),...(input.parentRunId?{parentRunId:input.parentRunId,parentStageId:input.parentStageId}:{})};
     demand(['once','loop'].includes(run.mode),'INVALID_MODE','Choose once or a bounded loop.');this.store.transaction(()=>{this.store.put('run',run);this.audit(actor,project.id,'run.started',run.goal,{runId:run.id,data:{pipelineRevision:pipeline.revision,projectRevision:project.revision,approvedPolicy,approvalSource:allocation?'goal-allocation':input.limits?'owner':'workflow',knowledge:knowledge.map(entry=>({id:entry.id,revision:entry.revision,hash:entry.hash})),mode:run.mode,baseline:run.baseline}});});void this.tick();return run;
   }
   recover():void{for(const run of this.store.list<Run>('run'))if(!terminal(run.status)){this.saveRun(run.id,value=>{let interrupted=false;for(const stage of value.stages)if(stage.status==='running'){stage.status='interrupted';const attempt=stage.attempts.at(-1);if(attempt){attempt.status='interrupted';attempt.endedAt=now();attempt.error='Supervisor restarted; inspect the external reference before retrying.';}interrupted=true;}if(interrupted){value.status='interrupted';value.stopReason='External execution needs inspection after restart.';value.endedAt=now();}},'run.recovered','Persisted run restored; interrupted execution is never silently replayed.');}}
@@ -104,7 +113,7 @@ export class Engine {
         type Meter={runId:string;cleanupConfirmed:boolean;status:string;usage?:Usage};
         const plannerRecords=run.executionKind==='agent-goal'?this.store.list<Meter>('multica-execution').filter(value=>value.runId===run.id):[];
         const record=this.store.get<Meter>('multica-execution',attempt.id)??(plannerRecords.length===1?plannerRecords[0]:undefined);
-        const usage=record?.usage??attempt.usage,notDispatched=record?.status==='not_dispatched'&&record.cleanupConfirmed;
+        const usage=record?.usage??attempt.usage,notDispatched=record?.status==='not_dispatched'&&record.cleanupConfirmed||attempt.nativeDispatchState==='not_dispatched'&&attempt.nativeCleanupConfirmed===true;
         const used=usage?budgetTokens(usage):0;usedTokens+=used;
         const known=usage!==undefined||notDispatched;if(!known)usageComplete=false;
         const ended=Boolean(attempt.endedAt)&&(!record||record.cleanupConfirmed);
@@ -115,42 +124,144 @@ export class Engine {
     }
     return{policy,usedTokens,reservedTokens,remainingTokens:Math.max(0,policy.tokenBudget-usedTokens-reservedTokens),usageComplete};
   }
-  private remainingTokens(run:Run):number{return this.allowance(run).remainingTokens;}
+  accountMode(runOrId:Run|string):boolean{
+    const run=typeof runOrId==='string'?this.run(runOrId):runOrId;
+    return run.resourceMode==='account'||(!!this.accountAllowances&&run.resourceMode!=='tokens');
+  }
+  allowanceTarget(run:Run,stageId?:string):AllowanceTarget{
+    const stage=run.snapshot.pipeline.stages.find(value=>value.id===(run.executionKind?'supervise':stageId))??run.snapshot.pipeline.stages.find(value=>value.executor==='codex')??run.snapshot.pipeline.stages[0];
+    const role=run.snapshot.project.roles.find(value=>value.id===stage.roleId)!;
+    return{projectId:run.projectId,pipelineId:run.executionKind?'goal-planner':run.pipelineId,stageId:stage.id,roleId:role.id,model:role.model,effort:role.effort,kind:run.executionKind?'planner':'stage'};
+  }
+  async resolvedAllowanceTarget(run:Run,stageId?:string):Promise<AllowanceTarget>{
+    const target=this.allowanceTarget(run,stageId),role=run.snapshot.project.roles.find(value=>value.id===target.roleId)!;
+    if(target.model===null&&this.accountModelResolver)target.model=await this.accountModelResolver(run.snapshot.project,role);
+    return target;
+  }
+  async approveAccountStep(target:AllowanceTarget,key:string|undefined,actor:Actor):Promise<AccountStepApproval>{
+    this.scope(actor,target.projectId);demand(actor.kind==='human'&&!actor.projectId,'OWNER_REQUIRED','Only the local owner can authorize one execution with uncertain account availability.',403);
+    demand(this.accountAllowances,'ACCOUNT_UNAVAILABLE','The account allowance observer is not connected.',503);
+    const account=await this.accountAllowances.assess(target,{refresh:true});
+    demand(key===account.key,'ACCOUNT_ALLOWANCE_CHANGED','The account or task trend changed. Refresh before approving one step.',409);
+    demand(account.status!=='exhausted','ACCOUNT_EXHAUSTED','The Codex account is exhausted. Wait for its reset or refresh the reading.',409);
+    return{stageId:target.stageId,assessmentKey:account.key,accountSnapshotId:account.account.id,at:now(),actor:actor.name};
+  }
+  async beginAccountExecution(runId:string,stageId:string,actualModel?:string|null):Promise<AllowanceExecution|null>{
+    const previous=this.accountAdmission;let release!:()=>void;
+    this.accountAdmission=new Promise<void>(resolve=>{release=resolve;});
+    await previous;
+    try{return await this.beginAccountExecutionLocked(runId,stageId,actualModel);}finally{release();}
+  }
+  private async beginAccountExecutionLocked(runId:string,stageId:string,actualModel?:string|null):Promise<AllowanceExecution|null>{
+    const run=this.store.get<Run>('run',runId);
+    if(!run){demand(!this.accountAllowances,'ACCOUNT_RUN_REQUIRED','Account-observed execution requires a persisted run.',409);return null;}
+    if(!this.accountAllowances&&!this.accountMode(run))return null;
+    demand(this.accountAllowances,'ACCOUNT_UNAVAILABLE','The account allowance observer is not connected.',503);
+    const state=run.stages.find(stage=>stage.stageId===stageId),attemptId=state?.attempts.at(-1)?.id;
+    const check=()=>{const current=this.run(runId),stage=current.stages.find(value=>value.stageId===stageId);demand(!this.closed&&!current.cancelRequested&&!terminal(current.status)&&!current.pausedAt&&stage?.status==='running'&&stage.attempts.at(-1)?.id===attemptId,'ACCOUNT_EXECUTION_CANCELLED','This execution was stopped or changed while checking account allowance.',409);return current;};
+    const target=await this.resolvedAllowanceTarget(run,stageId);if(actualModel!==undefined)target.model=actualModel;const assessment=await this.accountAllowances.assess(target,{refresh:true});
+    const current=check();
+    demand(assessment.status!=='exhausted','ACCOUNT_EXHAUSTED','The Codex account is exhausted. Wait for its actual reset time or refresh the account reading.',409);
+    if(assessment.action==='owner-step'){
+      const permit=current.accountApprovals?.findLast(value=>value.stageId===stageId&&!value.used&&!value.revoked&&value.assessmentKey===assessment.key&&value.accountSnapshotId===assessment.account.id);
+      demand(permit,'ACCOUNT_STEP_APPROVAL_REQUIRED','The account reading or execution trend is uncertain. Approve only one bounded step after reviewing its evidence.',409);
+      this.saveRun(runId,value=>{const saved=value.accountApprovals?.find(item=>item===permit||item.stageId===stageId&&item.at===permit.at&&!item.used);if(saved)saved.used=true;},'account.step_authorized','The owner authorized one bounded execution with the displayed account uncertainty.',stageId);
+    }
+    const observation=await this.accountAllowances.begin({...target,model:actualModel===undefined?target.model:actualModel,runId,attemptId});
+    try{check();demand(observation.before.id===assessment.account.id,'ACCOUNT_ALLOWANCE_CHANGED','The account window changed before dispatch. Refresh this step.',409);}
+    catch(error){await this.accountAllowances.finish(observation.id,{status:'not_dispatched',dispatched:false});throw error;}
+    return observation;
+  }
+  async finishAccountExecution(id:string,finish:AllowanceFinish):Promise<void>{
+    demand(this.accountAllowances,'ACCOUNT_OBSERVATION_UNAVAILABLE','The account observer must reconnect before this execution observation can be settled.',503);
+    await this.accountAllowances.finish(id,finish);
+  }
+  attachNativeAccountExecution(runId:string,stageId:string,attemptId:string,id:string):void{
+    this.attempt(runId,stageId,attemptId,attempt=>{attempt.allowanceExecutionId=id;attempt.nativeDispatchState='unknown';attempt.nativeCleanupConfirmed=false;});
+  }
+  nativeAccountBoundary(runId:string,stageId:string,attemptId:string,event:AdapterEvent):void{
+    if(event.type!=='codex.execution_boundary'||!isObject(event.data))return;
+    const data=event.data,dispatching=data.state==='dispatching'&&data.dispatched===true&&data.cleanupConfirmed===false,notDispatched=data.state==='not_dispatched'&&data.dispatched===false&&data.cleanupConfirmed===true,ended=data.state==='terminal'&&data.dispatched===true&&data.cleanupConfirmed===true;
+    if(!dispatching&&!notDispatched&&!ended)return;
+    const known=this.store.get<Run>('run',runId)?.stages.find(stage=>stage.stageId===stageId)?.attempts.find(attempt=>attempt.id===attemptId);if(!known?.allowanceExecutionId)return;
+    this.attempt(runId,stageId,attemptId,attempt=>{attempt.nativeDispatchState=dispatching?'dispatching':notDispatched?'not_dispatched':'terminal';attempt.nativeDispatched=!notDispatched;attempt.nativeCleanupConfirmed=!dispatching;if(event.ref)attempt.ref={...attempt.ref,...event.ref};if(this.closed&&!dispatching&&!attempt.endedAt){attempt.endedAt=now();attempt.status='interrupted';}});
+    if(!dispatching)this.track(this.settleNativeAccountExecution(runId,stageId,attemptId));
+  }
+  async settleNativeAccountExecution(runId:string,stageId:string,attemptId:string):Promise<void>{
+    const attempt=this.run(runId).stages.find(stage=>stage.stageId===stageId)?.attempts.find(attempt=>attempt.id===attemptId);
+    if(!attempt?.allowanceExecutionId||attempt.allowanceFinishedAt||!attempt.endedAt||attempt.nativeCleanupConfirmed!==true||!['terminal','not_dispatched'].includes(attempt.nativeDispatchState??''))return;
+    const pending=this.nativeAccountFinishes.get(attempt.id);if(pending)return pending;
+    const finish=(async()=>{let finishedAt:string|undefined;
+      try{await this.finishAccountExecution(attempt.allowanceExecutionId!,{status:attempt.nativeDispatchState==='not_dispatched'?'not_dispatched':attempt.status,dispatched:attempt.nativeDispatchState==='terminal',...(attempt.usage?{usage:attempt.usage}:{})});finishedAt=now();}catch{}
+      this.attempt(runId,stageId,attemptId,current=>{if(finishedAt){current.allowanceFinishedAt=finishedAt;delete current.allowanceFinishError;}else current.allowanceFinishError='ACCOUNT_OBSERVATION_PENDING';});
+    })().finally(()=>this.nativeAccountFinishes.delete(attempt.id));this.nativeAccountFinishes.set(attempt.id,finish);await finish;
+  }
+  async recoveryWithAccount(id:string,stageId?:string,actor:Actor=system,forceAccount=false):Promise<RunRecovery>{
+    const run=this.run(id);this.scope(actor,run.projectId);
+    const stage=run.snapshot.pipeline.stages.find(value=>value.id===stageId)??run.snapshot.pipeline.stages.find(value=>run.stages.some(state=>state.stageId===value.id&&(['failed','interrupted'].includes(state.status)||!!state.allowanceHold)));
+    const account=stage?.executor==='codex'&&this.accountAllowances?await this.accountAllowances.assess(await this.resolvedAllowanceTarget(run,stage.id)):undefined;
+    return this.recovery(id,stage?.id??stageId,actor,account,forceAccount);
+  }
+  async continueWithAccount(id:string,input:ContinueRunInput,actor:Actor):Promise<Run>{
+    this.scope(actor,this.run(id).projectId);demand(!this.accountContinuations.has(id),'RECOVERY_IN_PROGRESS','This continuation is already being prepared.',409);
+    this.accountContinuations.add(id);const generation=this.run(id).controlRevision??0;
+    try{return await this.prepareAccountContinuation(id,input,actor,generation);}finally{this.accountContinuations.delete(id);}
+  }
+  private async prepareAccountContinuation(id:string,input:ContinueRunInput,actor:Actor,generation:number):Promise<Run>{
+    const checkGeneration=()=>demand((this.run(id).controlRevision??0)===generation&&!this.run(id).cancelRequested,'RECOVERY_CANCELLED','This continuation was stopped while checking account availability.',409);
+    if(!this.accountAllowances&&!this.accountMode(this.run(id)))return this.continueRun(id,input,actor);
+    const forceAccount=input.resourceMode==='account';if(forceAccount&&this.run(id).resourceMode==='tokens')demand(actor.kind==='human'&&!actor.projectId,'OWNER_REQUIRED','Only the local owner can replace an explicit technical token policy.',403);
+    const recovery=await this.recoveryWithAccount(id,input.stageId,actor,forceAccount);checkGeneration();
+    demand(input.recoveryKey===recovery.recoveryKey,'RECOVERY_CONFLICT','The execution or account allowance changed. Refresh before continuing.',409);
+    demand(['retry','approve'].includes(recovery.action),recovery.code,recovery.reason,409);
+    let approval:AccountStepApproval|undefined;
+    if(recovery.accountAcknowledgementRequired){demand(input.approveAccountStep===true,'ACCOUNT_STEP_APPROVAL_REQUIRED','Approve only the displayed bounded step.',409);approval=await this.approveAccountStep(await this.resolvedAllowanceTarget(this.run(id),input.stageId),input.accountAssessmentKey,actor);}
+    checkGeneration();const current=this.recovery(id,input.stageId,actor,recovery.account,forceAccount);
+    demand(current.recoveryKey===recovery.recoveryKey,'RECOVERY_CONFLICT','The execution changed while checking account allowance.',409);
+    if(recovery.recommendation){demand(input.approveRecommendation===true,'CONTINUATION_APPROVAL_REQUIRED','Approve the displayed bounded attempt or time change.',409);this.changeLimits(id,recovery.limitRevision,recovery.recommendation.limits,input.note??'Owner approved one bounded continuation based on account availability and recorded work.',actor);}
+    this.saveRun(id,value=>{if(forceAccount||value.resourceMode!=='tokens')value.resourceMode='account';if(approval){value.accountApprovals??=[];value.accountApprovals.push(approval);}},'run.account_policy','Continuation uses Codex account allowance and execution trends; historical token diagnostics are retained.',input.stageId,actor);
+    return this.retry(id,input.stageId,input.note??'Continue one bounded step using current account availability and recorded execution evidence.',actor);
+  }
+  private remainingTokens(run:Run):number{return this.accountMode(run)?1000000:this.allowance(run).remainingTokens;}
   private unsettledOwnedExecution(runId:string,seen=new Set<string>()):boolean{
     if(seen.has(runId))return true;seen.add(runId);
+    if(this.run(runId).stages.some(stage=>stage.attempts.some(attempt=>attempt.allowanceExecutionId&&attempt.nativeCleanupConfirmed!==true)))return true;
     if(this.store.list<{runId:string;cleanupConfirmed:boolean}>('multica-execution').some(record=>record.runId===runId&&!record.cleanupConfirmed))return true;
     return this.store.list<Run>('run').filter(run=>run.parentRunId===runId).some(child=>!terminal(child.status)||this.unsettledOwnedExecution(child.id,seen));
   }
-  recovery(id:string,stageId?:string,actor:Actor=system):RunRecovery{
+  recovery(id:string,stageId?:string,actor:Actor=system,account?:AllowanceAssessment,forceAccount=false):RunRecovery{
     const run=this.run(id);this.scope(actor,run.projectId);
     const allowance=this.allowance(run),policy=allowance.policy,goal=this.intake?.allowance?.(id);
-    const state=stageId?run.stages.find(stage=>stage.stageId===stageId):run.stages.find(stage=>['failed','interrupted'].includes(stage.status));
-    const attempt=state?.attempts.at(-1),stageAttempts=state?.attempts.filter(value=>value.iteration===run.iteration).length;
-    const base={runId:id,...(state?{stageId:state.stageId,stageAttempts}:{}),limitRevision:run.limitRevisions?.length??0,allowance,scope:{kind:'run' as const,id},...(goal?{goal}:{})};
+    const state=stageId?run.stages.find(stage=>stage.stageId===stageId):run.stages.find(stage=>(['failed','interrupted'].includes(stage.status)||!!stage.allowanceHold));
+    const attempt=state?.attempts.at(-1),stageAttempts=state?.attempts.filter(value=>value.iteration===run.iteration&&!value.admissionHeld).length;
+    const base={runId:id,...(state?{stageId:state.stageId,stageAttempts}:{}),limitRevision:run.limitRevisions?.length??0,allowance,resourceMode:(forceAccount||this.accountMode(run))?'account' as const:'tokens' as const,...(account?{account}:{}),scope:{kind:'run' as const,id},...(goal?{goal}:{})};
     const finish=(action:RunRecovery['action'],code:string,reason:string,extra:Partial<RunRecovery>={}):RunRecovery=>{
       const value={...base,action,code,reason,...extra};
-      return{...value,recoveryKey:digest({status:run.status,stageStatus:state?.status,attempt:attempt?.id,stages:run.stages.map(stage=>[stage.stageId,stage.status,stage.attempts.length]),...value})};
+      return{...value,recoveryKey:digest({status:run.status,controlRevision:run.controlRevision??0,stageStatus:state?.status,attempt:attempt?.id,stages:run.stages.map(stage=>[stage.stageId,stage.status,stage.attempts.length]),...value,account:account?{key:account.key,status:account.status}:undefined})};
     };
     if(run.executionKind)return finish('blocked','GOAL_RECOVERY_REQUIRED','Continue the supervising outcome instead of replaying one coordinator turn.');
     if(run.status==='completed')return finish('none','RUN_COMPLETED','This pipeline is already complete.');
     if([...this.active.values()].some(item=>item.runId===id)||run.stages.some(stage=>stage.status==='running'))return finish('wait','EXECUTION_ACTIVE','Wait for current work to end.');
     if(this.unsettledOwnedExecution(id))return finish('reconcile','EXTERNAL_RECONCILIATION_REQUIRED','Check the recorded external execution before starting replacement work.');
-    if(!state||!['failed','interrupted'].includes(state.status))return finish('none','NO_FAILED_STAGE','This pipeline has no failed stage ready to continue.');
+    if(!state||(!['failed','interrupted'].includes(state.status)&&!state.allowanceHold))return finish('none','NO_FAILED_STAGE','This pipeline has no failed stage ready to continue.');
     const childId=state.childInputInvalidated?undefined:attempt?.ref?.childRunId;
     if(childId&&this.run(childId).status!=='completed')return finish('blocked','CHILD_RETRY_REQUIRED','Continue the failed subordinate pipeline, then resume this handoff.');
-    if(goal&&goal.remainingTokens<=0)return finish('blocked','GOAL_TOKEN_BUDGET','The supervising outcome needs an explicit token-allowance approval.',{scope:{kind:'goal',id:goal.id}});
+    if(account?.status==='exhausted')return finish('blocked','ACCOUNT_EXHAUSTED','The connected Codex account has no remaining allowance in a returned window. Wait for its reset or refresh the account reading.');
+    if(goal&&goal.resourceMode!=='account'&&goal.remainingTokens<=0)return finish('blocked','GOAL_TOKEN_BUDGET','The supervising outcome needs an explicit token-allowance approval.',{scope:{kind:'goal',id:goal.id}});
     if(goal&&goal.remainingSeconds<=0)return finish('blocked','GOAL_TIME_LIMIT','The supervising outcome needs an explicit execution-time approval.',{scope:{kind:'goal',id:goal.id}});
     const limits:Partial<RunPolicy>={};
-    if(allowance.remainingTokens<=0){
+    if(!(forceAccount||this.accountMode(run))&&allowance.remainingTokens<=0){
       const previousUsage=attempt?.usage?budgetTokens(attempt.usage):attempt?.tokenReservation??policy.tokenBudget;
       const increment=Math.min(200000,Math.max(1000,previousUsage),goal?.remainingTokens??Infinity);
       limits.tokenBudget=Math.min(1000000,Math.max(policy.tokenBudget,allowance.usedTokens+allowance.reservedTokens)+increment);
     }
     if(stageAttempts!>=policy.maxAttempts)limits.maxAttempts=Math.min(5,policy.maxAttempts+1);
     if(attempt?.failureCode==='STAGE_TIMEOUT')limits.timeoutSeconds=Math.min(3600,Math.max(policy.timeoutSeconds+60,policy.timeoutSeconds*2));
-    const needsTokens=allowance.remainingTokens<=0,needsAttempts=stageAttempts!>=policy.maxAttempts,needsTime=attempt?.failureCode==='STAGE_TIMEOUT';
+    const needsTokens=!(forceAccount||this.accountMode(run))&&allowance.remainingTokens<=0,needsAttempts=stageAttempts!>=policy.maxAttempts,needsTime=attempt?.failureCode==='STAGE_TIMEOUT';
     if((needsTokens&&limits.tokenBudget!<=Math.max(policy.tokenBudget,allowance.usedTokens+allowance.reservedTokens))||(needsAttempts&&limits.maxAttempts!<=policy.maxAttempts)||(needsTime&&limits.timeoutSeconds!<=policy.timeoutSeconds))return finish('blocked','RUN_LIMIT_MAXIMUM','This pipeline has reached the maximum finite allowance; inspect its scope before starting more work.');
-    if(Object.keys(limits).length)return finish('approve',needsTokens?'RUN_TOKEN_BUDGET':needsAttempts?'STAGE_ATTEMPT_LIMIT':'STAGE_TIMEOUT','Approve one finite allowance for the failed stage, based on its recorded consumption and triggered limit.',{recommendation:{limits,note:'Owner approved the displayed finite allowance to continue the failed stage while retaining accepted work.',basis:{usedTokens:allowance.usedTokens,reservedTokens:allowance.reservedTokens,...(attempt?.usage?{previousAttemptTokens:budgetTokens(attempt.usage)}:{}),attempts:stageAttempts??0,previousPolicy:policy,purpose:'one-failed-stage'}}});
+    const accountAcknowledgementRequired=account?.action==='owner-step';
+    if(accountAcknowledgementRequired&&!Object.keys(limits).length)return finish('approve',account!.code,'Approve one bounded execution with the displayed account uncertainty.',{accountAcknowledgementRequired:true});
+    if(Object.keys(limits).length)return finish('approve',needsTokens?'RUN_TOKEN_BUDGET':needsAttempts?'STAGE_ATTEMPT_LIMIT':'STAGE_TIMEOUT','Approve one finite allowance for the failed stage, based on its recorded consumption and triggered limit.',{...(accountAcknowledgementRequired?{accountAcknowledgementRequired:true}:{}),recommendation:{limits,note:'Owner approved the displayed finite allowance to continue the failed stage while retaining accepted work.',basis:{usedTokens:allowance.usedTokens,reservedTokens:allowance.reservedTokens,...(attempt?.usage?{previousAttemptTokens:budgetTokens(attempt.usage)}:{}),attempts:stageAttempts??0,previousPolicy:policy,purpose:'one-failed-stage'}}});
     return finish('retry','READY','Continue the failed stage using the remaining approved allowance.');
   }
   continueRun(id:string,input:ContinueRunInput,actor:Actor):Run{
@@ -196,11 +307,11 @@ export class Engine {
     }}finally{this.ticking=false;this.intake?.reconcile();}
   }
   private launch(run:Run,stage:Stage):void{
-    const state=run.stages.find(item=>item.stageId===stage.id)!;const count=state.attempts.filter(attempt=>attempt.iteration===run.iteration).length;
+    const state=run.stages.find(item=>item.stageId===stage.id)!;const count=state.attempts.filter(attempt=>attempt.iteration===run.iteration&&!attempt.admissionHeld).length;
     if(count>=runPolicy(run).maxAttempts){this.saveRun(run.id,value=>{value.stages.find(item=>item.stageId===stage.id)!.status='failed';value.stopReason='Attempt limit reached.';},'stage.limit','Attempt limit reached.',stage.id);return;}
     let tokenReservation:number|undefined;
     if(stage.executor==='codex'){
-      const remaining=Math.min(this.remainingTokens(run),this.intake?.allowance?.(run.id)?.remainingTokens??Infinity);
+      const remaining=Math.min(this.remainingTokens(run),this.accountMode(run)?Infinity:this.intake?.allowance?.(run.id)?.remainingTokens??Infinity);
       const seconds=this.intake?.allowance?.(run.id)?.remainingSeconds;
       if(remaining<=0||(seconds!==undefined&&seconds<=0)){this.saveRun(run.id,value=>{value.stages.find(item=>item.stageId===stage.id)!.status='failed';value.stopReason='The approved execution allowance is exhausted.';},'stage.limit','No additional worker was started outside the approved allowance.',stage.id);return;}
       const ready=run.snapshot.pipeline.stages.filter(candidate=>candidate.executor==='codex'&&run.stages.find(item=>item.stageId===candidate.id)?.status==='queued'&&candidate.dependsOn.every(id=>['completed','skipped'].includes(run.stages.find(item=>item.stageId===id)!.status))).length;
@@ -221,23 +332,26 @@ export class Engine {
   private async execute(run:Run,stage:Stage,attempt:Attempt,active:Active):Promise<void>{
     const timeoutSeconds=Math.min(runPolicy(run).timeoutSeconds,this.intake?.allowance?.(run.id)?.remainingSeconds??Infinity);
     const timeout=setTimeout(()=>{if(!this.closed)this.attempt(run.id,stage.id,attempt.id,item=>{item.error='Stage time limit reached.';item.failureCode='STAGE_TIMEOUT';},'stage.timeout','Stage time limit reached.');active.controller.abort();},timeoutSeconds*1000);timeout.unref();
+    let standaloneObservation:AllowanceExecution|null=null;
     try{
       if(stage.executor==='codex'){
         const remaining=attempt.tokenReservation??this.remainingTokens(this.run(run.id));demand(remaining>0,'TOKEN_LIMIT','Run token budget reached.');const configuredRole=run.snapshot.project.roles.find(item=>item.id===stage.roleId)!;const role={...configuredRole,instructions:configuredRole.instructions+'\n\nYou execute one bounded stage in a supervised workflow. The overall run goal is context; the current stage defines your deliverable. Complete only the assigned artifact and checks. Other stages own their remaining work, such as browser acceptance or publication. Return done when this stage is supported by evidence, with unperformed later work in observations. Return blocked only when this stage itself cannot proceed; do not repeat implementation to satisfy another stage. Current stage: '+stage.name+'\nStage contract:\n'+stage.prompt};
         const executionPurpose=stage.executionPurpose??(stage.roleId==='qa'&&configuredRole.sandbox==='read-only'?'review':undefined);
         const input={workspace:run.snapshot.project.workspace,role,prompt:this.prompt(run,stage),timeoutSeconds,tokenBudget:remaining,...(executionPurpose?{executionPurpose}:{}),signal:active.controller.signal,onEvent:(event:AdapterEvent)=>this.adapterEvent(run.id,stage.id,attempt.id,event),onTool:(tool:ControlTool,args:Record<string,unknown>)=>this.controlTool(run.id,stage.id,tool,args)};
         if(executionPurpose)this.audit(system,run.projectId,'stage.execution_purpose','The worker requested an isolated verification scope.',{runId:run.id,stageId:stage.id,data:{attemptId:attempt.id,executionPurpose,inferred:stage.executionPurpose===undefined}});
+        if(!this.agentExecutor&&(this.accountAllowances||this.accountMode(run))){standaloneObservation=await this.beginAccountExecution(run.id,stage.id);if(standaloneObservation)this.attachNativeAccountExecution(run.id,stage.id,attempt.id,standaloneObservation.id);}
+        if(standaloneObservation&&(active.controller.signal.aborted||this.closed)){this.nativeAccountBoundary(run.id,stage.id,attempt.id,{type:'codex.execution_boundary',message:'Native execution cancelled before calling the adapter.',data:{state:'not_dispatched',dispatched:false,cleanupConfirmed:true}});throw new AppError('EXECUTION_CANCELLED','Execution was cancelled before native startup.',409);}
         const execution=await(this.agentExecutor?this.agentExecutor.start({...input,project:run.snapshot.project,runId:run.id,stageId:stage.id,attemptId:attempt.id}):this.codex.start(input));
-        this.attempt(run.id,stage.id,attempt.id,item=>{item.ref=execution.ref;item.provider=this.agentExecutor?'multica':'codex';},this.agentExecutor?'multica.linked':'codex.linked',this.agentExecutor?'Multica task and agent attached.':'Native Codex thread and turn attached.');const result=await execution.completion;this.finished(run.id,stage.id,attempt.id,result.output,result.usage);
+        this.attempt(run.id,stage.id,attempt.id,item=>{item.ref=execution.ref;item.provider=this.agentExecutor?'multica':'codex';},this.agentExecutor?'multica.linked':'codex.linked',this.agentExecutor?'Multica task and agent attached.':'Native Codex thread and turn attached.');const result=await execution.completion;this.finished(run.id,stage.id,attempt.id,result.output,result.usage);if(standaloneObservation)this.nativeAccountBoundary(run.id,stage.id,attempt.id,{type:'codex.execution_boundary',message:'The native adapter returned its terminal task result.',data:{state:'terminal',dispatched:true,cleanupConfirmed:true}});
       }else{
         const options=stage.options??{},repository=options.repository??run.snapshot.project.repository;demand(text(repository),'REPOSITORY_REQUIRED','Bind a repository for GitHub work.');
         const result=options.mode==='dispatch'?await this.github.dispatch(repository,options.workflow??'',options.ref??'main'):await this.github.observe(repository,options);
         this.attempt(run.id,stage.id,attempt.id,item=>{item.ref={externalId:result.runId?String(result.runId):undefined,url:result.url};},'github.observed',result.summary);
         if(result.status==='completed')this.finished(run.id,stage.id,attempt.id,output(result.summary,result.artifacts));else if(result.status==='failed')this.failed(run.id,stage.id,attempt.id,new Error(result.summary));
       }
-    }catch(error){this.failed(run.id,stage.id,attempt.id,error);}finally{clearTimeout(timeout);this.active.delete(`${run.id}:${stage.id}`);if(!this.closed){this.settle(run.id);void this.tick();}}
+    }catch(error){this.failed(run.id,stage.id,attempt.id,error);}finally{if(standaloneObservation)await this.settleNativeAccountExecution(run.id,stage.id,attempt.id);clearTimeout(timeout);this.active.delete(`${run.id}:${stage.id}`);if(!this.closed){this.settle(run.id);void this.tick();}}
   }
-  private adapterEvent(runId:string,stageId:string,attemptId:string,event:AdapterEvent):void{if(this.closed)return;this.attempt(runId,stageId,attemptId,attempt=>{if(event.ref)attempt.ref={...attempt.ref,...event.ref};if(event.usage)attempt.usage=event.usage;});const run=this.run(runId);this.audit(system,run.projectId,`codex.${event.type}`,event.message.slice(0,8000),{runId,stageId,...(event.data===undefined?{}:{data:event.data})});}
+  private adapterEvent(runId:string,stageId:string,attemptId:string,event:AdapterEvent):void{this.nativeAccountBoundary(runId,stageId,attemptId,event);if(this.closed)return;this.attempt(runId,stageId,attemptId,attempt=>{if(event.ref)attempt.ref={...attempt.ref,...event.ref};if(event.usage)attempt.usage=event.usage;});const run=this.run(runId);this.audit(system,run.projectId,`codex.${event.type}`,event.message.slice(0,8000),{runId,stageId,...(event.data===undefined?{}:{data:event.data})});}
   private finished(runId:string,stageId:string,attemptId:string,result:TaskOutput,usage?:Usage):void{
     if(this.closed)return;
     validateOutput(result);this.saveRun(runId,run=>{const state=run.stages.find(item=>item.stageId===stageId)!,attempt=state.attempts.find(item=>item.id===attemptId)!;attempt.output=result;attempt.usage=usage??attempt.usage;attempt.endedAt=now();if(run.cancelRequested){attempt.status=state.status='cancelled';return;}attempt.status='completed';state.status='completed';const stage=run.snapshot.pipeline.stages.find(item=>item.id===stageId)!;
@@ -247,7 +361,7 @@ export class Engine {
       if(result.outcome==='revise'&&!routed){this.rework(run,stage.reworkTo??stageId,`Revision requested by ${stage.name}: ${result.summary}`);return;}state.status='completed';
     },'stage.result',result.summary,stageId);this.settle(runId);
   }
-  private failed(runId:string,stageId:string,attemptId:string,error:unknown):void{if(this.closed)return;this.saveRun(runId,run=>{const state=run.stages.find(item=>item.stageId===stageId)!,attempt=state.attempts.find(item=>item.id===attemptId)!;attempt.status=state.status=run.cancelRequested?'cancelled':'failed';attempt.error=attempt.error??message(error);if(error instanceof AppError)attempt.failureCode??=error.code;attempt.endedAt=now();},'stage.failed',message(error),stageId);}
+  private failed(runId:string,stageId:string,attemptId:string,error:unknown):void{if(this.closed)return;this.saveRun(runId,run=>{const state=run.stages.find(item=>item.stageId===stageId)!,attempt=state.attempts.find(item=>item.id===attemptId)!;attempt.status=state.status=run.cancelRequested?'cancelled':'failed';attempt.error=attempt.error??message(error);if(error instanceof AppError){attempt.failureCode??=error.code;if(error.code.startsWith('ACCOUNT_')&&!run.cancelRequested){attempt.admissionHeld=true;state.status='waiting';state.allowanceHold={code:error.code};run.status='waiting';run.stopReason=error.message;}}attempt.endedAt=now();},'stage.failed',message(error),stageId);}
   private async pollGithub(run:Run,stage:Stage):Promise<void>{
     const state=run.stages.find(item=>item.stageId===stage.id)!,attempt=state.attempts.at(-1)!;const key=`${run.id}:${stage.id}`;this.githubPollAt.set(key,Date.now()+10000);this.active.set(key,{runId:run.id,stageId:stage.id,attemptId:attempt.id,controller:new AbortController()});
     try{demand(Date.now()-Date.parse(attempt.startedAt)<runPolicy(run).timeoutSeconds*1000,'STAGE_TIMEOUT','GitHub observation time limit reached.');demand(attempt.ref?.externalId,'MISSING_EXTERNAL_ID','Inspect the dispatched workflow identity before retrying.');const result=await this.github.observe(stage.options?.repository??run.snapshot.project.repository,{runId:Number(attempt.ref.externalId)});if(result.status==='completed')this.finished(run.id,stage.id,attempt.id,output(result.summary,result.artifacts));else if(result.status==='failed')this.failed(run.id,stage.id,attempt.id,new Error(result.summary));}
@@ -296,7 +410,7 @@ export class Engine {
     demand(!this.unsettledOwnedExecution(id),'EXTERNAL_RECONCILIATION_REQUIRED','Confirm owned external and subordinate execution termination before changing limits.',409);
     const before=runPolicy(run);demand(Object.keys(limits).length>0&&Object.entries(limits).every(([key,value])=>['tokenBudget','maxAttempts','timeoutSeconds','maxIterations'].includes(key)&&typeof value==='number'&&Number.isInteger(value)&&value>=before[key as keyof typeof before]),'INVALID_RUN_LIMITS','Extend only finite token, attempt, iteration or time limits.');
     const policy={...before,...limits};validatePipeline({...run.snapshot.pipeline,policy},run.snapshot.project,run.snapshot.pipelines);demand(policy.tokenBudget>before.tokenBudget||policy.maxAttempts>before.maxAttempts||policy.timeoutSeconds>before.timeoutSeconds||policy.maxIterations>before.maxIterations,'UNCHANGED_RUN_LIMITS','Increase at least one limit.');
-    return this.saveRun(id,value=>{value.limitRevisions??=[];value.limitRevisions.push({revision:expectedRevision+1,policy,note,actor:actor.name,at:now()});},'run.limits_changed',note,undefined,actor);
+    return this.saveRun(id,value=>{if(limits.tokenBudget!==undefined)value.resourceMode='tokens';value.limitRevisions??=[];value.limitRevisions.push({revision:expectedRevision+1,policy,note,actor:actor.name,at:now()});},'run.limits_changed',note,undefined,actor);
   }
   completeManual(id:string,stageId:string,result:TaskOutput,actor:Actor):Run{validateOutput(result);const run=this.run(id);this.scope(actor,run.projectId);const stage=run.snapshot.pipeline.stages.find(item=>item.id===stageId),state=run.stages.find(item=>item.stageId===stageId);demand(stage?.executor==='manual'&&state?.status==='waiting'&&!terminal(run.status),'INVALID_STAGE_STATE','This manual stage is not ready.',409);if(stage.ownerGate)demand(actor.kind==='human'&&!actor.projectId,'OWNER_REQUIRED','The local owner must accept this delivery.',403);this.audit(actor,run.projectId,'manual.completed',result.summary,{runId:id,stageId});this.finished(id,stageId,state.attempts.at(-1)!.id,result);void this.tick();return this.run(id);}
   review(id:string,stageId:string,decision:'accept'|'revise',note:string,actor:Actor):Run{
@@ -308,17 +422,17 @@ export class Engine {
     demand(!run.executionKind,'NATIVE_GOAL_RETRY','Inspect the recorded goal and submit a new scoped goal; do not replay one turn.',409);
     demand(text(note,20000),'RETRY_NOTE_REQUIRED','Explain what changed before retrying.');
     const state=run.stages.find(item=>item.stageId===stageId);
-    demand(state&&['failed','interrupted'].includes(state.status)&&![...this.active.values()].some(item=>item.runId===id),'INVALID_STAGE_STATE','Inspect active work before retrying.',409);
+    demand(state&&(['failed','interrupted'].includes(state.status)||!!state.allowanceHold)&&![...this.active.values()].some(item=>item.runId===id),'INVALID_STAGE_STATE','Inspect active work before retrying.',409);
     demand(this.remainingTokens(run)>0,'RUN_TOKEN_BUDGET','Approve a finite pipeline continuation allowance before retrying.',409);
-    demand(state.attempts.filter(attempt=>attempt.iteration===run.iteration).length<runPolicy(run).maxAttempts,'STAGE_ATTEMPT_LIMIT','Approve one additional stage attempt before retrying.',409);
+    demand(state.attempts.filter(attempt=>attempt.iteration===run.iteration&&!attempt.admissionHeld).length<runPolicy(run).maxAttempts,'STAGE_ATTEMPT_LIMIT','Approve one additional stage attempt before retrying.',409);
     demand(!this.unsettledOwnedExecution(id),'EXTERNAL_RECONCILIATION_REQUIRED','Confirm owned external and subordinate executions have ended before retrying.',409);
     const goal=this.intake?.allowance?.(id);
-    demand(!goal||goal.remainingTokens>0,'GOAL_TOKEN_BUDGET','The supervising outcome needs an explicit token-allowance approval.',409);
+    demand(!goal||this.accountMode(run)||goal.resourceMode==='account'||goal.remainingTokens>0,'GOAL_TOKEN_BUDGET','The supervising outcome needs an explicit token-allowance approval.',409);
     demand(!goal||goal.remainingSeconds>0,'GOAL_TIME_LIMIT','The supervising outcome needs an explicit execution-time approval.',409);
     const childId=state.childInputInvalidated?undefined:state.attempts.at(-1)?.ref?.childRunId;
     if(childId)demand(this.run(childId).status==='completed','CHILD_RETRY_REQUIRED','Retry failed work inside the existing subordinate pipeline, then resume this handoff.',409);
     const value=this.saveRun(id,current=>{
-      current.stages.find(item=>item.stageId===stageId)!.status='queued';
+      current.stages.find(item=>item.stageId===stageId)!.status='queued';delete current.stages.find(item=>item.stageId===stageId)!.allowanceHold;
       if(childId)current.stages.find(item=>item.stageId===stageId)!.resumeChildRunId=childId;
       current.status='queued';delete current.endedAt;delete current.stopReason;delete current.cancelRequested;
       const attempt=current.stages.find(item=>item.stageId===stageId)!.attempts.at(-1);
@@ -338,13 +452,13 @@ export class Engine {
     }
     demand((ref.provider??attempt?.provider??'codex')==='codex'&&ref.turnId,'INVALID_STAGE_STATE','An active Codex turn is required.',409);await this.codex.steer(ref,textInput);if(!this.closed)this.audit(actor,run.projectId,'codex.steered',textInput,{runId:id,stageId});
   }
-  async cancel(id:string,note:string,actor:Actor):Promise<Run>{const run=this.run(id);this.scope(actor,run.projectId);if(run.executionKind){demand(this.intake?.cancelRun,'NATIVE_GOAL_UNAVAILABLE','Native goal supervision is not connected.',409);await this.intake.cancelRun(id,note||'Cancellation requested.');return this.run(id);}demand(!terminal(run.status),'RUN_FINISHED','This run already ended.',409);this.saveRun(id,current=>{current.cancelRequested=true;current.stopReason=note||'Cancellation requested.';for(const stage of current.stages)if(stage.status!=='running'&&!terminal(stage.status))stage.status='cancelled';},'run.cancelRequested',note||'Cancellation requested.',undefined,actor);for(const active of this.active.values())if(active.runId===id)active.controller.abort();for(const stage of this.run(id).stages)if(stage.status==='running'){const attempt=stage.attempts.at(-1)!;if(attempt.ref?.childRunId){const child=this.run(attempt.ref.childRunId);if(!terminal(child.status))await this.cancel(child.id,note,actor);if(terminal(this.run(child.id).status))this.failed(id,stage.stageId,attempt.id,new Error('Cancelled with parent.'));}else if(!this.active.has(`${id}:${stage.stageId}`))this.failed(id,stage.stageId,attempt.id,new Error('Observation cancelled; external CI was not cancelled.'));}this.settle(id);return this.run(id);}
+  async cancel(id:string,note:string,actor:Actor):Promise<Run>{const run=this.run(id);this.scope(actor,run.projectId);if(run.executionKind){demand(this.intake?.cancelRun,'NATIVE_GOAL_UNAVAILABLE','Native goal supervision is not connected.',409);await this.intake.cancelRun(id,note||'Cancellation requested.');return this.run(id);}if(terminal(run.status)&&this.accountContinuations.has(id))return this.saveRun(id,current=>{current.controlRevision=(current.controlRevision??0)+1;current.cancelRequested=true;current.status='cancelled';current.stopReason=note||'Pending continuation cancelled.';current.accountApprovals?.forEach(value=>{value.revoked=true;});},'run.continuation_cancelled',note||'Pending continuation cancelled.',undefined,actor);demand(!terminal(run.status),'RUN_FINISHED','This run already ended.',409);this.saveRun(id,current=>{current.controlRevision=(current.controlRevision??0)+1;current.cancelRequested=true;current.accountApprovals?.forEach(value=>{value.revoked=true;});current.stopReason=note||'Cancellation requested.';for(const stage of current.stages)if(stage.status!=='running'&&!terminal(stage.status))stage.status='cancelled';},'run.cancelRequested',note||'Cancellation requested.',undefined,actor);for(const active of this.active.values())if(active.runId===id)active.controller.abort();for(const stage of this.run(id).stages)if(stage.status==='running'){const attempt=stage.attempts.at(-1)!;if(attempt.ref?.childRunId){const child=this.run(attempt.ref.childRunId);if(!terminal(child.status))await this.cancel(child.id,note,actor);if(terminal(this.run(child.id).status))this.failed(id,stage.stageId,attempt.id,new Error('Cancelled with parent.'));}else if(!this.active.has(`${id}:${stage.stageId}`))this.failed(id,stage.stageId,attempt.id,new Error('Observation cancelled; external CI was not cancelled.'));}this.settle(id);return this.run(id);}
   private async controlTool(runId:string,stageId:string,tool:ControlTool,args:Record<string,unknown>):Promise<unknown>{
     demand(!this.closed,'ENGINE_CLOSED','The supervisor is stopping.',409);
     const run=this.run(runId),role=run.snapshot.project.roles.find(item=>item.id===run.snapshot.pipeline.stages.find(stage=>stage.id===stageId)!.roleId)!;const actor:Actor={name:`codex:${role.id}`,kind:'agent',projectId:run.projectId,tools:role.tools};this.scope(actor,run.projectId,tool);demand(!args.projectId||args.projectId===run.projectId,'PROJECT_SCOPE','Cross-project tool access is not allowed.',403);
     this.audit(actor,run.projectId,'tool.called',tool,{runId,stageId});
     if(tool==='intake.route'){demand(this.intake,'INTAKE_UNAVAILABLE','Request supervision is not available.');return this.intake.route(runId,stageId,args);}
-    if(tool==='context.read')return{goal:run.goal,baseline:run.baseline,project:{id:run.projectId,name:run.snapshot.project.name},pipeline:run.snapshot.pipeline,knowledge:run.snapshot.knowledge.map(entry=>({id:entry.id,title:entry.title,revision:entry.revision,hash:entry.hash}))};
+    if(tool==='context.read')return{goal:run.goal,baseline:run.baseline,...(this.accountMode(run)?{resourceMode:'account',account:this.accountAllowances?await this.accountAllowances.assess(await this.resolvedAllowanceTarget(run,stageId)):undefined}:{}),project:{id:run.projectId,name:run.snapshot.project.name},pipeline:run.snapshot.pipeline,knowledge:run.snapshot.knowledge.map(entry=>({id:entry.id,title:entry.title,revision:entry.revision,hash:entry.hash}))};
     if(tool==='knowledge.search')return searchKnowledge(run.snapshot.knowledge,String(args.query??''),typeof args.role==='string'?args.role:role.id,typeof args.kind==='string'?args.kind:undefined).slice(0,6).map(entry=>({...entry,content:entry.content.slice(0,2500)}));
     if(tool==='knowledge.write')return this.lesson(run.projectId,{title:String(args.title??''),content:String(args.content??''),roles:Array.isArray(args.roles)?args.roles as string[]:[role.id],runId},actor);
     if(tool==='pipeline.read'){if(args.pipelineId){const item=this.pipeline(String(args.pipelineId));this.scope(actor,item.projectId,tool);return item;}return this.store.list<Pipeline>('pipeline').filter(item=>item.projectId===run.projectId);}
