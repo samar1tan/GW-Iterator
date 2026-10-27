@@ -37,6 +37,20 @@ function intake(id = 'created-intake', projectId = 'example'): Intake {
     policy: {maxRounds: 2, maxParallel: 1, maxTotalTokens: 1000, maxElapsedSeconds: 300}};
 }
 
+test('a continued Intake receipt replaces only its prior generation and survives old observations',()=>{
+  const prior={...intake(),status:'clarification' as const,supervisorRunIds:['synthetic-router'],controlRevision:0};
+  const resumed={...prior,status:'routing' as const,routerRunId:'synthetic-next-router',supervisorRunIds:['synthetic-router','synthetic-next-router'],updatedAt:'2026-01-01T00:01:00Z'};
+  const receipt:CreatedWork={kind:'continued-intake',value:resumed,previous:prior},before={...detail(),intakes:[prior]};
+  const local=withCreatedWork(before,receipt);assert.equal(local.intakes[0].routerRunId,resumed.routerRunId);assert.equal(local.intakes[0].status,'routing');
+  const delayed=observeProjectWork(local,before,[receipt]);assert.equal(delayed.detail.intakes[0].routerRunId,resumed.routerRunId);assert.equal(delayed.pending.length,1);
+  const stopped={...resumed,status:'stopped' as const,controlRevision:1};assert.equal(withCreatedWork({...local,intakes:[stopped]},receipt).intakes[0].status,'stopped');
+  assert.equal(observeProjectWork(local,{...local,intakes:[stopped]},[receipt]).pending.length,0);
+  const third={...resumed,routerRunId:'synthetic-third-router',supervisorRunIds:[...resumed.supervisorRunIds,'synthetic-third-router'],updatedAt:'2026-01-01T00:02:00Z'};
+  const secondReceipt:CreatedWork={kind:'continued-intake',value:third,previous:{...resumed,status:'clarification'}};
+  const two=observeProjectWork({...local,intakes:[third]},before,[receipt,secondReceipt]);assert.equal(two.detail.intakes[0].routerRunId,third.routerRunId);assert.equal(two.pending.length,2);
+  assert.equal(observeProjectWork(two.detail,{...local,intakes:[third]},two.pending).pending.length,0);
+});
+
 test('local receipts add only missing identities in their project without replacing observed work', () => {
   const before = detail();
   const createdRun = run(), createdIntake = intake();

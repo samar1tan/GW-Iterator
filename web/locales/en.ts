@@ -1,4 +1,5 @@
 export const en = {
+  followUpNotReady:'The previous work has not finished. Wait for its result before following up.',invalidParentIntake:'The previous result is unavailable. Refresh and try again.',clarificationReplyRequired:'Reply to the question before continuing.',
   intakeAnswered:'Answered', directAnswer:'Answer', retainedGoalResult:'Generated result',
   retainedGoalResultHelp:'Workflow completion failed. The generated result is retained below; reading it does not require another execution or establish accepted delivery.',
   noActionsDispatched:'No action was dispatched.', noAcceptedGoalResult:'No accepted result is recorded.',

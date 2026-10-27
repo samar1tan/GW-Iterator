@@ -1,6 +1,7 @@
 import {useI18n} from '../i18n';
 
 const en = {
+  followUpHere:'Continue here',followUpPlaceholder:'Ask a related question or describe the next change.',sendFollowUp:'Send',replyHere:'Reply',replyPlaceholder:'Reply to the question above.',sendReply:'Send reply',sendShortcut:'Send · ⌘/Ctrl+Enter',previousRequest:'Previous request',followUpRequests:'Follow-ups',conversationContext:'Conversation context',contextExcerpt:'Excerpt used',contextOmitted:'{count} earlier turns omitted from execution context; open the previous requests to read them.',
   executionTaskReceived:'Task received',currentExecution:'Current execution',executionCoordinator:'Coordination',
   executionSubmitted:'Submitted to the runner',executionPreparing:'Preparing the execution',executionQueued:'Waiting to execute',executionWorking:'Execution in progress',executionCommand:'Running a command',executionTool:'Using a tool',executionFiles:'Updating files',executionResponding:'Preparing a response',executionOutput:'Receiving runner output',executionCommentary:'Progress update',executionReported:'New activity recorded',executionHuman:'Waiting for a person',executionReview:'Ready for review',executionCi:'Waiting for GitHub',executionApproval:'Waiting for allowance approval',executionStopping:'Waiting for stop confirmation',executionProviderWait:'Awaiting runner state',executionPaused:'Further dispatch is paused',executionReceived:'Result received',executionObservationGap:'Execution state needs an update',
   executionSeconds:'{count}s',executionMinutesSeconds:'{minutes}m {seconds}s',executionElapsed:'This attempt · {duration}',executionLastActivity:'Last activity · {duration} ago',executionQuiet:'No new activity for {duration}',
@@ -105,6 +106,7 @@ const en = {
 } as const;
 type Key = keyof typeof en;
 const zh: Record<Key,string> = {
+  followUpHere:'接着说',followUpPlaceholder:'继续提问，或交代下一步要做的工作。',sendFollowUp:'发送',replyHere:'回复',replyPlaceholder:'回复上面的问题。',sendReply:'发送回复',sendShortcut:'发送 · ⌘/Ctrl+Enter',previousRequest:'上一条',followUpRequests:'后续',conversationContext:'对话上下文',contextExcerpt:'使用了节选',contextOmitted:'执行上下文省略了更早的 {count} 条记录，可从上一条查看原文。',
   executionTaskReceived:'任务已接收',currentExecution:'当前执行',executionCoordinator:'协调工作',
   executionSubmitted:'任务已提交',executionPreparing:'正在准备执行',executionQueued:'等待执行',executionWorking:'执行进行中',executionCommand:'正在运行命令',executionTool:'正在调用工具',executionFiles:'正在修改文件',executionResponding:'正在准备回复',executionOutput:'正在接收执行输出',executionCommentary:'执行进展',executionReported:'已记录新的执行活动',executionHuman:'等待人工处理',executionReview:'等待审阅',executionCi:'等待 GitHub 返回结果',executionApproval:'等待额度批准',executionStopping:'等待停止确认',executionProviderWait:'等待执行器状态',executionPaused:'后续派发已暂停',executionReceived:'已收到执行结果',executionObservationGap:'暂时无法确认最新执行状态',
   executionSeconds:'{count} 秒',executionMinutesSeconds:'{minutes} 分 {seconds} 秒',executionElapsed:'本次尝试 · {duration}',executionLastActivity:'最近活动 · {duration}前',executionQuiet:'已有 {duration}没有新活动',
