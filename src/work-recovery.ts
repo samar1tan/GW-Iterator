@@ -89,7 +89,7 @@ export class WorkRecovery {
     if(row){const run=family.find(run=>run.id===row.runId)!;return{runId:row.runId,stageId:run.executionKind?'supervise':row.stageId};}
     const coordinator=family.find(run=>run.executionKind&&!this.context.confirmed(run));
     if(coordinator)return{runId:coordinator.id,stageId:'supervise',native:coordinator.executionKind==='native-goal'};
-    for(const run of family)for(const stage of run.stages){const attempt=stage.attempts.at(-1);if(!attempt||!['failed','interrupted','cancelled'].includes(stage.status))continue;
+    for(const run of family.filter(run=>!run.executionKind))for(const stage of run.stages){const attempt=stage.attempts.at(-1);if(!attempt||!['failed','interrupted','cancelled'].includes(stage.status))continue;
       if(attempt.provider==='multica'&&!records.some(row=>row.runId===run.id&&row.stageId===stage.stageId))return{runId:run.id,stageId:stage.stageId};
       if(attempt.ref?.threadId&&attempt.nativeCleanupConfirmed!==true)return{runId:run.id,stageId:stage.stageId,native:true};
     }
