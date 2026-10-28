@@ -1,5 +1,6 @@
 import type {Intake,ProjectOverview,Run,WorkspaceSummary,WorkspaceWork} from './contracts.ts';
 import {currentWorkStatuses,activeRecoveryPhases} from './contracts.ts';
+import {currentGoalRecovery,runAcceptsInput} from './contracts.ts';
 
 /** Project membership is supplied by the caller's authorized project list. Never expose snapshots here. */
 export function workspaceSummary(projects:ProjectOverview[],allRuns:Run[],allIntakes:Intake[],sequence:number):WorkspaceSummary {
@@ -9,7 +10,7 @@ export function workspaceSummary(projects:ProjectOverview[],allRuns:Run[],allInt
   const root=(run:Run):{workKind:'goal'|'run';workId:string}=>{let current=run;const seen=new Set<string>();while(!seen.has(current.id)){seen.add(current.id);const goal=owned.get(runKey(current.projectId,current.id));if(goal)return{workKind:'goal',workId:goal};const parent=runs.find(item=>item.projectId===current.projectId&&item.id===current.parentRunId);if(!parent)break;current=parent;}return{workKind:'run',workId:current.id};};
   const decisions:WorkspaceSummary['decisions']=[];
   for(const goal of intakes)if(goal.status==='clarification')decisions.push({id:goal.projectId+':goal:'+goal.id,projectId:goal.projectId,kind:'clarification',title:goal.question??goal.request,request:goal.request,intakeId:goal.id,workKind:'goal',workId:goal.id});
-  for(const run of runs.filter(run=>!run.executionKind))for(const stage of run.stages){
+  for(const run of runs.filter(run=>!run.executionKind&&runAcceptsInput(run,runs,intakes)))for(const stage of run.stages){
     const definition=run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId);
     if(!definition)continue;
     const kind=stage.status==='review'?'review':stage.status==='waiting'?(stage.allowanceHold?'account':definition.executor==='manual'?'manual':undefined):undefined;
@@ -17,7 +18,7 @@ export function workspaceSummary(projects:ProjectOverview[],allRuns:Run[],allInt
   }
   const work:WorkspaceWork[]=intakes.map(goal=>{
     const execution=runs.find(run=>run.id===goal.routerRunId),action=runs.find(run=>goal.targetRunIds.includes(run.id)&&currentWorkStatuses.has(run.status)),current=goal.status==='dispatched'?action:execution;
-    const stage=current?.stages.find(stage=>['running','waiting','review'].includes(stage.status)),recovery=goal.workRecoveryHistory?.at(-1),recovering=activeRecoveryPhases.has(recovery?.phase??'');
+    const stage=current?.stages.find(stage=>['running','waiting','review'].includes(stage.status)),recovery=currentGoalRecovery(goal),recovering=activeRecoveryPhases.has(recovery?.phase??'');
     return{id:goal.id,projectId:goal.projectId,kind:'goal',title:goal.request,status:goal.status,updatedAt:goal.updatedAt,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision,...(recovery?{recoveryPhase:recovery.phase,recoveryId:recovery.id}:{}),...(goal.resultKind?{resultKind:goal.resultKind}:{}),...(stage&&goal.status==='dispatched'?{stageName:current!.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.name}:{}),...(goal.status==='failed'&&!recovering?{attention:true}:{})};
   });
   for(const run of runs.filter(run=>!run.parentRunId&&!run.executionKind&&!owned.has(runKey(run.projectId,run.id)))){

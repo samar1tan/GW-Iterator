@@ -8,6 +8,7 @@ import {recommendPipelines} from './recommendations';
 import {requestSummary} from './requestSummary';
 import {RequestComposer} from './RequestComposer';
 import {currentWorkRecovery,workRecoveryMessage,workRecoveryPending} from './workRecovery';
+import {runAcceptsInput} from '../../src/contracts';
 
 export function Workbench({detail,onGoal,onCreated,onRun,onPipeline,onLibrary,onStartPipeline,onChanged,onSettings,onKnowledge}:{detail:ProjectDetail;onGoal:(id:string)=>void;onCreated?:(goal:Intake)=>void;onRun:(id:string,stageId?:string)=>void;onPipeline:(id:string)=>void;onLibrary:()=>void;onStartPipeline:(pipeline:Pipeline)=>Promise<void>;onChanged:()=>Promise<void>;onSettings?:()=>void;onKnowledge?:()=>void}) {
   const {p,t,date}=useCopy();
@@ -15,7 +16,7 @@ export function Workbench({detail,onGoal,onCreated,onRun,onPipeline,onLibrary,on
   const goals=detail.intakes??[], activeGoals=goals.filter(goal=>['routing','dispatched','retry_wait','clarification'].includes(goal.status)||workRecoveryPending(goal));
   const goalRuns=new Set(goals.flatMap(goal=>goal.targetRunIds));
   const runs=detail.runs.filter(run=>!run.parentRunId&&!run.executionKind&&!goalRuns.has(run.id)), current=runs.filter(run=>['queued','running','waiting','review','paused'].includes(run.status));
-  const decisions=detail.runs.filter(run=>!run.executionKind).flatMap(run=>run.stages.filter(stage=>stage.status==='review'||(stage.status==='waiting'&&(!!stage.allowanceHold||run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.executor==='manual'))).map(stage=>({run,stage,definition:run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)!})));
+  const decisions=detail.runs.filter(run=>!run.executionKind&&runAcceptsInput(run,detail.runs,goals)).flatMap(run=>run.stages.filter(stage=>stage.status==='review'||(stage.status==='waiting'&&(!!stage.allowanceHold||run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.executor==='manual'))).map(stage=>({run,stage,definition:run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)!})));
   const recoveryGoals=goals.filter(goal=>currentWorkRecovery(goal)?.phase==='needs_input'),recoveryDecisions=recoveryGoals.filter(goal=>!decisions.some(item=>item.run.id===currentWorkRecovery(goal)?.runId));
   const deliverables=detail.runs.filter(run=>!run.executionKind).flatMap(run=>run.stages.flatMap(stage=>(stage.attempts.at(-1)?.output?.artifacts??[]).map(artifact=>({artifact,run,stage})))).slice(0,8);
   const recommendations=recommendPipelines(detail.pipelines,detail.runs,detail.project.roles);

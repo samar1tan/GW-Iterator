@@ -170,6 +170,8 @@ The projection invokes no model or runtime discovery. Existing project-scoped re
 
 Global summary and detail observations acknowledge their own receipts independently. Before the first successful summary, locally acknowledged work remains available with an explicit unavailable-summary state and no invented empty counts or observation timestamp. Late starts do not navigate after a newer interaction, including an A-to-B-to-A target switch or leaving the global shell.
 
+Stopped/completed goals and cancelled/completed executions project as historical results. Their earlier recovery phases and owned manual/review/account gates do not contribute current decisions, counts or recovery badges. A current recovery must match its goal's router and control revision. Detail histories retain the original records; clients also honor terminal status when reading an older summary payload. A newer terminal observation supersedes an earlier continuation receipt, while a fresh explicit continuation remains protected against an older stopped observation.
+
 
 ### Work recovery
 
