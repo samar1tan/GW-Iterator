@@ -10,7 +10,7 @@ A person can choose a project, describe useful work, follow its progress, review
 
 Balance native Codex flexibility with controlled, fast iteration. GWI makes outcomes, resource and permission boundaries, handoffs and verification explicit; Codex retains room to choose and revise its approach within those boundaries. A fixed checklist must not replace useful judgment or require a new workflow for every ordinary task.
 
-A configuration value is not a usable choice when the person cannot reasonably estimate it. Supply a suitable default and explain its scope. When adjustment is needed, use the actual work, observed consumption and failure to recommend a bounded change and explain its effect. Raw numeric parameters remain inspectable advanced controls, not prerequisites for ordinary work.
+A configuration value is not a usable choice when the person cannot reasonably estimate it. The [stage execution contract](stage-execution-prd.md) removes numeric execution quotas from ordinary and advanced controls. Use actual work, observations and failures to support guidance and decisions while preserving scope, permissions, human gates and real provider availability.
 
 The preceding reasoning-settings run exposed three defects: a saved pipeline started from its generic description; the review role's available capabilities did not match its assigned checks; recovery presented technical allowance fields before a useful next action. Preserve those records as evidence rather than relabeling them as successful first use.
 
@@ -26,7 +26,7 @@ The current refinement addresses coherence and defects in these existing surface
 ## Ordinary work and defaults
 
 1. Choose a project, then describe an outcome or run a saved pipeline. A saved pipeline opens a short outcome dialog; no model work starts before explicit submission. Infer the committed baseline on the server.
-2. Show the workflow and inherited model/effort as a compact summary. Normal starts require only the concrete outcome. Advanced settings disclose the actual finite allowance and capabilities.
+2. Show the workflow and inherited model/effort as a compact summary. Starts require the concrete outcome and disclose actual capabilities without numeric execution quotas.
 3. A focused starter contains implementation, independent review and owner delivery. Use a suitable existing workflow; ordinary tasks do not require creating or editing one. Preserve custom and historical definitions.
 4. Keep Max as the default for newly created roles/agents and preserve current explicit choices. Light, Medium, High, Extra High, Max and Ultra remain English in every locale. Installed model capabilities remain authoritative.
 5. Pipeline, role and provider settings remain editable through advanced project/team views. Hidden settings must remain inspectable; a friendly label cannot misrepresent effective enforcement.
@@ -37,10 +37,10 @@ The current refinement addresses coherence and defects in these existing surface
 
 - Offer one context-sensitive recovery action. A known-ended failed stage with sufficient approved allowance can retry directly, using a useful recorded/default note rather than mandatory explanatory prose.
 - Reuse completed independent work and cumulative consumption. Do not restart a whole workflow to repair one stage.
-- Use Codex account availability and comparable task trends for ordinary admission. Exhaustion offers wait/refresh, not a token refill. Unavailable or caution readings need one explicit bounded owner step. Attempt/time/round ceilings offer a concrete continuation recommendation; retain finite limits and earlier usage.
-- A supervising outcome and its delegated runs expose their relationship. Recovery must identify the limiting scope before accepting work; it must not fail only after another paid turn. Allocations within a preapproved shared envelope are auditable and cannot double-promise the same remaining allowance to parallel workers.
+- Use Codex account availability and comparable task trends for ordinary admission. Exhaustion offers wait/refresh. Unavailable or caution readings need an explicit owner decision. Counts and duration remain diagnostics without execution ceilings or extension recommendations.
+- A supervising outcome and its delegated runs expose their relationship. Recovery identifies the actual blocked scope before accepting work. Account observations are shared across parallel work and cannot promise independent remaining resources to each worker.
 - Unknown external execution is reconciled before any replacement task. A connection, authorization or capability error is distinct from a model-capacity failure. Unchanged waits cause no model turns.
-- Preserve existing run/configuration snapshots and explicit historical limits. New run-specific approvals must be recorded separately from workflow definitions.
+- Preserve existing run/configuration snapshots and historical quota values without enforcing them. Record real account/scope approvals separately from workflow definitions.
 - Account admission, manual input and review waits appear as actionable decisions, including before an attempt exists. A transport refresh error retains the last known execution state and does not authorize replacement work. A pending start/continue shows its real operation and provides the existing authoritative cancellation path where supported; dismissing a dialog is never described as cancellation.
 
 Role imports use the same revision-checked team APIs. Show confirmed progress during the batch; if one role fails, retain only that role and the unattempted remainder as editable retry input. Previously confirmed roles stay saved and are never resent by that retry, including when a later team refresh fails. Keep stable IDs for pending roles, read the current team revision before another attempt, and keep an in-progress submission visible until its result is known.
@@ -68,7 +68,7 @@ Close related entry points together using the [quality loop](quality-loop.md); r
 - Operate launch from a saved workflow; cancelling/empty submission creates no native task. A concrete request reaches the normal execution path.
 - Render changing stage, review, failure, retry and completed states without losing selection or moving the reader's scroll position. Verify both locales and narrow/desktop layouts.
 - Apply the shared [state and motion contract](human-workbench-ued.md#state-feedback-and-motion): only an actually running stage has border motion; focus/selection and waiting/error states remain legible without animation or color alone. Verify the reduced-motion preference.
-- Exercise sufficient-allowance retry, explicit recommended extension, stale approval, shared-scope limits and unknown-execution rejection with focused tests and actual UI where applicable.
+- Exercise retry without quota extensions, stale account approval, preserved scope and unknown-execution rejection with focused tests and actual UI where applicable.
 - Verify the effective verification scope and actual prepared bytes; if unavailable, retain the explicit remaining check and useful owner action.
 - Use Team/Knowledge/Settings as a person and inspect their advanced paths, loading/empty/error states and keyboard controls.
 - Complete the [synthetic-project operational cases](UED.md#operational-acceptance), including first use, returns from every entry, unsaved drafts, invalid deep links, modal focus, restart and scope-preserving recovery. Record visual fixtures separately from real runtime evidence; do not claim that GWI/Multica native references are visible desktop Codex conversations.

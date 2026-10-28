@@ -1,3 +1,4 @@
+import {MULTICA_SOURCE_REVISION,SUPERVISED_EXECUTION_POLICY,MULTICA_EXECUTION_PATCH_SHA256} from '../src/runtime-execution-policy.ts';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -43,7 +44,7 @@ async function fixture(t: TestContext) {
     agents: new Map<string, MulticaAgent>(), projects: new Map<string, MulticaProject>(), issues: new Map<string, MulticaIssue>(), tasks: new Map<string, MulticaTask[]>(),
     requests: [] as {method: string; path: string; body: Record<string, unknown>}[], issuePosts: 0, loseIssueResponse: false, failAgentCreation: false, taskListGate: undefined as Promise<void> | undefined,
     taskResult: (_issue: string): unknown => JSON.stringify(OUTPUT), taskStatus: 'completed', taskMessageError: false, taskListError: false, issuePutError: false, issueRejection: undefined as {code: string; status: number} | undefined,
-    scopeProbes:[] as VerificationProbeInput[],scopeProbeError:undefined as AppError|undefined,
+    runtimeHealth:{} as Record<string,unknown>,scopeProbes:[] as VerificationProbeInput[],scopeProbeError:undefined as AppError|undefined,
   };
   const taskGate = deferred<void>();
   let controls: ControlMcp | undefined;
@@ -54,6 +55,7 @@ async function fixture(t: TestContext) {
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown> : {};
     const method = request.method!, route = url.pathname; state.requests.push({method, path: route, body});
     const json = (value: unknown, status = 200) => {response.writeHead(status, {'content-type': 'application/json'}); response.end(JSON.stringify(value));};
+    if(route==='/health'){json({status:'running',pid:process.pid,profile:'synthetic-profile',daemon_id:'synthetic-daemon',cli_commit:MULTICA_SOURCE_REVISION,gwi_supervised_execution:true,gwi_execution_patch_sha:MULTICA_EXECUTION_PATCH_SHA256,gwi_agent_timeout_disabled:true,gwi_idle_watchdog_disabled:true,gwi_tool_watchdog_disabled:true,active_task_count:8,...state.runtimeHealth});return;}
     if (route !== '/healthz' && route !== '/api/config') assert.equal(request.headers.authorization, 'Bearer ' + PROVIDER_TOKEN);
     if (route === '/healthz') {json({status: 'ok'}); return;}
     if (route === '/api/config') {json({server_version: 'synthetic-test-version'}); return;}
@@ -90,7 +92,7 @@ async function fixture(t: TestContext) {
   const engine = new Engine(new Store(stateDirectory), codex, {async info() {return {available: true, authenticated: true};}, async observe() {return {status: 'completed', summary: 'Synthetic CI.'};}, async dispatch() {return {status: 'completed', summary: 'Synthetic CI.'};}});
   const rootsFile = path.join(directory, 'synthetic-runtime-roots.json'); await writeFile(rootsFile, '{"roots":[]}\n');
   const guardBinary=path.join(directory,'synthetic-native-guard');await writeFile(guardBinary,'#!/bin/sh\nexit 1\n',{mode:0o700});await chmod(guardBinary,0o700);
-  const client = new MulticaClient(connection), platform = new Platform(engine, connection, stateDirectory, 'synthetic-model', {runtimeId: 'synthetic-runtime', daemonId: 'synthetic-daemon', permissionEvidence: 'Synthetic permission fixture.', verified: true, permissions: {readOnly: {name: 'gwi-readonly', verified: true}, workspaceWrite: {name: 'gwi-workspace', verified: true,network:'enabled'}}, authorizedRootsFile: rootsFile,guardBinary,scratchHome:path.join(directory,'synthetic-codex-home')}, client,async input=>{state.scopeProbes.push(input);if(state.scopeProbeError)throw state.scopeProbeError;return{checkedAt:new Date().toISOString(),profile:'gwi-workspace',copyWrite:true,executionWriteDenied:true,projectWriteDenied:true,siblingWriteDenied:true,approvalPolicy:'never',modelTurnStarted:false,readIsolation:false,network:input.network,networkDomainRestriction:false};});
+  const client = new MulticaClient(connection), platform = new Platform(engine, connection, stateDirectory, 'synthetic-model', {runtimeId: 'synthetic-runtime', daemonId: 'synthetic-daemon', permissionEvidence: 'Synthetic permission fixture.', verified: true, executionPolicy:SUPERVISED_EXECUTION_POLICY,executionPatchSha256:MULTICA_EXECUTION_PATCH_SHA256,daemon:{healthUrl:connection.baseUrl+'/health',pid:process.pid,profile:'synthetic-profile',daemonId:'synthetic-daemon',cliCommit:MULTICA_SOURCE_REVISION,startedAt:'2026-01-01T00:00:00.000Z'}, permissions: {readOnly: {name: 'gwi-readonly', verified: true}, workspaceWrite: {name: 'gwi-workspace', verified: true,network:'enabled'}}, authorizedRootsFile: rootsFile,guardBinary,scratchHome:path.join(directory,'synthetic-codex-home')}, client,async input=>{state.scopeProbes.push(input);if(state.scopeProbeError)throw state.scopeProbeError;return{checkedAt:new Date().toISOString(),profile:'gwi-workspace',copyWrite:true,executionWriteDenied:true,projectWriteDenied:true,siblingWriteDenied:true,approvalPolicy:'never',modelTurnStarted:false,readIsolation:false,network:input.network,networkDomainRestriction:false};});
   const execution = new PlatformExecution(platform, controls), project = await engine.createProject({name: 'Synthetic platform project', workspace}, OWNER);
   const input = (extra: Partial<AgentExecutionInput> = {}): AgentExecutionInput => ({project: structuredClone(project), workspace, role: {...project.roles.find(role => role.id === 'development')!, model: 'synthetic-model', tools: ['context.read']}, runId: 'synthetic-run', stageId: 'work', attemptId: 'synthetic-attempt', prompt: 'Perform only the synthetic check.', timeoutSeconds: 5, tokenBudget: 1000, signal: new AbortController().signal, onEvent() {}, onTool: async () => ({projectId: project.id}), ...extra});
   t.after(async () => {taskGate.resolve(); state.taskListGate = undefined; await execution.close(); await engine.close(); controls!.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); await rm(directory, {recursive: true, force: true});});
@@ -187,8 +189,32 @@ test('account-mode planner context uses shared allowance evidence and keeps tech
   const at=new Date().toISOString(),account:AllowanceAssessment={key:'SYNTHETIC_OWNER_APPROVAL_KEY',status:'learning',code:'ACCOUNT_ALLOWANCE_LEARNING',action:'continue',activeExecutions:0,account:{id:'SYNTHETIC_PRIVATE_OBSERVATION_ID',status:'available',source:'local-codex',observedAt:at,expiresAt:new Date(Date.now()+60000).toISOString(),exhausted:false,windows:[{bucketId:'synthetic-codex',slot:'primary',usedPercent:30,remainingPercent:70,windowDurationMins:300,resetsAt:Math.floor(Date.now()/1000)+3600}]},trend:{sampleCount:2,comparableCount:2,direction:'unknown',windows:[],attribution:'shared-account-observation',reasons:['INSUFFICIENT_SAMPLES','SHARED_ACCOUNT_ACTIVITY']}};
   const started=await h.execution.planner.start({project:h.project,pipelines:[],knowledge:[],request:'Inspect synthetic allowance context.',baseline:'Synthetic source.',rounds:[],observations:[],resourceMode:'account',account,remaining:{tokens:1000000,seconds:5,rounds:2},signal:new AbortController().signal,onEvent(){},executionId:'synthetic-planner-account-context'});await started.completion;
   const description=String(h.state.requests.find(request=>request.method==='POST'&&request.path==='/api/issues')!.body.description),brief=JSON.parse(description.split('\n').find(line=>line.startsWith('{"request":'))!) as {resourceMode:string;remaining:{tokens?:number;seconds:number;rounds:number};account:{windows:unknown[];trend:unknown}};
-  assert.equal(brief.resourceMode,'account');assert.deepEqual(brief.remaining,{seconds:5,rounds:2});assert.deepEqual(brief.account.windows,account.account.windows);assert.deepEqual(brief.account.trend,account.trend);assert.match(description,/Do not convert token diagnostics/);
+  assert.equal(brief.resourceMode,'account');assert.equal(Object.hasOwn(brief,'remaining'),false);assert.deepEqual(brief.account.windows,account.account.windows);assert.deepEqual(brief.account.trend,account.trend);assert.match(description,/Do not convert token diagnostics/);
   for(const privateValue of ['SYNTHETIC_OWNER_APPROVAL_KEY','SYNTHETIC_PRIVATE_OBSERVATION_ID'])assert.equal(description.includes(privateValue),false);
+});
+
+test('configured runtime policy alone does not claim an observed native execution limit',async t=>{
+  const h=await fixture(t);assert.equal(h.platform.executionLimits().nativeTaskLimit,'unknown');
+  assert.equal(h.platform.executionLimits().configuredExecutionPolicy,SUPERVISED_EXECUTION_POLICY);
+  h.state.runtimeHealth.gwi_supervised_execution=false;
+  await assert.rejects(h.platform.runtime(undefined,true),code('RUNTIME_EXECUTION_POLICY_REQUIRED'));
+  assert.equal(h.platform.executionLimits().nativeTaskLimit,'unknown');
+});
+
+test('dispatch checks the actual serving execution policy without requiring an idle daemon',async t=>{
+  for(const [field,value] of [['gwi_supervised_execution',false],['gwi_execution_patch_sha','synthetic-old-patch'],['gwi_agent_timeout_disabled',false],['gwi_idle_watchdog_disabled',false],['gwi_tool_watchdog_disabled',false],['pid',1],['profile','another-profile'],['daemon_id','another-daemon'],['cli_commit','another-source']])await t.test(String(field),async sub=>{
+    const h=await fixture(sub);h.state.runtimeHealth[String(field)]=value;
+    await assert.rejects(h.execution.agent.start(h.input()),code('RUNTIME_EXECUTION_POLICY_REQUIRED'));
+    assert.equal(h.state.issuePosts,0);assert.equal(h.state.agents.size,0);
+  });
+  const h=await fixture(t);h.state.runtimeHealth.active_task_count=12;
+  const started=await h.execution.agent.start(h.input());await started.completion;assert.equal(h.state.issuePosts,1);
+});
+
+test('a previously verified runtime with an old execution policy cannot reintroduce hidden quotas', async t => {
+  const h=await fixture(t),old=new Platform(h.engine,h.connection,h.platform.dataDirectory,'synthetic-model',{runtimeId:'synthetic-runtime',daemonId:'synthetic-daemon',verified:true,permissionEvidence:'Synthetic previously verified permissions.',permissions:{readOnly:{name:'gwi-readonly',verified:true},workspaceWrite:{name:'gwi-workspace',verified:true}}},h.client);
+  const executor=new PlatformExecution(old);await assert.rejects(executor.agent.start(h.input()),code('RUNTIME_EXECUTION_POLICY_REQUIRED'));
+  assert.equal(h.state.issuePosts,0);assert.equal(h.state.agents.size,0);
 });
 
 test('permission profile names alone never authorize execution without verified effective protections', async t => {
@@ -222,7 +248,7 @@ test('review uses actual prepared bytes in an independent task-scoped writable c
 test('review capability and failed scope probes stop before agent assignment without broader permission fallback',async t=>{
   for(const variant of ['missing-capability','unsafe-scope'] as const)await t.test(variant,async sub=>{
     const h=await fixture(sub),input=h.input({executionPurpose:'review',role:{...h.project.roles.find(role=>role.id==='qa')!,model:'synthetic-model'}});
-    const execution=variant==='missing-capability'?new PlatformExecution(new Platform(h.engine,h.connection,h.platform.dataDirectory,'synthetic-model',{runtimeId:'synthetic-runtime',daemonId:'synthetic-daemon',verified:true,permissionEvidence:'Synthetic existing setup.',permissions:{readOnly:{name:'gwi-readonly',verified:true},workspaceWrite:{name:'gwi-workspace',verified:true}}},h.client)):h.execution;
+    const execution=variant==='missing-capability'?new PlatformExecution(new Platform(h.engine,h.connection,h.platform.dataDirectory,'synthetic-model',{runtimeId:'synthetic-runtime',daemonId:'synthetic-daemon',verified:true,executionPolicy:SUPERVISED_EXECUTION_POLICY,executionPatchSha256:MULTICA_EXECUTION_PATCH_SHA256,daemon:h.platform.executionIdentity(),permissionEvidence:'Synthetic existing setup.',permissions:{readOnly:{name:'gwi-readonly',verified:true},workspaceWrite:{name:'gwi-workspace',verified:true}}},h.client)):h.execution;
     if(variant==='unsafe-scope')h.state.scopeProbeError=new AppError('VERIFICATION_SCOPE_UNSAFE','Synthetic probe did not deny an original source write.',409);
     await assert.rejects(execution.agent.start(input),code(variant==='missing-capability'?'VERIFICATION_CAPABILITY_UNAVAILABLE':'VERIFICATION_SCOPE_UNSAFE'));
     assert.equal(h.state.issuePosts,0);assert.equal(h.state.agents.size,0);assert.equal(execution.records(input.runId)[0].status,'not_dispatched');assert.equal(execution.records(input.runId)[0].cleanupConfirmed,true);
@@ -500,8 +526,8 @@ test('a completed row without terminal result or verified idle daemon cannot aut
 test('reconciled issue-only planner usage remains in the cumulative allowance for explicit recovery', async t => {
   const h = await fixture(t); h.state.taskListError = true;
   h.state.taskResult = () => JSON.stringify({action: 'stop', rationale: 'The synthetic check should stop here.', expectedGain: 'No further useful work.', tasks: []});
-  const allowances: number[] = [];
-  h.engine.goalPlanner = {start(input) {allowances.push(input.remaining.tokens); return h.execution.planner.start(input);}}; h.engine.agentExecutor = h.execution.agent;
+  const allowances: unknown[] = [];
+  h.engine.goalPlanner = {start(input) {allowances.push(input.remaining); return h.execution.planner.start(input);}}; h.engine.agentExecutor = h.execution.agent;
   const intake = new IntakeService(h.engine), item = intake.create(h.project.id, {request: 'Check the synthetic reconciliation boundary.', idempotencyKey: 'synthetic-reconcile-usage', policy: {maxTotalTokens: 10000, maxElapsedSeconds: 300}}, OWNER);
   const current = () => intake.list(h.project.id).find(value => value.id === item.id)!;
   await eventually(() => current().status === 'failed', 'the unknown initial task observation');
@@ -509,21 +535,23 @@ test('reconciled issue-only planner usage remains in the cumulative allowance fo
   h.state.taskListError = false; await h.execution.reconcile(item.routerRunId, 'decision-1');
   assert.equal(current().canRetry, true); assert.deepEqual(h.engine.run(item.routerRunId).stages[0].attempts[0].usage, {input: 420, output: 20, cachedInput: 300, total: 440});
   await intake.retry(item.id, {model: 'synthetic-model', note: 'The exact earlier task is reconciled; retain its actual consumption.'}, OWNER);
-  assert.deepEqual(allowances, [10000, 9860]); await eventually(() => current().status === 'stopped', 'the explicit recovered decision');
+  assert.deepEqual(allowances, [undefined, undefined]); await eventually(() => current().status === 'stopped', 'the explicit recovered decision');
   assert.equal(h.engine.run(item.routerRunId).stages[0].attempts[0].output, undefined); assert.equal(h.state.issuePosts, 2);
 });
 
-test('an issued MCP capability expires after authoritative task completion and never appears in team responses', async t => {
+test('an issued MCP capability lasts through supervised work and is revoked after authoritative task completion and never appears in team responses', async t => {
   const h = await fixture(t), gate = h.taskGate; h.state.taskListGate = gate.promise;
   const external = {type: 'http', url: 'https://example.invalid/synthetic-tools', headers: {Authorization: 'SYNTHETIC_EXTERNAL_AUTH'}, default_tools_approval_mode: 'prompt'};
   const template: MulticaAgent = {id: 'synthetic-external-template', workspace_id: WORKSPACE, name: 'Synthetic template', runtime_id: 'synthetic-runtime', status: 'active', mcp_config: {mcpServers: {external}}}; h.state.agents.set(template.id, structuredClone(template));
-  const input = h.input(), reported: unknown[] = [], started = await h.execution.agent.start({...input, role: {...input.role, sandbox: 'read-only', multica: {agentId: template.id, runtimeId: template.runtime_id}}, onEvent: event => {if (event.usage) reported.push(event.usage);}});
+  const input = h.input({timeoutSeconds:0.001,tokenBudget:1}), reported: unknown[] = [], started = await h.execution.agent.start({...input, role: {...input.role, sandbox: 'read-only', multica: {agentId: template.id, runtimeId: template.runtime_id}}, onEvent: event => {if (event.usage) reported.push(event.usage);}});
   assert.equal(started.ref.provider, 'multica'); assert.ok(started.ref.issueId); assert.equal(started.ref.externalId, undefined);
   const worker = [...h.state.agents.values()].find(agent => agent.description?.includes('Execution synthetic-attempt'))!;
   const config = worker.mcp_config as {mcpServers: {external: unknown; gwi: {url: string; headers: {Authorization: string}; default_tools_approval_mode: string}}}, authorization = config.mcpServers.gwi.headers.Authorization;
+  assert.equal(Object.hasOwn(worker,'max_concurrent_tasks'),false);
   assert.equal(config.mcpServers.gwi.default_tools_approval_mode, 'approve'); assert.deepEqual(config.mcpServers.external, external); assert.deepEqual(h.state.agents.get(template.id), template);
   assert.match(worker.instructions!, /GWI owns coordination and result delivery/); assert.match(worker.instructions!, /final JSON directly/); assert.match(worker.instructions!, /Do not create Multica comments, reporting files/); assert.ok(worker.custom_args?.includes('default_permissions="gwi-readonly"'));
   const rpc = async () => fetch(config.mcpServers.gwi.url, {method: 'POST', headers: {authorization, 'content-type': 'application/json', accept: 'application/json, text/event-stream'}, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/list', params: {}})});
+  const observedNow=Date.now();t.mock.method(Date,'now',()=>observedNow+24*60*60*1000);
   const live = await rpc(); assert.equal(live.status, 200); const listed = await live.json() as {result: {tools: {name: string}[]}}; assert.deepEqual(listed.result.tools.map(tool => tool.name), ['gwi_context_read']);
   assert.equal(JSON.stringify(await h.platform.team(h.project.id, OWNER)).includes(authorization.slice('Bearer '.length)), false);
   const task = h.state.tasks.get(started.ref.issueId!)![0]; task.status = 'running'; gate.resolve(); await eventually(() => reported.length > 0, 'the first authoritative usage report');
@@ -586,7 +614,7 @@ test('real HTTP planner references advance only after authoritative completion a
 test('new projects include the focused implement, independent QA and manual delivery path', async t => {
   const h = await fixture(t), flow = h.engine.detail(h.project.id, OWNER).pipelines.find(pipeline => pipeline.name === 'Focused change'); assert.ok(flow);
   assert.deepEqual(flow.stages.map(stage => ({id: stage.id, role: stage.roleId, executor: stage.executor, dependsOn: stage.dependsOn})), [{id: 'implement', role: 'development', executor: 'codex', dependsOn: []}, {id: 'verify', role: 'qa', executor: 'codex', dependsOn: ['implement']}, {id: 'delivery', role: 'lead', executor: 'manual', dependsOn: ['verify']}]);assert.equal(flow.stages[1].executionPurpose,'review');
-  assert.equal(flow.stages[1].reworkTo, 'implement'); assert.equal(flow.stages[2].reworkTo, 'implement'); assert.equal(flow.policy.maxIterations, 1);
+  assert.equal(flow.stages[1].reworkTo, 'implement'); assert.equal(flow.stages[2].reworkTo, 'implement'); assert.deepEqual(flow.policy, {});
   h.engine.agentExecutor = h.execution.agent;
   const run = h.engine.startRun({projectId: h.project.id, pipelineId: flow.id, goal: 'Prepare one synthetic change with independent evidence.', baseline: 'Synthetic committed input.', idempotencyKey: 'synthetic-focused-default'}, OWNER);
   await eventually(() => h.engine.run(run.id).stages[2].status === 'waiting', 'the focused manual delivery gate');

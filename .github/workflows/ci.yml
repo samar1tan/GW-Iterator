@@ -32,3 +32,38 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build
       - run: npm test
+
+  multica-compatibility:
+    name: Multica execution compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/checkout@v6
+        with:
+          repository: multica-ai/multica
+          ref: a097f592be73067d56908ca50ece557fa2af1293
+          path: .local/ci-multica/upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .local/ci-multica/upstream/server/go.mod
+          cache-dependency-path: .local/ci-multica/upstream/server/go.sum
+      - name: Verify and apply the reviewed adaptation
+        run: |
+          node --input-type=module <<'NODE'
+          import {resolve} from 'node:path';
+          import {prepareBuildSource} from './scripts/setup-multica.mjs';
+          await prepareBuildSource(resolve('.local/ci-multica/upstream'), resolve('.local/ci-multica'));
+          NODE
+      - name: Check model silence and serving identity
+        working-directory: .local/ci-multica/upstream-gwi/server
+        run: |
+          go test ./pkg/agent -run 'TestGWISupervisedExecutionKeepsSilentModelWork|TestCodexExecuteSemanticInactivityDoesNotAffectNormalTurnCompletion|TestCodexExecuteSemanticInactivityAllowsContinuousMessages' -count=1
+          go test ./internal/daemon -run 'TestHealthHandlerReportsCLICommitAndSameIdentitySnapshot|TestHealthHandlerActiveTaskCountTracksCounter' -count=1

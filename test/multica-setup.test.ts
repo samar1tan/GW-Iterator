@@ -99,15 +99,16 @@ test('check reconciles the serving daemon identity without starting services, cr
     const paths: Record<string, unknown> = {
       '/healthz': {status: 'ok'}, '/api/config': {server_version: 'synthetic-version'}, '/api/me': {id: 'synthetic-owner'},
       '/api/runtimes': [{id: 'synthetic-runtime', daemon_id: daemonId, workspace_id: workspaceId, name: 'Synthetic runtime', status: 'online', provider: 'codex'}],
-      '/health': {status: 'running', pid: changedPid ? process.pid + 1 : process.pid, profile: instance, daemon_id: daemonId, cli_commit: setup.SOURCE.sha, active_task_count: 0},
+      '/health': {status: 'running', pid: changedPid ? process.pid + 1 : process.pid, profile: instance, daemon_id: daemonId, cli_commit: setup.SOURCE.sha, gwi_supervised_execution:true,gwi_agent_timeout_disabled:true,gwi_idle_watchdog_disabled:true,gwi_tool_watchdog_disabled:true,gwi_execution_patch_sha:setup.EXECUTION_PATCH_SHA256,active_task_count: 0},
     };
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(paths[req.url ?? '']));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   await mkdir(resolve(state, 'daemon'));
-  await writeFile(resolve(state, 'manifest.json'), JSON.stringify({instance, daemonId, daemonPid: process.pid, runtimeId: 'synthetic-runtime', daemonStartedAt: '2026-01-01T00:00:00.000Z'}));
+  await writeFile(resolve(state, 'manifest.json'), JSON.stringify({instance, daemonId, daemonPid: process.pid, runtimeId: 'synthetic-runtime', executionPolicy:setup.EXECUTION_POLICY,executionPatchSha256:setup.EXECUTION_PATCH_SHA256,daemonStartedAt: '2026-01-01T00:00:00.000Z'}));
   await writeFile(resolve(state, 'connection.json'), JSON.stringify({baseUrl: 'http://127.0.0.1:' + address.port, workspaceId, token: 'synthetic-private-token'}));
+  await writeFile(resolve(state,'daemon/config.json'),JSON.stringify({agent_timeout:'0s'}));
   await writeFile(resolve(state, 'daemon/daemon.port'), JSON.stringify({port: address.port, pid: process.pid}));
   await writeFile(resolve(state, 'execution-profile.json'), JSON.stringify({verified: true}));
   const options = {probe: async () => {nativeProbes++;}};
@@ -119,6 +120,9 @@ test('check reconciles the serving daemon identity without starting services, cr
   assert.deepEqual(profile.permissions.readOnly.args, ['-c', 'default_permissions="gwi-readonly"']);
   assert.equal(profile.permissions.workspaceWrite.verified, true);
   assert.equal(profile.verified, true);
+  await writeFile(resolve(state,'daemon/config.json'),JSON.stringify({agent_timeout:'15m',max_concurrent_tasks:2}));
+  await assert.rejects(setup.checkSetup(state,options),{step:'runtime-policy-upgrade'});
+  await writeFile(resolve(state,'daemon/config.json'),JSON.stringify({agent_timeout:'0s'}));
   changedPid = true;
   await assert.rejects(setup.checkSetup(state, options), {step: 'daemon-health'});
   assert.equal(nativeProbes, 1);
@@ -139,4 +143,57 @@ test('the native guard denies an unexpected approval request before the daemon c
   assert.equal(child.status, 2);
   assert.equal(child.stdout.includes('requestApproval'), false);
   assert.match(child.stderr, /denied an unexpected native permission change/);
+});
+
+
+test('the reviewed runtime patch is pinned separately from upstream and retains startup controls',async()=>{
+  const patch=await setup.executionPatch();assert.equal(patch.sha256,setup.EXECUTION_PATCH_SHA256);assert.equal(patch.sourceRevision,setup.SOURCE.sha);
+  assert.match(patch.contents,/if !opts.SupervisedExecution/);assert.match(patch.contents,/gwi_supervised_execution/);assert.match(patch.contents,/TestGWISupervisedExecutionKeepsSilentModelWork/);
+  assert.doesNotMatch(patch.contents,/^[+-].*(approvalPolicy|sandbox|HandshakeTimeout|TurnInterruptTimeout)/m);
+});
+
+test('an explicit runtime refresh refuses a live recorded process without stopping it or changing files',async t=>{
+  const state=await mkdtemp(resolve(tmpdir(),'gwi-runtime-refresh-'));t.after(()=>rm(state,{recursive:true,force:true}));
+  const manifest={ready:true,source:setup.SOURCE,daemonPid:process.pid};const contents=JSON.stringify(manifest);
+  await writeFile(resolve(state,'manifest.json'),contents);await writeFile(resolve(state,'connection.json'),'{}');
+  await assert.rejects(setup.refreshRuntime(state),{step:'runtime-refresh'});assert.equal(await readFile(resolve(state,'manifest.json'),'utf8'),contents);
+  assert.deepEqual((await readdir(state)).sort(),['connection.json','manifest.json']);
+});
+
+
+test('a missing previous daemon identity cannot authorize a replacement runtime',async t=>{
+  const state=await mkdtemp(resolve(tmpdir(),'gwi-runtime-identity-'));t.after(()=>rm(state,{recursive:true,force:true}));
+  const contents=JSON.stringify({ready:true,source:setup.SOURCE});await writeFile(resolve(state,'manifest.json'),contents);await writeFile(resolve(state,'connection.json'),'{}');
+  await assert.rejects(setup.refreshRuntime(state),{step:'runtime-refresh'});assert.equal(await readFile(resolve(state,'manifest.json'),'utf8'),contents);
+  assert.deepEqual((await readdir(state)).sort(),['connection.json','manifest.json']);
+});
+
+
+test('runtime refresh checks older agent-history pages and rejects unknown or pending work without mutation',async t=>{
+  for(const variant of ['older-running','cursor-loop','failed-page','unknown-task-state'])await t.test(variant,async sub=>{
+    const state=await mkdtemp(resolve(tmpdir(),'gwi-runtime-page-'));sub.after(()=>rm(state,{recursive:true,force:true}));
+    const exited=spawnSync(process.execPath,['-e','']);assert.equal(exited.status,0);assert.ok(exited.pid>0);
+    const manifest=JSON.stringify({ready:true,source:setup.SOURCE,daemonPid:exited.pid});await writeFile(resolve(state,'manifest.json'),manifest);
+    const requests:{method:string;route:string;before:string|null}[]=[],workspaceId='synthetic-history-workspace',agentId='synthetic-history-agent';
+    const task=(id:string,status:string)=>({id,status,workspace_id:workspaceId,issue_id:'synthetic-history-issue',agent_id:agentId,runtime_id:'synthetic-history-runtime'});
+    const server=createServer((req,res)=>{
+      const url=new URL(req.url!,'http://127.0.0.1');requests.push({method:req.method!,route:url.pathname,before:url.searchParams.get('before')});
+      let body:unknown;
+      if(url.pathname==='/healthz')body={status:'ok'};
+      else if(url.pathname==='/api/config')body={server_version:'synthetic-history'};
+      else if(url.pathname==='/api/me')body={id:'synthetic-history-owner'};
+      else if(url.pathname==='/api/agents')body=[{id:agentId,name:'Synthetic history worker',workspace_id:workspaceId,runtime_id:'synthetic-history-runtime',status:'active'}];
+      else if(url.pathname==='/api/agents/'+agentId+'/tasks'){
+        if(!url.searchParams.has('before')){res.setHeader('X-Agent-Tasks-Next-Cursor','synthetic-next-page');body=Array.from({length:200},(_,index)=>task('synthetic-completed-'+index,'completed'));}
+        else if(variant==='failed-page'){res.statusCode=503;body={error:'Synthetic older history unavailable.'};}
+        else if(variant==='cursor-loop'){res.setHeader('X-Agent-Tasks-Next-Cursor','synthetic-next-page');body=[task('synthetic-older-completed','completed')];}
+        else body=[task('synthetic-older-task',variant==='older-running'?'running':'unknown-provider-state')];
+      }else{res.statusCode=500;body={error:'Unexpected synthetic refresh operation.'};}
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify(body));
+    });await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));sub.after(()=>new Promise<void>(resolve=>server.close(()=>resolve())));
+    const address=server.address();assert.ok(address&&typeof address!=='string');await writeFile(resolve(state,'connection.json'),JSON.stringify({baseUrl:'http://127.0.0.1:'+address.port,workspaceId,token:'SYNTHETIC_HISTORY_TOKEN'}));
+    await assert.rejects(setup.refreshRuntime(state),error=>variant==='older-running'||variant==='unknown-task-state'?!!error&&typeof error==='object'&&'step' in error&&error.step==='pending-work':!!error&&typeof error==='object'&&'code' in error);
+    assert.equal(requests.filter(request=>request.route.endsWith('/tasks')).length,2);assert.ok(requests.every(request=>request.method==='GET'));
+    assert.equal(await readFile(resolve(state,'manifest.json'),'utf8'),manifest);assert.deepEqual((await readdir(state)).sort(),['connection.json','manifest.json']);
+  });
 });

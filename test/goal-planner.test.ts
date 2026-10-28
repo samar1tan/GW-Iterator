@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {validatePlannerDecision} from '../src/goal-planner.ts';
+import {plannerExecutionContext,validatePlannerDecision} from '../src/goal-planner.ts';
+import type {Project} from '../src/contracts.ts';
 import {AppError} from '../src/validation.ts';
 import {TOOL_DEFINITIONS} from '../src/adapters/codex.ts';
 
@@ -42,4 +43,16 @@ test('native tool discovery exposes the same answer and retry decision contract'
   assert.ok(action.enum.includes('answer'));assert.ok(action.enum.includes('retry'));
   assert.deepEqual(properties.response,{type:'string'});
   assert.ok(properties.retry);
+});
+
+test('coordinator can dispatch all independent work without the former two-task quota',()=>{
+  const tasks=Array.from({length:7},(_,index)=>({pipelineId:'flow-'+index,goal:'Check independent artifact '+index}));
+  assert.deepEqual(validatePlannerDecision({action:'dispatch',...base,tasks}).tasks,tasks);
+});
+
+test('coordinator context preserves boundaries without reintroducing legacy remaining quotas',()=>{
+  const project:Project={id:'synthetic-project',revision:1,name:'Synthetic project',description:'Authored test material',workspace:'/synthetic',repository:'',roles:[],knowledgeSources:[],createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'};
+  const context=plannerExecutionContext({project,pipelines:[],resourceMode:'tokens',remaining:{tokens:1,seconds:1,rounds:1}});
+  assert.equal(context.execution,'supervised-without-quotas');
+  assert.equal('remaining' in context,false);assert.equal(context.resourceMode,'account');
 });

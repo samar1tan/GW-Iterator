@@ -2,10 +2,12 @@
 
 GWI connects to the real [Multica](https://github.com/multica-ai/multica) backend and daemon at source revision `a097f592be73067d56908ca50ece557fa2af1293`. The integration uses the pinned App API; it is not only a source assessment or a frontend mock. The [local setup command](../multica-setup.md) builds the separate dependency and verifies native permissions without a model turn.
 
+The [reviewed execution adaptation](../../scripts/patches/README.md) is applied only in a separate build checkout. Its explicit opt-in disables model silence deadlines while GWI removes task time/token/count quotas. The original upstream defaults, licensing, sandbox and approval policy remain distinct. Each dispatch verifies live daemon identity, patch hash and the actual disabled task/idle/tool clocks. Provider resource queuing, transport deadlines, cancellation proof and project scope remain boundaries. Legacy runtime profiles require a verified update rather than an edited capability label.
+
 | Authority | Responsibility |
 | --- | --- |
 | Multica | Projects, agents, skills, MCP connections, queued tasks, native execution, task messages and actual provider results. |
-| GWI | Project knowledge, frozen workflow/role bases, dependencies, bounded decisions, review/rework, cumulative limits and accepted outcomes. |
+| GWI | Project knowledge, frozen workflow/role bases, dependencies, supervised decisions, review/rework, progress verification and accepted outcomes. |
 | GitHub | Repository, pull request, CI and publication facts observed through the connected CLI. |
 | Supervising owner | Consequential scope decisions and acceptance of actual delivery evidence. |
 

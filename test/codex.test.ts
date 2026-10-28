@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {PassThrough, Writable} from 'node:stream';
-import {setImmediate as immediate} from 'node:timers/promises';
+import {setImmediate as immediate, setTimeout as delay} from 'node:timers/promises';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -380,18 +380,17 @@ test('steering uses the active turn precondition and interruption reaches the re
   await assert.rejects(h.adapter.steer(execution.ref, 'Late input'), /not active/);
 });
 
-test('cancellation, time limits and reported token limits interrupt rather than fabricate completion', async t => {
-  for (const mode of ['cancel', 'time', 'tokens'] as const) await t.test(mode, async sub => {
-    const h = harness(sub);
-    const run = input(mode === 'time' ? {timeoutSeconds: 0.02} : mode === 'tokens' ? {tokenBudget: 15} : {});
-    const execution = await h.adapter.start(run.value);
-    const ended = assert.rejects(execution.completion, mode === 'cancel' ? /cancelled/ : mode === 'time' ? /time limit/ : /token budget/);
-    if (mode === 'cancel') run.controller.abort();
-    if (mode === 'tokens') h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 10, outputTokens: 6, totalTokens: 16}}});
-    await ended;
-    assert.equal(h.child.requests.filter(message => message.method === 'turn/interrupt').length, 1);
-    assert.equal(h.child.kills.length, 0);
-  });
+test('legacy task time and token quotas are inert while explicit cancellation still interrupts', async t => {
+  const h = harness(t), run = input({timeoutSeconds: 0.02, tokenBudget: 15});
+  const execution = await h.adapter.start(run.value);
+  h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 10000000, outputTokens: 6000000, totalTokens: 16000000}}});
+  await delay(30);
+  assert.equal(h.child.requests.some(message => message.method === 'turn/interrupt'), false);
+  assert.deepEqual(run.events.findLast(event => event.usage)?.usage, {input: 10000000, output: 6000000, total: 16000000});
+  const ended = assert.rejects(execution.completion, /cancelled/);
+  run.controller.abort(); await ended;
+  assert.equal(h.child.requests.filter(message => message.method === 'turn/interrupt').length, 1);
+  assert.equal(h.child.kills.length, 0);
 });
 
 test('unconfirmed interruption stops the native process and is visible to the supervisor', async t => {
@@ -683,26 +682,23 @@ test('native goal terminal statuses remain distinct from success and unavailable
   });
 });
 
-test('native goal cancellation, elapsed limits and reported token limits clear before interrupting', async t => {
-  for (const mode of ['cancel', 'time', 'tokens', 'interrupt'] as const) await t.test(mode, async sub => {
-    const h = harness(sub);
-    const run = input(mode === 'time' ? {timeoutSeconds: 0.02} : mode === 'tokens' ? {tokenBudget: 15} : {});
-    const execution = await h.adapter.startGoal!({...run.value, objective: 'Stop this synthetic native objective within its boundary.'});
-    await immediate();
-    if (mode === 'cancel') run.controller.abort();
-    if (mode === 'interrupt') await h.adapter.interrupt({threadId: execution.ref.threadId});
-    if (mode === 'tokens') {
-      reportGoal(h.child, execution.ref, 'active', 16);
-      h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 10, outputTokens: 6, totalTokens: 16}}});
-    }
+test('native goals omit numeric budgets and ignore legacy quotas until explicit stop', async t => {
+  for (const mode of ['cancel', 'interrupt'] as const) await t.test(mode, async sub => {
+    const h = harness(sub), run = input({timeoutSeconds: 0.02, tokenBudget: 15});
+    const execution = await h.adapter.startGoal!({...run.value, objective: 'Supervise this synthetic objective without a numeric quota.'});
+    await immediate(); reportGoal(h.child, execution.ref, 'active', 16000000);
+    h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 10000000, outputTokens: 6000000, totalTokens: 16000000}}});
+    await delay(30);
+    assert.equal(h.child.requests.some(message => message.method === 'thread/goal/clear' || message.method === 'turn/interrupt'), false);
+    assert.equal(Object.hasOwn(h.child.requests.find(message => message.method === 'thread/goal/set')!.params!, 'tokenBudget'), false);
+    if (mode === 'cancel') run.controller.abort(); else await h.adapter.interrupt({threadId: execution.ref.threadId});
     const result = await execution.completion;
-    assert.equal(result.status, 'cleared');
-    assert.equal(result.nativeGoal?.status, 'active');
+    assert.equal(result.status, 'cleared'); assert.equal(result.nativeGoal?.status, 'active');
+    assert.deepEqual(result.usage, {input: 10000000, output: 6000000, total: 16000000});
     assert.equal(h.child.nativeGoals.has(execution.ref.threadId!), false);
     const clearIndex = h.child.requests.findIndex(message => message.method === 'thread/goal/clear');
     const interruptIndex = h.child.requests.findIndex(message => message.method === 'turn/interrupt');
     assert.ok(clearIndex >= 0 && interruptIndex > clearIndex);
-    if (mode === 'tokens') assert.deepEqual(result.usage, {input: 10, output: 6, total: 16});
   });
 });
 
@@ -796,7 +792,7 @@ test('project bootstrap is exposed only when selected and forwards the proposal 
   await execution.completion;
 });
 
-test('native goals stop after three distinct failed turns and preserve the latest error', async t => {
+test('native goals hand off unchanged failures rather than counting distinct failed turns', async t => {
   const h = harness(t), run = input();
   const execution = await h.adapter.startGoal!({...run.value, objective: 'A synthetic objective subject to repeated rate limits.'});
   await immediate();
@@ -814,22 +810,27 @@ test('native goals stop after three distinct failed turns and preserve the lates
   assert.equal(h.child.requests.some(message => message.method === 'thread/goal/clear'), false);
   h.child.notify('turn/started', {threadId: first.threadId, turn: {id: 'third-failed-turn', status: 'inProgress'}});
   failedTurn('third-failed-turn', 'Synthetic latest 429 failure synthetic-account@example.invalid sk-synthetic-circuit-token');
+  await immediate();
+  assert.equal(run.events.some(event => event.type === 'codex.goal_circuit_open'), false);
+  h.child.notify('turn/started', {threadId: first.threadId, turn: {id: 'unchanged-failure', status: 'inProgress'}});
+  failedTurn('unchanged-failure', 'Synthetic latest 429 failure synthetic-account@example.invalid sk-synthetic-circuit-token');
   h.child.notify('turn/started', {threadId: first.threadId, turn: {id: 'racing-auto-turn', status: 'inProgress'}});
   const result = await execution.completion;
   assert.equal(result.status, 'cleared');
-  assert.match(result.summary, /3 consecutive failed turns/);
+  assert.match(result.summary, /unchanged failed turn/);
   assert.match(result.summary, /Synthetic latest 429 failure/);
   assert.doesNotMatch(result.summary, /synthetic-account|synthetic-circuit-token/);
   const circuits = run.events.filter(event => event.type === 'codex.goal_circuit_open');
   assert.equal(circuits.length, 1);
-  assert.deepEqual((circuits[0].data as {consecutiveFailedTurns: number}).consecutiveFailedTurns, 3);
+  assert.equal((circuits[0].data as {reason: string}).reason, 'unchanged_failure');
+  assert.equal(Object.hasOwn(circuits[0].data as object, 'limit'), false);
   const clear = h.child.requests.findIndex(message => message.method === 'thread/goal/clear');
   const interrupt = h.child.requests.findIndex(message => message.method === 'turn/interrupt' && message.params?.turnId === 'racing-auto-turn');
   assert.ok(clear >= 0 && interrupt > clear);
   assert.equal(h.child.nativeGoals.has(first.threadId!), false);
 });
 
-test('successful native turns reset the circuit and each owned goal counts failures independently', async t => {
+test('new successful native work resets failure evidence independently for each owned goal', async t => {
   const h = harness(t), first = input(), second = input();
   const a = await h.adapter.startGoal!({...first.value, objective: 'The first synthetic objective.'});
   const b = await h.adapter.startGoal!({...second.value, objective: 'The second synthetic objective.'});
@@ -841,8 +842,9 @@ test('successful native turns reset the circuit and each owned goal counts failu
   end(bTurn, 'failed');
   const success = {...aTurn, turnId: 'successful-reset'};
   h.child.notify('turn/started', {threadId: success.threadId, turn: {id: success.turnId, status: 'inProgress'}});
+  h.child.notify('item/completed',{...success,item:{type:'fileChange',id:'synthetic-prepared-artifact',status:'completed',changes:[{path:'synthetic-artifact.txt',kind:'update',diff:'+ independently prepared synthetic source'}]}});
   end(success, 'completed');
-  for (const index of [1, 2]) {
+  for (const index of [1]) {
     const ref = {...aTurn, turnId: `after-success-${index}`};
     h.child.notify('turn/started', {threadId: ref.threadId, turn: {id: ref.turnId, status: 'inProgress'}});
     end(ref, 'failed');
@@ -858,6 +860,39 @@ test('successful native turns reset the circuit and each owned goal counts failu
   assert.equal(h.child.requests.some(message => message.method === 'thread/goal/clear' && message.params?.threadId === b.ref.threadId), false);
   reportGoal(h.child, b.ref, 'blocked');
   await b.completion;
+});
+
+test('transport IDs, timestamps and empty completed turns cannot hide unchanged native failures',async t=>{
+  const h=harness(t),run=input(),execution=await h.adapter.startGoal!({...run.value,objective:'Supervise a synthetic native capacity failure.'});await immediate();
+  const first=run.events.findLast(event=>event.type==='turn/started')!.ref!;
+  h.child.notify('turn/completed',{threadId:first.threadId,turn:{id:first.turnId,status:'failed',error:{message:'Selected model is at capacity. Please try a different model. request_id=req-one 2026-01-01T00:00:00Z'}}});
+  const empty={...first,turnId:'synthetic-empty-turn'};h.child.notify('turn/started',{threadId:empty.threadId,turn:{id:empty.turnId,status:'inProgress'}});h.child.notify('turn/completed',{threadId:empty.threadId,turn:{id:empty.turnId,status:'completed',items:[]}});
+  const retry={...first,turnId:'synthetic-repeated-cause'};h.child.notify('turn/started',{threadId:retry.threadId,turn:{id:retry.turnId,status:'inProgress'}});h.child.notify('turn/completed',{threadId:retry.threadId,turn:{id:retry.turnId,status:'failed',error:{message:'Selected model is at capacity. Please try a different model. request_id=req-two 2026-01-01T00:01:00Z'}}});
+  assert.equal((await execution.completion).status,'cleared');assert.equal(run.events.filter(event=>event.type==='codex.goal_circuit_open').length,1);
+});
+
+test('a repeated successful native observation cannot reset failure evidence again',async t=>{
+  const h=harness(t),run=input(),execution=await h.adapter.startGoal!({...run.value,objective:'Keep meaningful synthetic progress separate from repeat observations.'});await immediate();
+  const first=run.events.findLast(event=>event.type==='turn/started')!.ref!;
+  const work={type:'commandExecution',status:'completed',command:'synthetic-verifier',exitCode:0,aggregatedOutput:'Checked the same fixture.'};
+  h.child.notify('item/completed',{...first,item:{...work,id:'first-check'}});
+  h.child.notify('turn/completed',{threadId:first.threadId,turn:{id:first.turnId,status:'failed',error:{message:'Synthetic transport failure request_id=req-one 2026-01-01T00:00:00Z'}}});
+  const next={...first,turnId:'repeat-check'};h.child.notify('turn/started',{threadId:next.threadId,turn:{id:next.turnId,status:'inProgress'}});h.child.notify('item/completed',{...next,item:{...work,id:'different-transport-id'}});
+  h.child.notify('turn/completed',{threadId:next.threadId,turn:{id:next.turnId,status:'failed',error:{message:'Synthetic transport failure request_id=req-two 2026-01-01T00:01:00Z'}}});
+  assert.equal((await execution.completion).status,'cleared');assert.equal(run.events.filter(event=>event.type==='codex.goal_circuit_open').length,1);
+});
+
+test('successful date or nonce stdout cannot conceal an unchanged capacity failure',async t=>{
+  for(const command of ['date +%s%N','echo "$RANDOM"'])await t.test(command,async sub=>{
+    const h=harness(sub),run=input(),execution=await h.adapter.startGoal!({...run.value,objective:'Preserve the synthetic unchanged-failure boundary.'});await immediate();
+    const first=run.events.findLast(event=>event.type==='turn/started')!.ref!;
+    h.child.notify('turn/completed',{threadId:first.threadId,turn:{id:first.turnId,status:'failed',error:{message:'Selected model is at capacity. Please try a different model. request_id=req-before'}}});
+    const next={...first,turnId:'synthetic-nonce-observation'};h.child.notify('turn/started',{threadId:next.threadId,turn:{id:next.turnId,status:'inProgress'}});
+    h.child.notify('item/completed',{...next,item:{type:'commandExecution',id:'synthetic-nonce-one',status:'completed',command,exitCode:0,aggregatedOutput:'1728000000000000001'}});
+    h.child.notify('item/completed',{...next,item:{type:'commandExecution',id:'synthetic-nonce-two',status:'completed',command,exitCode:0,aggregatedOutput:'1728000000000000002'}});
+    h.child.notify('turn/completed',{threadId:next.threadId,turn:{id:next.turnId,status:'failed',error:{message:'Selected model is at capacity. Please try a different model. request_id=req-after'}}});
+    assert.equal((await execution.completion).status,'cleared');assert.equal(run.events.filter(event=>event.type==='codex.goal_circuit_open').length,1);
+  });
 });
 
 test('version discovery and process launch use the same pinned binary selection', async t => {
@@ -909,7 +944,7 @@ test('task and goal events report effective native configuration and waiting not
   });
 });
 
-test('task budgets exclude reported cached input while retaining every raw usage counter', async t => {
+test('task usage retains cached and raw counters without quota enforcement', async t => {
   const h = harness(t), run = input({tokenBudget: 15});
   const execution = await h.adapter.start(run.value);
   h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 1000, cachedInputTokens: 990, outputTokens: 4, totalTokens: 1004}}});
@@ -921,37 +956,30 @@ test('task budgets exclude reported cached input while retaining every raw usage
   assert.deepEqual(result.usage, {input: 1000, cachedInput: 990, output: 4, total: 1004});
 });
 
-test('task and goal budgets stop at the new-token boundary without rewriting native goal usage', async t => {
+test('task and goal execution accepts omitted budgets and retains high usage as diagnostics', async t => {
   for (const mode of ['task', 'goal'] as const) await t.test(mode, async sub => {
-    const h = harness(sub), run = input({tokenBudget: 15});
-    const execution = mode === 'task' ? await h.adapter.start(run.value) : await h.adapter.startGoal!({...run.value, objective: 'A synthetic cache-aware native goal.'});
+    const h = harness(sub), run = input({timeoutSeconds: undefined, tokenBudget: undefined});
+    const execution = mode === 'task' ? await h.adapter.start(run.value) : await h.adapter.startGoal!({...run.value, objective: 'A synthetic quota-free native goal.'});
     await immediate();
-    h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 1000, cachedInputTokens: 990, outputTokens: 4, totalTokens: 1004}}});
+    const usage = {inputTokens: 1500000, cachedInputTokens: 1490000, outputTokens: 5000000, totalTokens: 6500000};
+    h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: usage}});
     await immediate();
     assert.equal(h.child.requests.some(message => message.method === 'turn/interrupt' || message.method === 'thread/goal/clear'), false);
-    let rejected: Promise<unknown> | undefined;
-    if (mode === 'task') rejected = assert.rejects(execution.completion, /token budget/);
-    h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 1500, cachedInputTokens: 1490, outputTokens: 5, totalTokens: 1505}}});
-    if (mode === 'task') await rejected;
-    else {
-      const result = await execution.completion;
-      assert.equal('status' in result && result.status, 'cleared');
-      assert.equal('nativeGoal' in result && result.nativeGoal?.tokensUsed, 0);
-      assert.deepEqual(result.usage, {input: 1500, cachedInput: 1490, output: 5, total: 1505});
-      assert.equal(h.child.requests.find(message => message.method === 'thread/goal/set')?.params?.tokenBudget, 15);
-    }
-    assert.deepEqual(run.events.findLast(event => event.usage)?.usage, {input: 1500, cachedInput: 1490, output: 5, total: 1505});
-    assert.equal(h.child.requests.some(message => message.method === 'turn/interrupt'), true);
+    if (mode === 'task') h.child.complete(execution.ref); else reportGoal(h.child, execution.ref, 'complete');
+    const result = await execution.completion;
+    assert.deepEqual(result.usage, {input: 1500000, cachedInput: 1490000, output: 5000000, total: 6500000});
+    if (mode === 'goal') assert.equal(Object.hasOwn(h.child.requests.find(message => message.method === 'thread/goal/set')!.params!, 'tokenBudget'), false);
   });
 });
 
-test('missing or invalid cache counters use the conservative raw budget', async t => {
+test('missing or invalid cache counters retain raw diagnostic usage', async t => {
   for (const cachedInputTokens of [undefined, -1, '990']) await t.test(String(cachedInputTokens), async sub => {
     const h = harness(sub), run = input({tokenBudget: 15});
     const execution = await h.adapter.start(run.value);
-    const ended = assert.rejects(execution.completion, /token budget/);
     h.child.notify('thread/tokenUsage/updated', {...execution.ref, tokenUsage: {total: {inputTokens: 1000, ...(cachedInputTokens !== undefined ? {cachedInputTokens} : {}), outputTokens: 4, totalTokens: 1004}}});
-    await ended;
+    await immediate();
+    assert.equal(h.child.requests.some(message => message.method === 'turn/interrupt'), false);
+    h.child.complete(execution.ref); await execution.completion;
     const usage = run.events.findLast(event => event.usage)!.usage!;
     assert.deepEqual(usage, {input: 1000, output: 4, total: 1004});
     assert.equal(Object.hasOwn(usage, 'cachedInput'), false);

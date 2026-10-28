@@ -9,7 +9,7 @@ export type GoalPlannerObservation = {
   id: string; status: WorkStatus; goal: string; stopReason?: string;
   stages: {id: string; status: WorkStatus; output?: TaskOutput; error?: string;attemptCount?:number}[];
   resourceMode?:'account'|'tokens';
-  limits?:{tokenBudget:number;usedTokens:number;remainingTokens:number;maxAttempts:number};
+  limits?:{tokenBudget?:number;usedTokens:number;remainingTokens?:number;maxAttempts?:number};
 };
 export type GoalPlannerInput = {
   resourceMode?:'account'|'tokens';account?:AllowanceAssessment;
@@ -17,7 +17,8 @@ export type GoalPlannerInput = {
   request: string; baseline: string; rounds: IntakeRound[]; observations: GoalPlannerObservation[];
   conversation?:IntakeConversation;
   continuation?:{note:string;reason:string;question?:string};
-  remaining: {tokens: number; seconds: number; rounds: number};
+  /** Legacy caller metadata; never forwarded as an execution quota. */
+  remaining?: {tokens?: number; seconds?: number; rounds?: number};
   signal: AbortSignal; onEvent: (event: AdapterEvent) => void; executionId: string;
   contextPlan?:KnowledgeContextPlan;knowledgeAccess?:KnowledgeReadAccess;
 };
@@ -30,7 +31,7 @@ export type GoalPlannerExecution = {
 /** One bounded metadata envelope; account observations are never token estimates. */
 export function plannerExecutionContext(input:Pick<GoalPlannerInput,'project'|'pipelines'|'account'|'resourceMode'|'remaining'|'continuation'>):Record<string,unknown>{
   const account=input.account?{status:input.account.status,code:input.account.code,action:input.account.action,windows:input.account.account.windows,observedAt:input.account.account.observedAt,expiresAt:input.account.account.expiresAt,trend:input.account.trend,activeExecutions:input.account.activeExecutions}:undefined;
-  return{resourceMode:input.resourceMode??'tokens',remaining:input.resourceMode==='account'?{seconds:input.remaining.seconds,rounds:input.remaining.rounds}:input.remaining,...(account?{account}:{}),conversationRule:CONVERSATION_DATA_RULE,...(input.continuation?{continuation:input.continuation}:{}),roles:input.project.roles.filter(role=>!role.retired).map(role=>({id:role.id,sandbox:role.sandbox})),workflows:input.pipelines.map(flow=>({id:flow.id,name:flow.name,owner:flow.roleId,description:flow.description,stages:flow.stages.map(stage=>({id:stage.id,name:stage.name,role:stage.roleId,executor:stage.executor,checks:stage.checks,review:stage.review,dependsOn:stage.dependsOn,...(stage.condition?{condition:stage.condition}:{}),...(stage.reworkTo?{reworkTo:stage.reworkTo}:{})}))}))};
+  return{resourceMode:'account',execution:'supervised-without-quotas',...(account?{account}:{}),conversationRule:CONVERSATION_DATA_RULE,...(input.continuation?{continuation:input.continuation}:{}),roles:input.project.roles.filter(role=>!role.retired).map(role=>({id:role.id,sandbox:role.sandbox})),workflows:input.pipelines.map(flow=>({id:flow.id,name:flow.name,owner:flow.roleId,description:flow.description,stages:flow.stages.map(stage=>({id:stage.id,name:stage.name,role:stage.roleId,executor:stage.executor,checks:stage.checks,review:stage.review,dependsOn:stage.dependsOn,...(stage.condition?{condition:stage.condition}:{}),...(stage.reworkTo?{reworkTo:stage.reworkTo}:{})}))}))};
 }
 
 /** Execute one decision. Waiting for delegated work belongs to Intake, not the model. */
@@ -44,8 +45,8 @@ export function validatePlannerDecision(value: unknown): IntakeDecision {
     && text(value.rationale, 4000) && text(value.expectedGain, 2000) && Array.isArray(value.tasks),
   'INVALID_DECISION', 'Record an action, concise reason, expected benefit and tasks.');
   const action = value.action as IntakeDecision['action'];
-  demand(value.tasks.length <= 2 && value.tasks.every(task => isObject(task) && text(task.pipelineId, 160) && text(task.goal, 16000)),
-    'INVALID_DECISION', 'Use bounded workflow tasks with stable pipeline identifiers.');
+  demand(value.tasks.every(task => isObject(task) && text(task.pipelineId, 160) && text(task.goal, 16000)),
+    'INVALID_DECISION', 'Use workflow tasks with stable pipeline identifiers.');
   demand(action === 'dispatch' ? value.tasks.length > 0 : value.tasks.length === 0,
     'INVALID_DECISION', 'Only dispatch decisions may supply workflow tasks.');
   if (action === 'clarify') demand(text(value.question, 2000), 'QUESTION_REQUIRED', 'Ask one concrete question.');

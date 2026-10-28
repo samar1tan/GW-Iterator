@@ -166,3 +166,32 @@ test('request bounds, explicit abort and safe URL handling cover stalled or host
   assert.equal(h.calls[0]!.url.endsWith('/synthetic%2Fid%3Fquery'), true);
   await assert.rejects(h.client.getProject(''), {code: 'INVALID_REQUEST'});
 });
+
+
+test('agent history follows every provider cursor before reporting complete task state',async()=>{
+  const older={...task,id:'synthetic-older-running',status:'running'},first=json(Array.from({length:200},(_,index)=>({...task,id:'synthetic-completed-'+index,status:'completed'})));
+  first.headers.set('X-Agent-Tasks-Next-Cursor','2026-01-01T00:00:00Z|synthetic-boundary');
+  const h=fixture([first,json([older])]),tasks=await h.client.listAgentTasks(agent.id);
+  assert.equal(tasks.length,201);assert.equal(tasks.at(-1)?.status,'running');
+  assert.equal(new URL(h.calls[1].url).searchParams.get('before'),'2026-01-01T00:00:00Z|synthetic-boundary');
+  assert.ok(h.calls.every(call=>new Headers(call.init.headers).get('Authorization')==='Bearer '+connection.token));
+});
+
+test('incomplete, looping or invalid agent history is never returned as a complete empty view',async t=>{
+  const withCursor=(rows:unknown,next:string)=>{const response=json(rows);response.headers.set('X-Agent-Tasks-Next-Cursor',next);return response;};
+  for(const [label,responses] of [
+    ['repeated cursor',[withCursor([{...task,id:'first'}],'same-cursor'),withCursor([{...task,id:'second'}],'same-cursor')]],
+    ['empty cursor',[withCursor([task],'')]],
+    ['empty continuation page',[withCursor([task],'next'),withCursor([],'later')]],
+    ['repeated task',[withCursor([task],'next'),json([task])]],
+    ['malformed next page',[withCursor([task],'next'),json({tasks:[]})]],
+    ['failed next page',[withCursor([task],'next'),json({error:'Synthetic later history unavailable.'},503)]],
+  ] as const)await t.test(label,async()=>{
+    const h=fixture([...responses]);await assert.rejects(h.client.listAgentTasks(agent.id),error=>error instanceof MulticaApiError);
+  });
+});
+
+test('a stalled agent-history page ends with an explicit observation failure',async()=>{
+  const client=createMulticaClient(connection,{timeoutMs:10,fetch:async(_url,init)=>new Promise((_resolve,reject)=>{const pending=setTimeout(()=>reject(new Error('Synthetic transport did not finish.')),1000);init!.signal!.addEventListener('abort',()=>{clearTimeout(pending);reject(new Error('Synthetic slow history.'));},{once:true});})});
+  await assert.rejects(client.listAgentTasks(agent.id),error=>error instanceof MulticaApiError&&error.code==='PAGINATION_INCOMPLETE');
+});

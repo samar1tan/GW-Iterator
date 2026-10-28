@@ -43,7 +43,8 @@ export type Stage = {
   position?:{x:number;y:number};
   options?: {repository?: string; workflow?: string; ref?: string; runId?: number; mode?: 'observe' | 'dispatch'; pipelineId?: string};
 };
-export type RunPolicy = {concurrency: number; maxAttempts: number; maxIterations: number; timeoutSeconds: number; tokenBudget: number};
+/** Deprecated execution quotas are retained only as readable historical metadata. */
+export type RunPolicy = {concurrency?: number; maxAttempts?: number; maxIterations?: number; timeoutSeconds?: number; tokenBudget?: number};
 export type Pipeline = {id: string; projectId: string; revision: number; name: string; description: string; roleId: string; stages: Stage[]; policy: RunPolicy; updatedAt: string; origin?:DefinitionOrigin;templateBindingId?:string};
 export type KnowledgeEntry = {
   id: string; projectId: string; sourceId: string; kind: KnowledgeSource['kind'] | 'lesson'; roles: string[];
@@ -56,7 +57,7 @@ export type LessonLifecycleInput = {expectedRevision:number;expectedLifecycleRev
 export type Artifact = {label: string; path?: string; url?: string};
 export type TaskOutput = {outcome: 'done' | 'revise' | 'blocked' | 'no_change'; summary: string; artifacts: Artifact[]; observations: string[]};
 export type Usage = {input: number; output: number; total: number; cachedInput?:number};
-/** Budget newly processed tokens; retain gross and cached counts for inspection. */
+/** Count newly processed tokens; retain gross and cached diagnostics for inspection. */
 export function budgetTokens(usage:Usage):number{return usage.cachedInput===undefined?usage.total:Math.max(0,usage.input-usage.cachedInput)+usage.output;}
 export type ExecutionRef = {threadId?: string; turnId?: string; externalId?: string; url?: string; childRunId?: string;provider?:'codex'|'multica'|'github';issueId?:string;agentId?:string;runtimeId?:string};
 export type Attempt = {
@@ -94,8 +95,8 @@ export type Run = {
 };
 export function runPolicy(run:Run):RunPolicy{return run.limitRevisions?.at(-1)?.policy??run.approvedPolicy??run.snapshot.pipeline.policy;}
 export type AccountStepApproval={stageId:string;assessmentKey:string;accountSnapshotId:string;at:string;actor:string;used?:boolean;revoked?:boolean};
-export type RunAllowance = {policy:RunPolicy;usedTokens:number;reservedTokens:number;remainingTokens:number;usageComplete:boolean};
-export type GoalAllowance = {id:string;usedTokens:number;reservedTokens:number;remainingTokens:number;remainingSeconds:number;remainingRounds:number;resourceMode?:'account'|'tokens';status?:Intake['status']};
+export type RunAllowance = {policy:RunPolicy;usedTokens:number;reservedTokens:number;remainingTokens?:number;usageComplete:boolean};
+export type GoalAllowance = {id:string;usedTokens:number;reservedTokens:number;remainingTokens?:number;remainingSeconds?:number;remainingRounds?:number;resourceMode?:'account'|'tokens';status?:Intake['status']};
 export type RecoveryScope = {kind:'run'|'goal';id:string};
 export type RunRecovery = {
   runId:string;stageId?:string;recoveryKey:string;action:'retry'|'approve'|'reconcile'|'wait'|'blocked'|'none';
@@ -131,7 +132,7 @@ export type Intake = {
   resourceMode?:'account'|'tokens';account?:AllowanceAssessment;accountAcknowledgementRequired?:boolean;
   recoveryKey?:string;recoveryRecommendation?:GoalContinuationRecommendation;limitReached?:'rounds';controlRevision?:number;
   limitRevisions?:{revision:number;previousPolicy:IntakePolicy;policy:IntakePolicy;note:string;actor:string;at:string;approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation}}[];
-  executionTimeMeter?:'active-windows-v1'; executionTime?:{usedSeconds:number; remainingSeconds:number; totalElapsedSeconds:number};
+  executionTimeMeter?:'active-windows-v1'; executionTime?:{usedSeconds:number; remainingSeconds?:number; totalElapsedSeconds:number};
   workRecoveryHistory?:WorkRecoveryRecord[];
 };
 export type WorkRecoveryRecord = {
@@ -140,8 +141,9 @@ export type WorkRecoveryRecord = {
   runId:string;stageId:string;attemptId?:string;routerRunId:string;controlRevision:number;runControlRevision?:number;
   startedAt:string;deadlineAt:string;nextAt:string;checks:number;code:string;error?:string;retriedAt?:string;endedAt?:string;
 };
-export type GoalRecoveryPolicy = {autoRetry:boolean; maxAttempts:number; backoffSeconds:number; allowedFallbackModels:string[]};
-export type IntakePolicy = {maxRounds: number; maxParallel: number; maxTotalTokens: number; maxElapsedSeconds: number; recovery?:GoalRecoveryPolicy;smartRetry?:boolean};
+export type GoalRecoveryPolicy = {autoRetry:boolean; maxAttempts?:number; backoffSeconds:number; allowedFallbackModels:string[]};
+/** Numeric fields describe legacy snapshots; they do not constrain current work. */
+export type IntakePolicy = {maxRounds?: number; maxParallel?: number; maxTotalTokens?: number; maxElapsedSeconds?: number; recovery?:GoalRecoveryPolicy;smartRetry?:boolean};
 export type GoalContinuationRecommendation = {policy:Partial<Pick<IntakePolicy,'maxRounds'|'maxTotalTokens'|'maxElapsedSeconds'>>;basis:{usedTokens:number;reservedTokens:number;usedSeconds:number;actionRounds:number;previousPolicy:IntakePolicy};purpose:'one-focused-continuation'};
 export type GoalFailure = {kind:'capacity'|'other'; message:string; code?:string; at:string; runId:string; native:boolean};
 export type GoalRecoveryRecord = {
@@ -151,6 +153,7 @@ export type GoalRecoveryRecord = {
   refreshConfiguration:boolean; previousPolicy?:IntakePolicy; newPolicy?:IntakePolicy; error?:string;
   replyToQuestion?:string;
   workRecoveryId?:string;
+  recoveryBasis?:{cause:string;progress:string;guidance?:string};
   startedAt?:string; endedAt?:string;
   approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation};
 };

@@ -3,7 +3,7 @@ import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
 
 export type AdapterEvent = {type: string; message: string; ref?: ExecutionRef; usage?: Usage; data?: unknown};
 export type CodexExecutionInput = {
-  workspace: string; role: RoleProfile; prompt: string; timeoutSeconds: number; tokenBudget: number;
+  workspace: string; role: RoleProfile; prompt: string; timeoutSeconds?: number; tokenBudget?: number;
   signal: AbortSignal; onEvent: (event: AdapterEvent) => void;
   onTool: (tool: ControlTool, args: Record<string, unknown>) => Promise<unknown>;
 };

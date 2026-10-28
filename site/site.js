@@ -85,7 +85,7 @@ const messages = {
     "decisionTitle": "Review delivery",
     "decisionBody": "Prepared change and check evidence",
     "pipelinesTitle": "See the handoffs, checks and return paths",
-    "pipelinesBody": "Reusable workflows connect responsible roles. Dependencies can split into parallel checks, join at a review, or return a finding for bounded rework.",
+    "pipelinesBody": "Reusable workflows connect responsible roles. Dependencies can split into parallel checks, join at a review, or return a finding for targeted rework.",
     "pipelinesNext": "Meet the responsible roles →",
     "prepareStage": "Prepare content",
     "checkEnglish": "Check English",

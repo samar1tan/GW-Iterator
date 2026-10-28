@@ -7,22 +7,23 @@ import type {ControlTool} from './contracts.ts';
 import {TOOL_DEFINITIONS} from './adapters/codex.ts';
 import {AppError,demand} from './validation.ts';
 
-type Lease={expiresAt:number;tools:ControlTool[];invoke:(tool:ControlTool,args:Record<string,unknown>)=>Promise<unknown>};
+type Lease={expiresAt?:number;tools:ControlTool[];invoke:(tool:ControlTool,args:Record<string,unknown>)=>Promise<unknown>};
 /** A worker receives only its frozen role's project-scoped capabilities. */
 export class ControlMcp {
   private leases=new Map<string,Lease>();private origin:string;
   constructor(origin:string){this.origin=origin;}
-  issue(tools:ControlTool[],invoke:Lease['invoke'],seconds:number){
+  issue(tools:ControlTool[],invoke:Lease['invoke'],seconds?:number){
     const secret=randomBytes(32).toString('hex'),key=this.key(secret);
-    const lease:Lease={tools:[...new Set(tools)].filter(tool=>tool in TOOL_DEFINITIONS),invoke,expiresAt:Date.now()+seconds*1000};
+    demand(seconds===undefined||Number.isFinite(seconds)&&seconds>0,'INVALID_CAPABILITY_LIFETIME','A technical capability lifetime must be positive.');
+    const lease:Lease={tools:[...new Set(tools)].filter(tool=>tool in TOOL_DEFINITIONS),invoke,...(seconds===undefined?{}:{expiresAt:Date.now()+seconds*1000})};
     this.leases.set(key,lease);
-    // Only this short-lived, role-scoped server is preauthorized by the GWI role contract.
+    // The owning execution revokes this role-scoped capability when its work ends.
     return{config:{mcpServers:{gwi:{type:'http',url:this.origin+'/mcp/control',headers:{Authorization:'Bearer '+secret},default_tools_approval_mode:'approve'}}},revoke:()=>this.leases.delete(key)};
   }
   private key(secret:string){return createHash('sha256').update(secret).digest('hex');}
   private lease(request:IncomingMessage){
     const header=request.headers.authorization??'',key=this.key(header.startsWith('Bearer ')?header.slice(7):'');
-    const lease=this.leases.get(key);demand(lease&&lease.expiresAt>Date.now(),'EXPIRED_EXECUTION_CAPABILITY','This execution capability has expired or was revoked.',401);return lease;
+    const lease=this.leases.get(key);demand(lease&&(lease.expiresAt===undefined||lease.expiresAt>Date.now()),'EXPIRED_EXECUTION_CAPABILITY','This execution capability has expired or was revoked.',401);return lease;
   }
   async handle(request:IncomingMessage,response:ServerResponse){
     const lease=this.lease(request);

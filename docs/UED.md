@@ -1,5 +1,7 @@
 # Integrated pipeline workspace
 
+Current execution interaction: [Stage execution supervision](stage-execution-ued.md). It removes numeric execution quota inputs and extension gates while retaining actual boundaries and historical diagnostics.
+
 Current allowance interaction: [Account allowance](account-allowance-ued.md), layered on the human workbench without a new quota form.
 
 Current design revision: [Human workbench UED](human-workbench-ued.md). Apply its GitHub-inspired visual system, step-first execution and progressive configuration in preference to the earlier presentation below.
@@ -74,7 +76,7 @@ Feedback attaches to its work. Rejection sends the finding and evidence to the r
 
 Waiting identifies the person/service and useful action; it is stable and does not start repeated model turns. Native blocked does not discard pending human work. Retry is scoped and explains whether prior execution is known. Fallback obeys the allowed policy. Stop/cancel reflects authoritative owned and remote state.
 
-For a stopped pipeline, the stage inspector shows the actual account windows and applicable task trend beside a context-sensitive Continue action. A real attempt/time boundary presents a finite recommendation. Account exhaustion offers refresh/wait; unknown availability names the uncertainty before one-step owner approval. Token counters and historical configured values stay in technical details. Unknown external execution is reconciled first; accepted work and the original configuration remain intact.
+For a stopped pipeline, the stage inspector shows actual account windows and applicable task observations beside a context-sensitive Continue action. There are no numeric execution-quota inputs or extension recommendations. Account exhaustion offers refresh/wait; unknown availability names the uncertainty before owner approval. Token counters and inert historical policy values stay in technical details. Unknown external execution is reconciled first; accepted work and original configuration remain intact.
 
 State labels, border feedback and motion use the [shared state contract](human-workbench-ued.md#state-feedback-and-motion). Connection health, action submission and execution state remain separate signals. Native execution references are inspectable in technical detail; they do not imply that the session exists in the Codex desktop app or can be opened there. Do not add a desktop-session action without a working bridge.
 
@@ -105,7 +107,7 @@ Use an isolated local state directory, separate loopback service and a dedicated
 | First project and start | Empty/loading/error pages have useful actions; cancel or blank launch starts nothing; scanning cannot be duplicated; proposal/manual setup applies only deliberately; Workbench opens with usable defaults, a focused shortcut and compact empty work regions. Natural-language and saved-pipeline entries remain distinct. A known manual-only child workflow is not falsely account-gated. |
 | Author and reuse | Create a focused definition, edit/duplicate/connect stages, switch Steps/Graph, save, reopen and run with a concrete outcome. Invalid/stale saves retain the draft; unsaved navigation does not silently discard it. |
 | Handoff and review | In a manual-only fixture, record blocked/revise/done results, inspect evidence, request changes, retry only the affected stage and accept. Prior attempts and accepted work remain visible; no model/allowance claims appear for manual work. |
-| Supervision and recovery | Observe actual executing/waiting/review/paused/ended states, scoped limits, stop and pending-continuation cancellation. Test stale approval and unknown external state with explicitly controlled evidence; a real account hold appears in decisions. No duplicate dispatch or false cancellation claim. |
+| Supervision and recovery | Observe actual executing/waiting/review/paused/ended states, retained boundaries, stop and pending-continuation cancellation. Verify work beyond former numeric quotas, stale account approval and unknown external state with controlled evidence. No duplicate dispatch or false cancellation claim. |
 | Context and persistence | Open runs from Workbench, goal, Executions, Team and Knowledge; return to the originating selection. Test browser Back/Forward, direct links, unknown IDs, reload and interruption. Frozen role/definition/result history does not change with current defaults. |
 | Supporting modules | Exercise role/agent/skill management and a revision conflict; register/sync a synthetic source, inspect stale/missing/error status, add a lesson and follow its origin; save/reload Settings without losing an unrelated draft. Unsupported prerequisites remain explicitly unpassed. |
 | Feedback and input | Operate dialogs and stage lists by keyboard, check focus after close/navigation and verify running-border motion plus reduced motion. Updates preserve the reader's selected stage and activity position; raw transport stays in technical history. |

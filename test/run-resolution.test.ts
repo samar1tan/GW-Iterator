@@ -93,12 +93,9 @@ test('changed attempts or finite limits invalidate an in-flight continuation',as
   }
 });
 
-test('real attempt and time boundaries require the displayed exact owner decision',async t=>{
-  const h=await fixture(t),run=h.engine.run(h.run.id);run.approvedPolicy={...run.snapshot.pipeline.policy,maxAttempts:1};run.stages[1].attempts[0].failureCode='STAGE_TIMEOUT';h.store.put('run',run);
-  const pending=await h.engine.resolveWaiting(run.id,h.input(),OWNER);assert.equal(pending.status,'needs_input');if(pending.status!=='needs_input')return;
-  assert.equal(pending.recovery.action,'approve');assert.equal(pending.recovery.recommendation?.limits.maxAttempts,2);assert.equal(pending.recovery.recommendation?.limits.timeoutSeconds,600);assert.equal(h.engine.run(run.id).limitRevisions,undefined);
-  const stale=await h.engine.resolveWaiting(run.id,{...h.input('stale-approval'),approveRecommendation:true,recoveryKey:'forged-key'},OWNER);assert.equal(stale.status,'needs_input');if(stale.status==='needs_input')assert.equal(stale.recovery.recoveryKey,pending.recovery.recoveryKey);assert.equal(h.engine.run(run.id).limitRevisions,undefined);
-  const result=await h.engine.resolveWaiting(run.id,{...h.input('approved-finite-step'),approveRecommendation:true,recoveryKey:pending.recovery.recoveryKey},OWNER);assert.equal(result.status,'continued');assert.equal(h.engine.run(run.id).limitRevisions?.length,1);assert.equal(h.engine.run(run.id).stages[0].status,'completed');
+test('historical attempt and time quotas do not demand a continuation approval',async t=>{
+  const h=await fixture(t),run=h.engine.run(h.run.id);run.approvedPolicy={...run.snapshot.pipeline.policy,maxAttempts:1,timeoutSeconds:5,tokenBudget:100};run.stages[1].attempts[0].failureCode='STAGE_TIMEOUT';run.stages[1].attempts[0].usage={input:9000000,output:5,total:9000005};h.store.put('run',run);
+  const result=await h.engine.resolveWaiting(run.id,h.input(),OWNER);assert.equal(result.status,'continued');assert.equal(h.engine.run(run.id).limitRevisions,undefined);assert.equal(h.engine.run(run.id).stages[0].status,'completed');assert.equal(h.engine.run(run.id).stages[1].status,'queued');assert.equal(h.engine.run(run.id).stages[1].attempts[0].usage?.total,9000005);
 });
 
 test('healthy account readings and missing comparison samples do not invent an approval',async t=>{
@@ -234,9 +231,9 @@ test('a failed receipt write rolls back the retry without invoking either execut
   });
 });
 
-test('ordinary finite continuation commits its approved limits before actual scheduler dispatch',async t=>{
+test('continuation dispatches without creating a quota extension revision',async t=>{
   const h=await fixture(t,{dispatch:true}),run=h.engine.run(h.run.id);run.approvedPolicy={...run.snapshot.pipeline.policy,maxAttempts:1};h.store.put('run',run);
   const observer=new Store(h.directory);t.after(()=>observer.close());const started=deferred<void>();let observedRevisions=0;
   h.codex.start=async()=>{observedRevisions=observer.get<Run>('run',run.id)?.limitRevisions?.length??0;started.resolve();return{ref:{threadId:'synthetic-approved-thread',turnId:'synthetic-approved-turn'},completion:Promise.resolve({output:{outcome:'done',summary:'Synthetic approved continuation finished.',artifacts:[],observations:[]},usage:{input:0,output:0,total:0}})};};
-  const recovery=h.engine.recovery(run.id,'work',OWNER);assert.equal(recovery.action,'approve');h.engine.continueRun(run.id,{stageId:'work',recoveryKey:recovery.recoveryKey,approveRecommendation:true},OWNER);await started.promise;await immediate();assert.equal(observedRevisions,1,'Approved limits are visible to another connection before the adapter starts.');
+  const recovery=h.engine.recovery(run.id,'work',OWNER);assert.equal(recovery.action,'retry');assert.equal(recovery.recommendation,undefined);h.engine.continueRun(run.id,{stageId:'work',recoveryKey:recovery.recoveryKey},OWNER);await started.promise;await immediate();assert.equal(observedRevisions,0,'No quota extension is needed before actual dispatch.');
 });

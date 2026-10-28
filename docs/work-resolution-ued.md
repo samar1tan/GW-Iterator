@@ -8,7 +8,6 @@ Keep the existing workbench and inspectors. The current-work card identifies the
 | External cleanup unconfirmed | Retry step performs the check first | Check again or open external task if confirmation fails |
 | Real account uncertainty or near-limit risk | Approve one bounded step | Refresh; optional note; Stop |
 | Account exhausted | Refresh, with reset time | Stop |
-| New attempt/time boundary | Approve the displayed finite continuation | Optional note; Stop |
 | Manual result or review | Record result / Accept or request changes | Existing result/review form |
 | Dependency | Open named dependency | Stop |
 | Paused | Resume | Stop |
