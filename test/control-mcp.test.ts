@@ -8,6 +8,17 @@ import {AppError} from '../src/validation.ts';
 
 type ToolHints = {readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean};
 
+test('browser MCP returns image content and discards a result completed after revocation',async t=>{
+  const h=await fixture(t);let revoked=0;
+  const lease=h.controls.issue(['browser.use'],async()=>({content:[{type:'text',text:'{"actualScreenshot":true}'},{type:'image',data:Buffer.from('Synthetic PNG bytes.').toString('base64'),mimeType:'image/png'}]}),undefined,()=>revoked++);
+  const response=await h.rpc(lease.config.mcpServers.gwi.headers.Authorization,'tools/call',{name:'gwi_browser_use',arguments:{action:'screenshot'}});
+  assert.equal((response.body.result?.content?.[1] as unknown as {type:string}).type,'image');lease.revoke();lease.revoke();assert.equal(revoked,1);
+  let release!:(value:unknown)=>void,entered!:()=>void;const started=new Promise<void>(resolve=>entered=resolve);
+  const delayed=h.controls.issue(['context.read'],async()=>{entered();return new Promise(resolve=>release=resolve);},undefined,()=>revoked++);
+  const pending=h.rpc(delayed.config.mcpServers.gwi.headers.Authorization,'tools/call',{name:'gwi_context_read',arguments:{}});await started;delayed.revoke();release({shouldNotBeDelivered:true});
+  const late=await pending;assert.equal(late.body.result?.isError,true);assert.doesNotMatch(JSON.stringify(late.body),/shouldNotBeDelivered/);assert.equal(revoked,2);
+});
+
 async function fixture(t: TestContext) {
   const controls = new ControlMcp('http://127.0.0.1:1');
   const server = createServer((request, response) => {void controls.handle(request, response).catch(error => {response.writeHead(error instanceof AppError ? error.status : 500, {'content-type': 'application/json'}); response.end(JSON.stringify({error: {code: error instanceof AppError ? error.code : 'TEST_FAILURE'}}));});});

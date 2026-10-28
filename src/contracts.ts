@@ -9,12 +9,13 @@ export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as con
 export type Effort = typeof EFFORTS[number];
 export const DEFAULT_EFFORT: Effort = 'max';
 export const EFFORT_LABELS: Record<Effort, string> = {low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra'};
-export type ControlTool = 'context.read' | 'knowledge.search' | 'knowledge.write' | 'pipeline.read' | 'pipeline.propose' | 'pipeline.write' | 'run.read' | 'run.start' | 'intake.route' | 'project.bootstrap';
-export const CONTROL_TOOLS: ControlTool[] = ['context.read','knowledge.search','knowledge.write','pipeline.read','pipeline.propose','pipeline.write','run.read','run.start','intake.route','project.bootstrap'];
+export type ControlTool = 'context.read' | 'knowledge.search' | 'knowledge.write' | 'pipeline.read' | 'pipeline.propose' | 'pipeline.write' | 'run.read' | 'run.start' | 'intake.route' | 'project.bootstrap' | 'browser.use';
+export const CONTROL_TOOLS: ControlTool[] = ['context.read','knowledge.search','knowledge.write','pipeline.read','pipeline.propose','pipeline.write','run.read','run.start','intake.route','project.bootstrap','browser.use'];
 export type RoleProfile = {
   id: string; name: string; description: string; instructions: string;
   model: string | null; effort: Effort; sandbox: 'read-only' | 'workspace-write';
   skills: {name: string; path: string}[]; tools: ControlTool[];
+  browser?:{origins:string[]};
   inputs?:string[]; outputs?:string[]; checks?:string[]; retired?:boolean;
   multica?:{agentId?:string;runtimeId?:string;skillIds?:string[];mcpServerIds?:string[]};
   origin?:DefinitionOrigin; templateBindingId?:string;

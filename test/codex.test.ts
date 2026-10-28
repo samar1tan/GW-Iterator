@@ -135,6 +135,15 @@ function input(overrides: Partial<CodexExecutionInput> = {}, roleOverrides: Part
   return {value, controller, events, role};
 }
 
+test('hosted browser capability refuses native task and goal work with authoritative no-dispatch evidence',async t=>{
+  const h=harness(t),task=input({}, {tools:['browser.use'],browser:{origins:['http://127.0.0.1:45678']}});
+  await assert.rejects(h.adapter.start(task.value),/BROWSER_REQUIRES_MULTICA/);
+  assert.equal(h.launches,0);assert.ok(boundaries(task.events).some(event=>(event.data as {state:string;cleanupConfirmed:boolean}).state==='not_dispatched'&&(event.data as {cleanupConfirmed:boolean}).cleanupConfirmed));
+  const goal=input({}, {tools:['browser.use'],browser:{origins:['http://127.0.0.1:45678']}});
+  await assert.rejects(h.adapter.startGoal!({...goal.value,objective:'A synthetic hosted browser check.'}),/BROWSER_REQUIRES_MULTICA/);assert.equal(h.launches,0);
+  assert.ok(boundaries(goal.events).some(event=>(event.data as {state:string}).state==='not_dispatched'));
+});
+
 test('reads native account windows without model work and drops identity and credit payloads',async t=>{
   const reset=Math.floor(Date.now()/1000)+3600;
   const h=harness(t,(message,child)=>{if(message.method==='account/rateLimits/read'){child.reply(message.id!,{rateLimitsByLimitId:{codex:{limitId:'codex',primary:{usedPercent:27,windowDurationMins:15,resetsAt:reset},credits:{balance:'synthetic-hidden-balance'}}},rateLimitResetCredits:{availableCount:2,credits:[{id:'synthetic-hidden-reset'}]}});return true;}});

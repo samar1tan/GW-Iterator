@@ -51,9 +51,11 @@ export function presentAgent(agent:MulticaAgent){const {mcp_config,runtime_confi
 export class Platform {
   readonly client:MulticaClient; readonly workspaces:Workspaces;
   private pending=new Map<string,Promise<unknown>>();
+  readonly browserControlOrigins:string[];
   readonly engine:Engine; readonly dataDirectory:string; private defaultModel?:string; private profile:Profile;private scope:string;private verificationProbe:VerificationProbe;
   constructor(engine:Engine,connection:MulticaConnection,dataDirectory:string,defaultModel?:string,profile:Profile={},client?:MulticaClient,verificationProbe:VerificationProbe=probeVerificationScope){
     this.engine=engine;this.dataDirectory=dataDirectory;this.defaultModel=defaultModel??profile.defaultModel??(typeof profile.model==='string'?profile.model:undefined);this.profile=profile;this.verificationProbe=verificationProbe;
+    this.browserControlOrigins=[connection.baseUrl,...(profile.daemon?.healthUrl?[profile.daemon.healthUrl]:[])];
     this.scope=createHash('sha256').update(connection.baseUrl+'\n'+connection.workspaceId).digest('hex').slice(0,16);
     this.client=client??createMulticaClient(connection);this.workspaces=new Workspaces(engine.store,path.join(dataDirectory,'executions'));
   }

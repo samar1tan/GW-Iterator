@@ -20,6 +20,7 @@ The npm lockfile pins direct and transitive packages. Installed packages retain 
 | React Flow | 12.12.0 | MIT | [xyflow](https://github.com/xyflow/xyflow) |
 | Dagre | 3.1.3 | MIT | [dagre](https://github.com/dagrejs/dagre) |
 | Model Context Protocol TypeScript SDK | 1.32.2 | MIT | [typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk) |
+| Playwright Core | 1.64.1 | Apache-2.0 | [Playwright](https://github.com/microsoft/playwright) |
 | react-markdown | 10.1.0 | MIT | [react-markdown](https://github.com/remarkjs/react-markdown) |
 | unified | 11.0.5 | MIT | [unified](https://github.com/unifiedjs/unified) |
 | remark-parse | 11.0.0 | MIT | [remark](https://github.com/remarkjs/remark/tree/main/packages/remark-parse) |
@@ -27,3 +28,5 @@ The npm lockfile pins direct and transitive packages. Installed packages retain 
 | rehype-slug | 6.0.0 | MIT | [rehype-slug](https://github.com/rehypejs/rehype-slug) |
 
 The MCP SDK implements the control-tool transport. It does not grant additional project or filesystem permissions.
+
+Playwright Core provides the maintained host-browser API. Its package license and notices remain with the installed dependency. GWI does not bundle or relicense Google Chrome; hosted browser verification uses a separately installed browser in a private isolated session.

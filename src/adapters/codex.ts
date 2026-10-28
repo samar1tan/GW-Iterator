@@ -5,6 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {executionFailureIdentity} from '../execution-evidence.ts';
 import {ACCOUNT_ALLOWANCE_TTL_MS,normalizeAccountObservation,unavailableAccountObservation} from '../account-allowance.ts';
+import {BROWSER_TOOL_DEFINITION} from '../browser-policy.ts';
 import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
 import type {ControlTool, CodexInfo, ExecutionRef, ModelInfo, TaskOutput, Usage} from '../contracts.ts';
 import type {AdapterEvent, CodexAdapter, CodexExecution, CodexExecutionInput, CodexGoalExecution, CodexGoalInput, CodexGoalResult, CodexNativeGoal} from './types.ts';
@@ -53,6 +54,7 @@ const stringProperty = {type: 'string'};
 const pipelineProperty = {type: 'object', additionalProperties: true};
 const stringArray = {type: 'array', items: stringProperty};
 export const TOOL_DEFINITIONS: Record<ControlTool, {description: string; properties: JsonObject; required: string[]}> = {
+  'browser.use':BROWSER_TOOL_DEFINITION,
   'project.bootstrap': {description: 'Record a proposed project configuration after read-only inspection. Knowledge kinds are document or artifact, as shown in the inspected manifest; they are not file. Correct rejected fields from the inspected evidence; report unchanged validation failures instead of repeating them. Applying the proposal is a separate owner action.', properties: {proposal: {type: 'object', additionalProperties: false, properties: {name:stringProperty,description:stringProperty,repository:stringProperty,rationale:stringProperty,roles:{type:'array',items:{type:'object',additionalProperties:false,properties:{id:stringProperty,instructions:stringProperty},required:['id','instructions']}},knowledgeSources:{type:'array',items:{type:'object',additionalProperties:false,properties:{path:stringProperty,kind:{type:'string',enum:['document','artifact']},roles:stringArray},required:['path','roles']}},pipelines:{type:'array',minItems:1,maxItems:4,items:{type:'object',additionalProperties:true}}},required:['name','description','repository','rationale','roles','knowledgeSources','pipelines']}, sources:stringArray}, required:['proposal','sources']},
   'intake.route': {description: 'Record the next bounded action for this supervised request: answer an informational question without child work, dispatch existing pipelines, retry an owned failed stage, complete from verified outcomes, ask a question, or stop. A read-only answer does not certify artifact delivery. Record concise reasons and expected benefit, not private reasoning.', properties: {action: {type:'string',enum:['answer','dispatch','retry','complete','clarify','stop']}, rationale:stringProperty,expectedGain:stringProperty,tasks:{type:'array',items:{type:'object',properties:{pipelineId:stringProperty,goal:stringProperty},required:['pipelineId','goal'],additionalProperties:false}},response:stringProperty,question:stringProperty,retry:{type:'object',properties:{runId:stringProperty,stageId:stringProperty,note:stringProperty},required:['runId','stageId','note'],additionalProperties:false}}, required:['action','rationale','expectedGain','tasks']},
   'context.read': {description: 'Read the current project and originating run context.', properties: {}, required: []},
@@ -750,7 +752,7 @@ class LocalCodexAdapter implements CodexAdapter {
 
   async startGoal(input: CodexGoalInput): Promise<CodexGoalExecution> {
     const boundary: StartupBoundary = {paidRequestSent: false};
-    try {return await this.startNativeGoal(input, boundary);} catch (error) {
+    try {if(input.role.tools.includes('browser.use'))throw new Error('BROWSER_REQUIRES_MULTICA: Connect the protected Multica execution service to use hosted browser testing.');return await this.startNativeGoal(input, boundary);} catch (error) {
       if (!boundary.paidRequestSent) this.preparationBoundary(input, boundary.ref);
       throw error;
     }
@@ -848,7 +850,7 @@ class LocalCodexAdapter implements CodexAdapter {
 
   async start(input: CodexExecutionInput): Promise<CodexExecution> {
     const boundary: StartupBoundary = {paidRequestSent: false};
-    try {return await this.startNativeTask(input, boundary);} catch (error) {
+    try {if(input.role.tools.includes('browser.use'))throw new Error('BROWSER_REQUIRES_MULTICA: Connect the protected Multica execution service to use hosted browser testing.');return await this.startNativeTask(input, boundary);} catch (error) {
       if (!boundary.paidRequestSent) this.preparationBoundary(input, boundary.ref);
       throw error;
     }

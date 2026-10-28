@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {parseBrowserOrigins} from './browser-policy.ts';
 import {CONTROL_TOOLS, EXECUTORS, EFFORTS} from './contracts.ts';
 import type {Pipeline,Project,TaskOutput} from './contracts.ts';
 
@@ -20,6 +21,7 @@ export function validateProject(project:Project):void {
     demand(id(role.id)&&text(role.name,160)&&typeof role.instructions==='string'&&role.instructions.length<=40000&&['read-only','workspace-write'].includes(role.sandbox)&&EFFORTS.includes(role.effort),'INVALID_ROLE','Check role identity, instructions and execution policy.');
     demand(Array.isArray(role.tools)&&role.tools.every(tool=>CONTROL_TOOLS.includes(tool))&&Array.isArray(role.skills)&&role.skills.length<=30&&role.skills.every(skill=>text(skill.name,160)&&text(skill.path,4096)&&path.isAbsolute(skill.path)),'INVALID_ROLE_TOOLS','Choose supported tools and installed skill paths.');
     demand(role.model===null||text(role.model,160),'INVALID_MODEL','Choose an available model or inherit Codex default.');
+    if(role.browser!==undefined)demand(isObject(role.browser)&&Object.keys(role.browser).every(key=>key==='origins')&&parseBrowserOrigins(role.browser.origins),'INVALID_BROWSER_ORIGINS','Browser origins must be exact HTTP origins with a literal loopback address and an explicit local port.');
     demand(contractList(role.inputs)&&contractList(role.outputs)&&contractList(role.checks)&&(role.retired===undefined||typeof role.retired==='boolean'),'INVALID_ROLE_CONTRACT','Provide bounded input, output and acceptance descriptions.');
     if(role.multica)demand(isObject(role.multica)&&(!role.multica.agentId||text(role.multica.agentId,160))&&(!role.multica.runtimeId||text(role.multica.runtimeId,160))&&[role.multica.skillIds,role.multica.mcpServerIds].every(ids=>ids===undefined||Array.isArray(ids)&&ids.length<=30&&ids.every(value=>text(value,160))),'INVALID_AGENT_BINDING','Check the connected agent, runtime, skill and MCP identifiers.');
   }
