@@ -161,3 +161,26 @@ export type ProjectDetail = {project: Project; pipelines: Pipeline[]; runs: Run[
 export type Actor = {name: string; kind: 'human' | 'agent'; projectId?: string; tools?: ControlTool[]};
 export type StartRunInput = {projectId: string; pipelineId: string; goal: string; baseline: string; mode?: 'once' | 'loop'; dependsOnRunIds?: string[]; idempotencyKey: string; knowledgeIds?: string[]; trigger?: Trigger; parentRunId?: string; parentStageId?: string;limits?:Partial<RunPolicy>;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string};
 export type KnowledgeSyncResult = {entries: KnowledgeEntry[]; stats: {added: number; changed: number; unchanged: number; missing: number; errors: number}};
+
+/** Accepted or deliberately ended work no longer requests a recovery decision. */
+export const isClosedWorkStatus=(status:string)=>['stopped','completed','cancelled','skipped'].includes(status);
+
+export function currentGoalRecovery(goal:Pick<Intake,'status'|'routerRunId'|'controlRevision'|'workRecoveryHistory'>):WorkRecoveryRecord|undefined {
+  const record=goal.workRecoveryHistory?.at(-1);
+  if(isClosedWorkStatus(goal.status)||!record||record.code==='RECOVERY_SUPERSEDED'
+    ||record.controlRevision!==(goal.controlRevision??0)||record.routerRunId!==goal.routerRunId)return undefined;
+  return record;
+}
+
+/** Historical child gates cannot reopen their closed owning run or goal. */
+export function runAcceptsInput(run:Run,runs:Run[],goals:Intake[]):boolean {
+  let current=run;const seen=new Set<string>();
+  while(!seen.has(current.id)){
+    seen.add(current.id);if(isClosedWorkStatus(current.status)||current.cancelRequested||current.continuationDeclined)return false;
+    const owner=goals.find(goal=>goal.projectId===current.projectId&&[goal.routerRunId,...(goal.supervisorRunIds??[]),...goal.targetRunIds].includes(current.id));
+    if(owner)return !isClosedWorkStatus(owner.status);
+    const parent=runs.find(value=>value.projectId===current.projectId&&value.id===current.parentRunId);
+    if(!parent)return true;current=parent;
+  }
+  return true;
+}

@@ -1,8 +1,9 @@
 import type {Intake,Run,WorkRecoveryRecord} from '../../src/contracts.ts';
 import {activeRecoveryPhases} from '../../src/contracts.ts';
+import {currentGoalRecovery,isClosedWorkStatus} from '../../src/contracts.ts';
 
 const phaseOrder={checking:0,backoff:1,retrying:2,resuming:3,completed:4,needs_input:4,cancelled:4};
-export const currentWorkRecovery=(goal:Intake)=>{const record=goal.workRecoveryHistory?.at(-1);return record?.code==='RECOVERY_SUPERSEDED'||record?.phase==='needs_input'&&record.routerRunId!==goal.routerRunId?undefined:record;};
+export const currentWorkRecovery=currentGoalRecovery;
 export const workRecoveryPending=(goal:Intake)=>activeRecoveryPhases.has(currentWorkRecovery(goal)?.phase??'');
 export const recoveryPhaseObserved=(actual:WorkRecoveryRecord['phase']|undefined,expected:WorkRecoveryRecord['phase'])=>!!actual&&phaseOrder[actual]>=phaseOrder[expected];
 
@@ -15,6 +16,10 @@ export function workRecoveryTiming(record:WorkRecoveryRecord,now:number){
 export function recoveryReceiptObserved(current:Intake,receipt:Intake):boolean {
   if((current.controlRevision??0)>(receipt.controlRevision??0))return true;
   if((current.controlRevision??0)<(receipt.controlRevision??0))return false;
+  if(isClosedWorkStatus(current.status)&&!isClosedWorkStatus(receipt.status)&&current.routerRunId===receipt.routerRunId&&Date.parse(current.updatedAt)>=Date.parse(receipt.updatedAt)){
+    const expected=receipt.workRecoveryHistory?.at(-1);
+    if(!expected||current.workRecoveryHistory?.some(record=>record.id===expected.id))return true;
+  }
   if(current.routerRunId!==receipt.routerRunId&&current.supervisorRunIds?.includes(receipt.routerRunId))return true;
   const expected=currentWorkRecovery(receipt),actual=currentWorkRecovery(current);
   if(!expected)return current.routerRunId===receipt.routerRunId&&(current.limitRevisions?.length??0)>=(receipt.limitRevisions?.length??0)&&Date.parse(current.updatedAt)>=Date.parse(receipt.updatedAt);
