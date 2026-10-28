@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtemp, mkdir, rm} from 'node:fs/promises';
+import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {setImmediate as immediate} from 'node:timers/promises';
@@ -15,6 +15,7 @@ import {AppError} from '../src/validation.ts';
 import type {Actor, ExecutionRef, Intake, IntakeDecision, Pipeline, Run, TaskOutput, Usage} from '../src/contracts.ts';
 import type {CodexAdapter, CodexExecutionInput, CodexGoalInput, CodexGoalResult} from '../src/adapters/types.ts';
 import type {GoalPlanner, GoalPlannerInput} from '../src/goal-planner.ts';
+import type {KnowledgeSearchPage,KnowledgeReadPage} from '../src/knowledge-context-types.ts';
 
 const OWNER: Actor = {name: 'Synthetic goal owner', kind: 'human'};
 const OUTPUT: TaskOutput = {outcome: 'done', summary: 'Synthetic delegated action completed.', artifacts: [], observations: []};
@@ -674,6 +675,31 @@ async function plannerFixture(t: TestContext) {
   h.engine.goalPlanner = planner;
   return {...h, planner};
 }
+
+test('new native and connected intake capture live sources once and share exact frozen lookup through their real inputs',async t=>{
+  for(const mode of ['native','connected'] as const)await t.test(mode,async sub=>{
+    const h=mode==='native'?await fixture(sub):await plannerFixture(sub),file=path.join(h.project.workspace,'receipt-guide.md');
+    await writeFile(file,'# Receipt handling\n\nBotanical observations.\n\nACK_INTAKE is consumed before metadata refresh.');
+    const p=h.engine.project(h.project.id);h.project=await h.engine.updateProject(p.id,p.revision,{...p,knowledgeSources:[{id:'intake-reference',path:file,kind:'document',roles:[]}]},OWNER);
+    const input={request:'Explain ACK_INTAKE before metadata refresh.',idempotencyKey:'synthetic-frozen-'+mode,policy:{maxTotalTokens:10000,maxElapsedSeconds:300,smartRetry:false}},item=await h.intake.createWithAccount(h.project.id,input,OWNER),run=h.engine.run(item.routerRunId),record=h.engine.contextRecord(run.id,'supervise')!;
+    assert.ok(run.snapshot.knowledgeCorpusId);assert.ok(record.plan.evidence.some(value=>value.content.includes('ACK_INTAKE')));assert.equal(record.plan.status,'ready');
+    const planner=(h as Fixture&{planner?:SyntheticDecisionPlanner}).planner?.calls[0].input,native=h.codex.goals[0]?.input;assert.ok(planner?.contextPlan?.context===record.plan.context||native?.prompt.includes(record.plan.context));
+    const page=planner?await planner.knowledgeAccess!.search({query:'ACK_INTAKE'}):await native!.onTool('knowledge.search',{query:'ACK_INTAKE',format:'v2'}) as KnowledgeSearchPage;
+    const read=planner?await planner.knowledgeAccess!.read(page.matches[0].locator):await native!.onTool('knowledge.search',{read:page.matches[0].locator}) as KnowledgeReadPage;assert.ok(read.passage.content.includes('consumed before'));assert.equal(h.engine.contextRecord(run.id,'supervise')!.reads.length,2);
+    await writeFile(file,'# Receipt handling\n\nACK_INTAKE now has a different live source.');await h.engine.sync(h.project.id,OWNER);
+    const retained=await h.intake.createWithAccount(h.project.id,input,OWNER);assert.equal(retained.id,item.id);assert.deepEqual(h.engine.run(run.id).snapshot,run.snapshot);const frozen=await h.engine.knowledgeContext.read(record.plan.scope,page.matches[0].locator);assert.ok(frozen.passage.content.includes('consumed before'));assert.ok(!frozen.passage.content.includes('different live'));
+  });
+});
+
+test('missing coordinator guidance and cancelled source capture start zero native or connected model tasks',async t=>{
+  for(const mode of ['native','connected'] as const)await t.test(mode,async sub=>{
+    const h=mode==='native'?await fixture(sub):await plannerFixture(sub),p=h.engine.project(h.project.id);h.project=await h.engine.updateProject(p.id,p.revision,{...p,knowledgeSources:[{id:'required-coordinator-guide',path:path.join(p.workspace,'AGENTS.md'),kind:'document',roles:['lead']}]},OWNER);
+    const request={request:'Explain the current synthetic project.',idempotencyKey:'synthetic-blocked-'+mode,policy:{maxTotalTokens:10000,maxElapsedSeconds:300,smartRetry:false}},item=await h.intake.createWithAccount(h.project.id,request,OWNER);await pump(h,()=>current(h,item).status==='failed','missing coordinator guidance');
+    const attempt=h.engine.run(item.routerRunId).stages[0].attempts[0],record=h.engine.contextRecord(item.routerRunId,'supervise')!;assert.equal(record.plan.status,'blocked');assert.ok(record.plan.gaps.some(value=>value.code==='GUIDANCE_MISSING'));assert.equal(attempt.nativeDispatchState,'not_dispatched');assert.equal(attempt.nativeCleanupConfirmed,true);assert.equal(attempt.tokenReservation,0);assert.equal(current(h,item).canRetry,true,'A known local preparation failure needs no external cleanup.');assert.equal(h.codex.goals.length,0);assert.equal((h as Fixture&{planner?:SyntheticDecisionPlanner}).planner?.calls.length??0,0);
+    const controller=new AbortController();controller.abort(new AppError('SYNTHETIC_CAPTURE_CANCELLED','Synthetic owner cancelled source preparation.',409));await assert.rejects(h.intake.createWithAccount(h.project.id,{...request,idempotencyKey:'synthetic-cancelled-'+mode},OWNER,{signal:controller.signal}),code('SYNTHETIC_CAPTURE_CANCELLED'));assert.equal(h.intake.list(h.project.id).length,1);assert.equal(h.codex.goals.length,0);assert.equal((h as Fixture&{planner?:SyntheticDecisionPlanner}).planner?.calls.length??0,0);
+    await writeFile(path.join(p.workspace,'AGENTS.md'),'Required synthetic rule: preserve exact execution references.');const resumed=await h.intake.retry(item.id,{note:'The owner repaired the registered guidance and requests a refreshed basis.',refreshConfiguration:true},OWNER);await pump(h,()=>h.codex.goals.length+((h as Fixture&{planner?:SyntheticDecisionPlanner}).planner?.calls.length??0)===1,'one prepared coordinator after explicit basis refresh');assert.equal(h.engine.contextRecord(resumed.routerRunId,'supervise')!.plan.status,'ready');assert.notEqual(h.engine.run(resumed.routerRunId).snapshot.knowledgeCorpusId,h.engine.run(item.routerRunId).snapshot.knowledgeCorpusId);assert.equal(h.engine.contextRecord(item.routerRunId,'supervise')!.plan.status,'blocked');
+  });
+});
 
 test('one-decision planning spends no model calls during manual/CI waits and preserves each real reference', async t => {
   const h = await plannerFixture(t), original = h.engine.project(h.project.id);

@@ -1,6 +1,33 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  knowledgeReviewInputError:'请核对审阅选择、版本、证据和备注。',templateRequirementsInputError:'请检查模板声明的访问范围和工具。',
+
+  knowledgePreparationError:"必需的项目指导需要处理。可查看“使用的来源”并打开知识库；本次尝试尚未派发模型任务。",
+  knowledgeMetadataError:"来源的标题或章节名过长，无法在限定范围内返回。可缩短标题或选取较小的来源章节。",
+  knowledgeVersionError:"来源版本已改变。请刷新并核对当前证据后保存。",
+  knowledgeLocationError:"这个位置与冻结来源不匹配，请刷新本次选择记录。",
+  knowledgeScopeError:"请选择当前项目和执行基础中的来源。",
+  knowledgeEntryError:"这个知识条目暂不可用，请刷新列表。",
+  knowledgeQueryError:"请在当前冻结来源中重新搜索。",
+  knowledgeFeedbackError:"请核对来源版本和反馈备注。",
+  knowledgeRelationshipError:"请选择两个明确的来源版本，并说明关系。",
+  knowledgeReviewError:"这条提议已不处于本次待审阅状态，请刷新记录。",
+  knowledgeRetainedError:"归档和恢复仅用于已保留的经验，请先审阅提议。",
+  templateStaleError:"项目或预览已改变，请刷新预览后再应用。",
+  templateMissingError:"这个模板版本暂不可用，请刷新模板库。",
+  templateRetiredError:"这个模板已停用，之前固定版本的执行仍可查看。",
+  templateBlockedError:"请先处理列出的冲突和缺失绑定。",
+  templateSourceError:"来源定义已改变或移除，请选择当前版本。",
+  templateResolutionError:"请选择列出的项目值或模板值，再核对预览。",
+  templateTargetError:"请选择当前项目中相应的角色或流水线。",
+  templateCapabilityError:"项目角色尚不满足模板要求，请到团队中检查其能力。",
+  templateApplyError:"尚未应用更新，请查看失败原因并刷新预览。",
+
+  workflowBasis:'流程依据',workflowOrigin:'定义来源',workflowSelection:'选择方式',workflowUnknownOrigin:'此版本未记录',workflowBuiltin:'预置流程',workflowManual:'手动创建',workflowCopy:'独立副本',workflowAdoption:'项目接入',workflowTemplate:'可复用模板',workflowImport:'手动导入',workflowProposal:'已审阅的提议',workflowChosenManually:'你选择的',workflowChosenOwnerApi:'所有者 API',workflowChosenTool:'项目 agent',workflowChosenCoordinator:'协调器',workflowChosenDependency:'上游流程',
+
+  proposed:'待审阅',declined:'未采纳',knowledgePurpose:'上下文用途',knowledgePurposeAutomatic:'自动',knowledgePurposeHelp:'指导完整提供；参考按任务选取。自动仅将项目根目录的 AGENTS.md 作为指导。',knowledgeReference:'参考资料',knowledgeGuidance:'必需指导',knowledgeProposals:'待审阅的经验',knowledgeDeclined:'未采纳的经验',knowledgeRetain:'保留经验',knowledgeDecline:'不采纳',knowledgeReview:'审阅经验',knowledgeProposalHelp:'这条建议尚未用于新任务，保留后才会参与。',knowledgeReviewNote:'审阅备注',knowledgeReviewRecorded:'已保存审阅结果。',knowledgePastRevision:'历史版本 r{revision}',knowledgeFeedback:'来源反馈',knowledgeFeedbackKind:'发现',knowledgeFeedbackRelevant:'有帮助',knowledgeFeedbackIrrelevant:'不相关',knowledgeFeedbackOutdated:'已过时',knowledgeFeedbackConflict:'证据冲突',knowledgeFeedbackNote:'证据或备注',knowledgeFeedbackRecorded:'已记录反馈。',knowledgeResolve:'标记已解决',knowledgeRelationships:'来源关系',knowledgeSupersededBy:'被其取代',knowledgeSupersedes:'取代',knowledgeConflicts:'与之冲突',knowledgeRelationshipTarget:'关联条目',knowledgeRelationshipConfirm:'记录关系',knowledgeRelationshipHelp:'确认必需指导之间的冲突后，仅阻止相关角色的新执行。历史任务的上下文保持原样。',knowledgeRelationshipRecorded:'已记录关系。',knowledgeNoProposals:'没有待审阅的经验。',knowledgeNoDeclined:'没有符合筛选条件的未采纳经验。',
+
   archived:'已归档', archivedLessons:'已归档的经验', archiveLesson:'归档经验', restoreLesson:'恢复经验', lessonArchived:'已归档经验：{title}', lessonRestored:'已恢复经验：{title}', archivedLessonHelp:'不再用于新工作，正文和此前使用记录保留。', lessonLifecycleRecorded:'对“{title}”的更改已保存，可刷新查看当前状态。', lessonLifecycleDetails:'观察详情', noArchivedLessons:'没有符合筛选条件的已归档经验。',
   followUpNotReady:'上一项工作尚未结束，请等结果返回后再继续。',invalidParentIntake:'无法找到上一条结果，请刷新后重试。',clarificationReplyRequired:'先回复上面的问题，再继续。',
   intakeAnswered:'已回答', directAnswer:'回答', retainedGoalResult:'已生成的结果',

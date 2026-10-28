@@ -7,7 +7,7 @@ import type {Store} from './store.ts';
 export type KnowledgeIndexReceipt={id:string;at:string;sources:Record<string,string>;stats:KnowledgeSyncResult['stats']};
 
 export function sourceSignature(project:Project,source:KnowledgeSource):string{
-  return createHash('sha256').update(JSON.stringify({path:path.resolve(project.workspace,source.path),kind:source.kind,section:source.section??null,roles:[...new Set(source.roles)].sort()})).digest('hex');
+  return createHash('sha256').update(JSON.stringify({path:path.resolve(project.workspace,source.path),kind:source.kind,section:source.section??null,roles:[...new Set(source.roles)].sort(),...(source.purpose?{purpose:source.purpose}:{})})).digest('hex');
 }
 
 /** Unknown or recursive child references cannot prove that a workflow is human-only. */

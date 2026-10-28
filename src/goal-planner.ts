@@ -1,7 +1,9 @@
 import type {AllowanceAssessment} from './account-allowance-types.ts';
 import type {ExecutionRef, IntakeConversation, IntakeDecision, IntakeRound, KnowledgeEntry, Pipeline, Project, TaskOutput, Usage, WorkStatus} from './contracts.ts';
 import type {AdapterEvent} from './adapters/types.ts';
+import type {KnowledgeContextPlan,KnowledgeReadAccess} from './knowledge-context-types.ts';
 import {demand, isObject, text} from './validation.ts';
+import {CONVERSATION_DATA_RULE} from './intake-context.ts';
 
 export type GoalPlannerObservation = {
   id: string; status: WorkStatus; goal: string; stopReason?: string;
@@ -17,12 +19,19 @@ export type GoalPlannerInput = {
   continuation?:{note:string;reason:string;question?:string};
   remaining: {tokens: number; seconds: number; rounds: number};
   signal: AbortSignal; onEvent: (event: AdapterEvent) => void; executionId: string;
+  contextPlan?:KnowledgeContextPlan;knowledgeAccess?:KnowledgeReadAccess;
 };
 export type GoalPlannerExecution = {
   ref: ExecutionRef;
   /** Settle only when the referenced task has authoritatively ended, including confirmed cancellation. */
   completion: Promise<{decision: IntakeDecision; usage?: Usage}>;
 };
+
+/** One bounded metadata envelope; account observations are never token estimates. */
+export function plannerExecutionContext(input:Pick<GoalPlannerInput,'project'|'pipelines'|'account'|'resourceMode'|'remaining'|'continuation'>):Record<string,unknown>{
+  const account=input.account?{status:input.account.status,code:input.account.code,action:input.account.action,windows:input.account.account.windows,observedAt:input.account.account.observedAt,expiresAt:input.account.account.expiresAt,trend:input.account.trend,activeExecutions:input.account.activeExecutions}:undefined;
+  return{resourceMode:input.resourceMode??'tokens',remaining:input.resourceMode==='account'?{seconds:input.remaining.seconds,rounds:input.remaining.rounds}:input.remaining,...(account?{account}:{}),conversationRule:CONVERSATION_DATA_RULE,...(input.continuation?{continuation:input.continuation}:{}),roles:input.project.roles.filter(role=>!role.retired).map(role=>({id:role.id,sandbox:role.sandbox})),workflows:input.pipelines.map(flow=>({id:flow.id,name:flow.name,owner:flow.roleId,description:flow.description,stages:flow.stages.map(stage=>({id:stage.id,name:stage.name,role:stage.roleId,executor:stage.executor,checks:stage.checks,review:stage.review,dependsOn:stage.dependsOn,...(stage.condition?{condition:stage.condition}:{}),...(stage.reworkTo?{reworkTo:stage.reworkTo}:{})}))}))};
+}
 
 /** Execute one decision. Waiting for delegated work belongs to Intake, not the model. */
 export interface GoalPlanner {

@@ -405,3 +405,14 @@ test('archived lessons retain their evidence through synchronization and only ex
     assert.deepEqual(searchKnowledge(result.entries,'',undefined,'document','archived'),[]);
   });
 });
+
+test('only registered project-root AGENTS gets the guidance default and explicit owner purpose wins',async()=>{
+  await fixture(async directory=>{
+    const workspace=join(directory,'project'),external=join(directory,'external');await mkdir(workspace);await mkdir(external);await mkdir(join(workspace,'nested'));
+    for(const file of [join(workspace,'AGENTS.md'),join(workspace,'nested','AGENTS.md'),join(external,'AGENTS.md')])await writeFile(file,'# Guide\nPreserve the original scope.');
+    const sources=[source(join(workspace,'AGENTS.md'),{id:'root'}),source(join(workspace,'nested','AGENTS.md'),{id:'nested'}),source(join(external,'AGENTS.md'),{id:'external'}),source(join(workspace,'AGENTS.md'),{id:'explicit-reference',purpose:'reference'})];
+    const result=await syncKnowledge(project(workspace,sources),[]),bySource=new Map(result.entries.map(entry=>[entry.sourceId,entry]));
+    assert.equal(bySource.get('root')?.purpose,'guidance');assert.equal(bySource.get('root')?.purposeOrigin,'project-root-default');assert.equal(bySource.get('nested')?.purpose,'reference');assert.equal(bySource.get('external')?.purpose,'reference');assert.equal(bySource.get('explicit-reference')?.purpose,'reference');assert.equal(bySource.get('explicit-reference')?.purposeOrigin,'owner');
+    const controller=new AbortController();controller.abort();await assert.rejects(syncKnowledge(project(workspace,sources),[],{signal:controller.signal}),{name:'AbortError'});
+  });
+});

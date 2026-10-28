@@ -12,6 +12,7 @@ export function KnowledgeSourceEditor({project, source, scopedRole, onClose, onC
   const {t} = useI18n(), {p} = useCopy();
   const [basis, setBasis] = useState(project), [id] = useState(() => source?.id ?? `source-${uid()}`);
   const [kind, setKind] = useState<KnowledgeSource['kind']>(source?.kind ?? 'document');
+  const [purpose,setPurpose]=useState<''|'guidance'|'reference'>(source?.purpose??'');
   const [path, setPath] = useState(source?.path ?? ''), [section, setSection] = useState(source?.section ?? '');
   const [roles, setRoles] = useState(source?.roles ?? (scopedRole ? [scopedRole] : []));
   const [busy, setBusy] = useState(false), [confirmed, setConfirmed] = useState(false), [error, setError] = useState<unknown>(null);
@@ -19,7 +20,7 @@ export function KnowledgeSourceEditor({project, source, scopedRole, onClose, onC
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); if (busy || !present) return;
     setBusy(true); setError(null);
-    const next: KnowledgeSource = {id, kind, path: knowledgePath(basis.workspace, path), roles, ...(section.trim() ? {section: section.trim()} : {})};
+    const next: KnowledgeSource = {id, kind, path: knowledgePath(basis.workspace, path), roles, ...(section.trim() ? {section: section.trim()} : {}),...(purpose?{purpose}:{})};
     try {
       await submitKnowledgeChange(confirmed, () => api<Project>(`/api/projects/${encodeURIComponent(project.id)}`, {
         method: 'PUT', body: {expectedRevision: basis.revision, project: {...basis, knowledgeSources: source ? basis.knowledgeSources.map(item => item.id === id ? next : item) : [...basis.knowledgeSources, next]}},
@@ -35,6 +36,7 @@ export function KnowledgeSourceEditor({project, source, scopedRole, onClose, onC
       <fieldset className="form-stack" disabled={busy || confirmed || !present}>
         <Field label={t('sourceKind')}><select value={kind} onChange={event=>setKind(event.target.value as KnowledgeSource['kind'])}>{(['document','artifact','memory'] as const).map(value=><option key={value} value={value}>{t(value)}</option>)}</select></Field>
         <Field label={t('sourcePath')} hint={p('knowledgeSourceHelp')}><input autoFocus required spellCheck={false} value={path} onChange={event=>setPath(event.target.value)}/></Field>
+        <Field label={t('knowledgePurpose')} hint={t('knowledgePurposeHelp')}><select value={purpose} onChange={event=>setPurpose(event.target.value as typeof purpose)}><option value="">{t('knowledgePurposeAutomatic')}</option><option value="reference">{t('knowledgeReference')}</option><option value="guidance">{t('knowledgeGuidance')}</option></select></Field>
         <Field label={`${t('sourceSection')} · ${t('optional')}`} hint={t('sourceSectionHelp')}><input value={section} onChange={event=>setSection(event.target.value)}/></Field>
         <fieldset><legend>{t('sourceRoles')}</legend><p className="hint">{t('sourceRolesHelp')}</p><RoleChecks roles={basis.roles} selected={roles} onChange={setRoles}/></fieldset>
       </fieldset>

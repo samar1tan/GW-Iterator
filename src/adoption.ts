@@ -259,14 +259,14 @@ export class AdoptionService {
       if (!application.configured) {
         const project = this.engine.project(projectId);
         demand(project.revision === application.projectRevision, 'REVISION_CONFLICT', 'The partially adopted project was edited. Inspect it before retrying setup.', 409);
-        await this.engine.updateProject(project.id, project.revision, {...project, description: candidate.description, roles: candidate.roles, knowledgeSources: candidate.knowledgeSources}, actor,configured=>{application.configured=true;application.projectRevision=configured.revision;this.save(item,'adoption.roles_configured',actor);});
+        await this.engine.updateProject(project.id, project.revision, {...project, description: candidate.description, roles: candidate.roles, knowledgeSources: candidate.knowledgeSources}, actor,configured=>{application.configured=true;application.projectRevision=configured.revision;this.save(item,'adoption.roles_configured',actor);},{roleOrigins:Object.fromEntries(candidate.roles.map(role=>[role.id,{kind:'adoption',adoptionId:item.id,revision:expectedRevision}]))});
       }
       for (const [index, pipeline] of proposal.pipelines.entries()) {
         if (application.completed.includes(index)) continue;
         this.engine.store.transaction(()=>{
           if(!application.pipelineIds[index]){const created=this.engine.createPipeline({projectId,roleId:pipeline.roleId,name:pipeline.name,description:pipeline.description},actor);application.pipelineIds[index]=created.id;this.save(item,'adoption.workflow_created',actor);}
           const existing=this.engine.pipeline(application.pipelineIds[index]);demand(existing.revision===1,'REVISION_CONFLICT','A partially adopted workflow was edited. Inspect it before retrying setup.',409);
-          this.engine.updatePipeline(existing.id,existing.revision,{...existing,...pipeline},actor);application.completed.push(index);this.save(item,'adoption.workflow_configured',actor);
+          this.engine.updatePipeline(existing.id,existing.revision,{...existing,...pipeline},actor,undefined,{origin:{kind:'adoption',adoptionId:item.id,revision:expectedRevision}});application.completed.push(index);this.save(item,'adoption.workflow_configured',actor);
         });
       }
       application.phase='indexing';application.knowledgeSync={status:'pending',at:at()};item.appliedFromRevision=expectedRevision;this.save(item,'adoption.indexing',actor);

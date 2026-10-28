@@ -1,0 +1,32 @@
+export type KnowledgePurpose='guidance'|'reference';
+export type KnowledgePurposeOrigin='owner'|'project-root-default'|'reference-default';
+export type KnowledgeReference={entryId:string;revision:number;hash:string;corpusId?:string};
+export type KnowledgeLocator=KnowledgeReference&{corpusId:string;chunkId:string;headingPath:string[];startLine:number;endLine:number;startOffset?:number;endOffset?:number};
+export type KnowledgeCaptureIssue={code:'SOURCE_MISSING'|'SOURCE_ERROR';sourceId:string;entryId:string;purpose:KnowledgePurpose;roles:string[];message:string};
+export type KnowledgeCorpusManifest={
+  id:string;projectId:string;projectRevision:number;contentHash:string;origin:'registered-live'|'legacy-frozen';governanceBoundary:'captured'|'legacy-unknown';captureStartedAt:string;captureCompletedAt:string;baseCorpusId?:string;
+  documents:{entryId:string;revision:number;hash:string;sourceId:string;sourcePath?:string;sourceRevision?:string;title:string;kind:string;roles:string[];purpose:KnowledgePurpose;purposeOrigin:KnowledgePurposeOrigin;sourceLineStart:number;characters:number}[];
+  issues:KnowledgeCaptureIssue[];
+};
+export type KnowledgeContextScope={projectId:string;corpusId:string;runId:string;stageId:string;attemptId:string;roleId:string};
+export type KnowledgeContextIntent={request:string;phase?:'coordinate'|'execute'|'review';baseline?:string;history?:unknown;reply?:string;execution?:Record<string,unknown>;stage?:{name:string;prompt:string;inputs?:string[];outputs?:string[];checks?:string[];executionPurpose?:'review'};upstream?:unknown[];feedback?:unknown[]};
+export type KnowledgeSelectionReason='REQUIRED_GUIDANCE'|'EXACT_PATH'|'EXACT_SYMBOL'|'TASK_TEXT'|'STAGE_CHECK'|'STAGE_CONTEXT'|'UPSTREAM_FINDING'|'DOCUMENT_DISCOVERY'|'SECTION_CONTEXT';
+export type KnowledgeSelection={id:string;title:string;revision:number;hash:string;content:string;locator:KnowledgeLocator;aliases:KnowledgeReference[];reasons:KnowledgeSelectionReason[]};
+export type KnowledgeContextGap={code:'GUIDANCE_MISSING'|'GUIDANCE_CONFLICT'|'GUIDANCE_OVERFLOW'|'REFERENCE_UNAVAILABLE'|'NO_RELEVANT_EVIDENCE'|'BUDGET_OMISSION'|'DISCOVERY_ONLY';entryIds:string[];message:string;locator?:KnowledgeLocator};
+export type KnowledgeContextPlan={
+  id:string;scope:KnowledgeContextScope;manifest:KnowledgeCorpusManifest;strategyVersion:string;tokenizerVersion:string;indexVersion:string;intentHash:string;
+  status:'ready'|'blocked';queryFacets:{task:string;stage:string;upstream:string};guidance:KnowledgeSelection[];evidence:KnowledgeSelection[];gaps:KnowledgeContextGap[];
+  budget:{limitChars:number;usedChars:number};omissions:{reason:'METADATA_ONLY'|'WEAK_BODY_MATCH'|'LOWER_RANK'|'DUPLICATE_TEXT'|'BUDGET';entryId:string;passages:number;characters:number}[];context:string;createdAt:string;
+};
+export type KnowledgeSearchInput={query?:string;role?:string;kind?:string;read?:KnowledgeLocator;cursor?:string;format?:'v2'};
+export type KnowledgeSearchPage={corpusId:string;matches:KnowledgeSelection[];total:number;nextCursor?:string;coverage:'matched'|'no-match'|'discovery'};
+export type KnowledgeReadPage={corpusId:string;passage:KnowledgeSelection;complete:boolean;next?:KnowledgeLocator};
+export type KnowledgeReadReceipt={id:string;at:string;kind:'search'|'read';query?:string;locators:KnowledgeLocator[]};
+export type KnowledgeContextRecord={plan:KnowledgeContextPlan;reads:KnowledgeReadReceipt[]};
+export type KnowledgeReadAccess={search:(input:KnowledgeSearchInput)=>Promise<KnowledgeSearchPage>;read:(locator:KnowledgeLocator)=>Promise<KnowledgeReadPage>};
+export type KnowledgeFeedbackInput={kind:'relevant'|'irrelevant'|'outdated'|'conflict';reference:KnowledgeReference;selectionId?:string;note?:string;evidence?:KnowledgeReference[]};
+export type KnowledgeFeedback=KnowledgeFeedbackInput&{id:string;projectId:string;at:string;actor:string;roleId?:string;originRunId?:string;status:'recorded'};
+export type KnowledgeRelationshipInput={kind:'supersedes'|'conflicts';from:KnowledgeReference;to:KnowledgeReference;note:string;evidence?:KnowledgeReference[];resolved?:boolean};
+export type KnowledgeRelationship=KnowledgeRelationshipInput&{id:string;projectId:string;at:string;actor:string;ownerConfirmed:true;revision:number};
+export type LessonProposal={status:'pending'|'retained'|'declined';at:string;actor:string;permission:'knowledge.write';roleId?:string;originRunId?:string;original:{title:string;content:string;hash:string;roles:string[]};review?:{at:string;actor:string;decision:'retain'|'decline';note?:string;evidence:KnowledgeReference[]}};
+export type LessonReviewInput={expectedRevision:number;expectedLifecycleRevision:number;decision:'retain'|'decline';title?:string;content?:string;roles?:string[];note?:string;evidence?:KnowledgeReference[]};

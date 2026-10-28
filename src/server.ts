@@ -10,6 +10,9 @@ import type {AllowanceTarget} from './account-allowance-types.ts';
 import {IntakeService} from './intake.ts';
 import {workspaceSummary} from './workspace.ts';
 import {AdoptionService,type AdoptionInput} from './adoption.ts';
+import {TemplateService} from './templates.ts';
+import type {ApplyTemplateInput,CreateTemplateInput,PreviewTemplateInput,RetireTemplateInput,ReviseTemplateInput} from './template-types.ts';
+import type {KnowledgeLocator} from './knowledge-context-types.ts';
 import {pipelineNeedsModel,projectReadiness} from './project-readiness.ts';
 import {requireWorkspaceReady} from './workspaces.ts';
 import {createCodexAdapter} from './adapters/codex.ts';
@@ -45,6 +48,7 @@ if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.
 engine.accountModelResolver=async(project,role)=>platform?platform.effectiveRoleModel(project,role):role.model??process.env.GWI_CODEX_MODEL??runtime.defaultModel??(await engine.codex.info()).models.find(model=>model.isDefault)?.id??null;
 const intakeService=new IntakeService(engine);
 const adoptionService=new AdoptionService(engine);adoptionService.recover();
+const templateService=new TemplateService(engine,platform?{saveRole:platform.saveRole.bind(platform)}:{});
 let integrationCache:{at:number;value:Promise<IntegrationInfo>}|null=null;
 function integrations():Promise<IntegrationInfo>{if(!integrationCache||Date.now()-integrationCache.at>30000)integrationCache={at:Date.now(),value:Promise.all([engine.codex.info(),engine.github.info(),platform?.connection()]).then(([codex,github,multica])=>({codex,github,...(multica?{multica}:{})}))};return integrationCache.value;}
 const origin=`http://127.0.0.1:${port}`;
@@ -87,8 +91,8 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     const context=method==='GET'?Object.fromEntries(url.searchParams):input,target=await accountTarget(context,actor);
     json(response,await engine.accountAllowances!.assess(target,{refresh:method==='POST'&&input.refresh===true}));return;
   }
-  if(route==='/api/overview'&&method==='GET'){json(response,{projects:engine.overview(actor),integrations:await integrations(),events:engine.store.events({limit:50})});return;}
-  if(route==='/api/workspace'&&method==='GET'){const projects=engine.overview(actor);json(response,workspaceSummary(projects,engine.store.list<Run>('run'),projects.flatMap(project=>intakeService.list(project.id)),engine.store.events({projectId:actor.projectId,limit:1})[0]?.seq??0));return;}
+  if(route==='/api/overview'&&method==='GET'){const connection=await integrations();json(response,engine.store.withReadView(()=>({projects:engine.overview(actor),integrations:connection,events:engine.store.events({limit:50})})));return;}
+  if(route==='/api/workspace'&&method==='GET'){json(response,engine.store.withReadView(()=>{const projects=engine.overview(actor);return workspaceSummary(projects,engine.store.list<Run>('run'),projects.flatMap(project=>intakeService.list(project.id)),engine.store.events({projectId:actor.projectId,limit:1})[0]?.seq??0);}));return;}
   if(route==='/api/integrations'&&method==='GET'){json(response,await integrations());return;}
   if(route==='/api/platform'&&method==='GET'){json(response,platform?await platform.connection():{connected:false,available:false,authenticated:false,error:{code:'MULTICA_NOT_CONFIGURED',message:'Connect the local Multica service.'}});return;}
   if(route==='/api/adoptions'&&method==='GET'){json(response,{adoptions:adoptionService.list(actor)});return;}
@@ -96,8 +100,15 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   const adoption=route.match(/^\/api\/adoptions\/([^/]+)(?:\/(apply))?$/);
   if(adoption){const id=decodeURIComponent(adoption[1]);if(!adoption[2]&&method==='GET'){json(response,adoptionService.get(id,actor));return;}if(adoption[2]==='apply'&&method==='POST'){json(response,await adoptionService.apply(id,Number(input.expectedRevision),actor));return;}}
   if(route==='/api/projects'&&method==='POST'){json(response,await engine.createProject(input as {name:string;workspace:string;description?:string;repository?:string},actor),201);return;}
+  if(route==='/api/templates'&&method==='GET'){json(response,{templates:templateService.list(actor)});return;}
+  if(route==='/api/templates'&&method==='POST'){json(response,templateService.create(input as CreateTemplateInput,actor),201);return;}
+  const template=route.match(/^\/api\/templates\/([^/]+)(?:\/revisions(?:\/(\d+))?)?$/);
+  if(template){const id=decodeURIComponent(template[1]);if(template[2]&&method==='GET'){json(response,templateService.revision(id,Number(template[2]),actor));return;}if(!template[2]&&route.endsWith('/revisions')&&method==='POST'){json(response,templateService.revise(id,input as ReviseTemplateInput,actor),201);return;}if(!template[2]&&method==='PATCH'){json(response,templateService.retire(id,input as RetireTemplateInput,actor));return;}}
   const project=route.match(/^\/api\/projects\/([^/]+)(?:\/(.*))?$/);
   if(project){const id=decodeURIComponent(project[1]),resource=project[2];
+    if(resource==='template-bindings'&&method==='GET'){json(response,templateService.bindings(id,actor));return;}
+    if(resource==='template-previews'&&method==='POST'){json(response,templateService.preview(id,input as PreviewTemplateInput,actor),201);return;}
+    const templateApply=resource?.match(/^template-previews\/([^/]+)\/apply$/);if(templateApply&&method==='POST'){json(response,await templateService.apply(id,decodeURIComponent(templateApply[1]),input as ApplyTemplateInput,actor));return;}
     if(resource?.startsWith('team')){
       demand(platform,'MULTICA_NOT_CONFIGURED','Connect the local Multica service before changing the execution team.',503);
       if(resource==='team'&&method==='GET'){json(response,await platform.team(id,actor));return;}
@@ -116,17 +127,21 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
       const skill=resource.match(/^team\/skills\/([^/]+)$/);
       if(skill){const skillId=decodeURIComponent(skill[1]);if(method==='GET'){json(response,await platform.skill(id,skillId,actor));return;}if(method==='PUT'){json(response,await platform.saveSkill(id,input,actor,skillId));return;}}
     }
-    if(!resource&&method==='GET'){json(response,{...engine.detail(id,actor),intakes:intakeService.list(id)});return;}
+    if(!resource&&method==='GET'){json(response,engine.store.withReadView(()=>({...engine.detail(id,actor),intakes:intakeService.list(id)})));return;}
     if(!resource&&method==='PUT'){json(response,await engine.updateProject(id,Number(input.expectedRevision),input.project as Project,actor));return;}
     if(resource==='readiness'&&method==='GET'){engine.detail(id,actor);json(response,await projectReadiness(engine.project(id),engine.store));return;}
     if(resource==='bindings'&&method==='PATCH'){demand(Object.keys(input).every(key=>key==='expectedRevision'||key==='bindings'),'INVALID_PROJECT_BINDINGS','Send the project revision and bindings only.');json(response,await engine.updateBindings(id,Number(input.expectedRevision),input.bindings as never,actor));return;}
     if(resource==='skills'&&method==='GET'){json(response,{skills:await engine.codex.skills(engine.project(id).workspace)});return;}
     if(resource==='knowledge/sync'&&method==='POST'){json(response,await engine.sync(id,actor));return;}
-    if(resource==='knowledge'&&method==='GET'){engine.detail(id,actor);const status=url.searchParams.get('status')??'current';demand(status==='current'||status==='archived','INVALID_KNOWLEDGE_STATUS','Choose current knowledge or archived lessons.');if(status==='archived')demand(!actor.projectId,'OWNER_REQUIRED','Archived lesson management requires the local owner token.',403);json(response,{entries:engine.search(id,url.searchParams.get('q')??'',url.searchParams.get('role')??undefined,url.searchParams.get('kind')??undefined,status)});return;}
+    if(resource==='knowledge'&&method==='GET'){engine.detail(id,actor);const status=url.searchParams.get('status')??'current';demand(['current','archived','proposed','declined'].includes(status),'INVALID_KNOWLEDGE_STATUS','Choose current knowledge or archived lessons.');if(status!=='current')demand(!actor.projectId,'OWNER_REQUIRED','Archived lesson management requires the local owner token.',403);json(response,{entries:engine.search(id,url.searchParams.get('q')??'',url.searchParams.get('role')??undefined,url.searchParams.get('kind')??undefined,status as 'current'|'archived'|'proposed'|'declined')});return;}
     if(resource==='knowledge/lessons'&&method==='POST'){json(response,engine.lesson(id,input as {title:string;content:string;roles?:string[];runId?:string},actor),201);return;}
+    if(resource==='knowledge/governance'&&method==='GET'){json(response,engine.knowledgeGovernance(id,actor));return;}
+    if(resource==='knowledge/feedback'&&method==='POST'){json(response,engine.knowledgeFeedback(id,input as Parameters<Engine['knowledgeFeedback']>[1],actor),201);return;}
+    if(resource==='knowledge/relationships'&&method==='POST'){json(response,engine.knowledgeRelationship(id,input as Parameters<Engine['knowledgeRelationship']>[1],actor),201);return;}
+    const lessonReview=resource?.match(/^knowledge\/lessons\/([^/]+)\/review$/);if(lessonReview&&method==='POST'){json(response,engine.reviewLesson(id,decodeURIComponent(lessonReview[1]),input as Parameters<Engine['reviewLesson']>[2],actor));return;}
     const lessonLifecycle=resource.match(/^knowledge\/lessons\/([^/]+)$/);if(lessonLifecycle&&method==='PATCH'){json(response,engine.setLessonLifecycle(id,decodeURIComponent(lessonLifecycle[1]),input as LessonLifecycleInput,actor));return;}
     if(resource==='revisions'&&method==='GET'){engine.project(id);json(response,{project:engine.store.list<{id:string;projectId:string}>('project-revision').filter(item=>item.projectId===id),pipelines:engine.store.list<{id:string;projectId:string}>('pipeline-revision').filter(item=>item.projectId===id)});return;}
-    if(resource==='intakes'&&method==='GET'){json(response,{intakes:intakeService.list(id)});return;}
+    if(resource==='intakes'&&method==='GET'){json(response,engine.store.withReadView(()=>({intakes:intakeService.list(id)})));return;}
     if(resource==='intakes'&&method==='POST'){engine.detail(id,actor);await engine.ensureExecutionReady(engine.project(id));json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
   }
   if(route==='/api/pipelines'&&method==='POST'){json(response,engine.createPipeline(input as {projectId:string;roleId:string;name?:string;description?:string;template?:string},actor),201);return;}
@@ -142,11 +157,13 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
       input.baseline=revision?`${project.repository||project.name} @ ${revision}`:`${project.name} · configuration ${project.revision}`;
     }
     const approval=input.approveAccountStep===true?await engine.approveAccountStep(await accountTarget({projectId:project.id,pipelineId:String(input.pipelineId)},actor),typeof input.accountAssessmentKey==='string'?input.accountAssessmentKey:undefined,actor):undefined;
-    json(response,engine.startRun(input as StartRunInput,actor,undefined,undefined,approval),201);return;
+    json(response,await engine.startRunWithContext(input as StartRunInput,actor,approval),201);return;
   }
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry|resume)$/);
   if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='resume'?intakeService.continueWork(id,actor,typeof input.note==='string'?{note:input.note}:{}):intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
+  if(run&&run[2]==='context'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);const stageId=url.searchParams.get('stage')??engine.run(id).snapshot.pipeline.stages[0]?.id??'';json(response,{context:engine.contextRecord(id,stageId,url.searchParams.get('attempt')??undefined)});return;}
+  if(run&&run[2]==='context/read'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.contextRead(id,String(input.stageId??''),typeof input.attemptId==='string'?input.attemptId:undefined,input.locator as KnowledgeLocator));return;}
   if(run&&run[2]==='recovery'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.recoveryWithAccount(id,url.searchParams.get('stageId')??undefined,actor,url.searchParams.get('resourceMode')==='account'));return;}
   if(run&&run[2]==='continue'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.continueWithAccount(id,input as ContinueRunInput,actor));return;}
   if(run&&run[2]==='resolve'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.resolveWaiting(id,input as ResolveRunInput,actor));return;}

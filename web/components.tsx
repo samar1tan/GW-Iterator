@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import type { Attempt, ControlTool, Executor, RoleProfile, WorkStatus } from '../src/contracts';
 import { APIError, errorText } from './api';
 import { useI18n } from './i18n';
 import type { MessageKey } from './locales/en';
 import {Icon, StateIcon} from './Icons';
+import {governanceErrorKeys} from './governanceErrorMessages';
 
 export function Button({ children, tone = 'default', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'default' | 'primary' | 'danger' | 'quiet' }) {
   return <button type="button" {...props} className={`button ${tone} ${className}`}>{children}</button>;
@@ -21,11 +23,15 @@ export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?
 export function ErrorNotice({ error }: { error: unknown }) {
   const { t } = useI18n();
   if (!error) return null;
-  const messageKeys:Record<string,MessageKey>={FOLLOWUP_NOT_READY:'followUpNotReady',INVALID_PARENT_INTAKE:'invalidParentIntake',CLARIFICATION_REPLY_REQUIRED:'clarificationReplyRequired',INVALID_PROJECT:'invalidProject',REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
+  const messageKeys:Record<string,MessageKey>={...governanceErrorKeys,FOLLOWUP_NOT_READY:'followUpNotReady',INVALID_PARENT_INTAKE:'invalidParentIntake',CLARIFICATION_REPLY_REQUIRED:'clarificationReplyRequired',INVALID_PROJECT:'invalidProject',REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
   const localizedKey=error instanceof APIError?messageKeys[error.code]:undefined;
   return <Notice tone="error"><div>{localizedKey?t(localizedKey):errorText(error)}</div>{error instanceof APIError && (localizedKey?<details><summary>{t('details')}</summary><code className="error-code">{error.code}</code><p>{errorText(error)}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details>:<><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>)}</Notice>;
 }
 export function Empty({ children }: { children: ReactNode }) { return <div className="empty">{children}</div>; }
+export function ModalPortal({children}:{children:ReactNode}) {
+  if(typeof document==='undefined')return children;
+  return createPortal(<div className="pf-platform" style={{display:'contents'}}>{children}</div>,document.body);
+}
 export function Modal({ title, children, footer, onClose, wide = false, busy = false }: { title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean; busy?: boolean }) {
   const { t } = useI18n(); const titleId = useId(); const dialog = useRef<HTMLElement>(null);
   const opener = useRef<HTMLElement | null>(typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -36,7 +42,7 @@ export function Modal({ title, children, footer, onClose, wide = false, busy = f
     return () => { document.body.style.overflow = previousOverflow; if (previousFocus?.isConnected) previousFocus.focus(); };
   }, []);
   useEffect(() => { if (busy) dialog.current?.focus(); }, [busy]);
-  return <div className="modal-scrim" onMouseDown={event => { if (!busy && event.target === event.currentTarget) onClose(); }}><section ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-busy={busy || undefined} aria-labelledby={titleId} className={`modal ${wide ? 'wide' : ''}`} onKeyDown={event => {
+  return <ModalPortal><div className="modal-scrim" onMouseDown={event => { if (!busy && event.target === event.currentTarget) onClose(); }}><section ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-busy={busy || undefined} aria-labelledby={titleId} className={`modal ${wide ? 'wide' : ''}`} onKeyDown={event => {
     if (event.key === 'Escape') { event.preventDefault(); if (!busy) onClose(); }
     if (event.key === 'Tab') {
       const targets = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]') ?? []).filter(element => element.getClientRects().length > 0 && !element.closest('[inert]'));
@@ -46,7 +52,7 @@ export function Modal({ title, children, footer, onClose, wide = false, busy = f
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
-  }}><header className="modal-header"><h2 id={titleId}>{title}</h2>{busy&&<span className="modal-progress" role="status">{t('processing')}</span>}<Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div>{footer&&<footer className="modal-footer" inert={busy}>{footer}</footer>}</section></div>;
+  }}><header className="modal-header"><h2 id={titleId}>{title}</h2>{busy&&<span className="modal-progress" role="status">{t('processing')}</span>}<Button tone="quiet" disabled={busy} onClick={onClose} aria-label={t('close')}><Icon name="close"/></Button></header><div className="modal-content" inert={busy}>{children}</div>{footer&&<footer className="modal-footer" inert={busy}>{footer}</footer>}</section></div></ModalPortal>;
 }
 export function Status({ value }: { value: WorkStatus }) {
   const { t } = useI18n(); return <span className={`status status-${value}`}><StateIcon status={value}/>{t(value === 'waiting' ? 'waitingStatus' : value)}</span>;

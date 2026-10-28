@@ -1,4 +1,31 @@
 export const en = {
+  knowledgeReviewInputError:'Check the review choice, versions, evidence and note.',templateRequirementsInputError:'Check the template’s declared access and tools.',
+
+  knowledgePreparationError:"Required project guidance needs attention. Inspect Sources used and open Knowledge; this attempt stopped before model dispatch.",
+  knowledgeMetadataError:"This source’s title or headings are too large for a bounded lookup. Shorten them or select a smaller source section.",
+  knowledgeVersionError:"This source version changed. Refresh and review its current evidence before saving.",
+  knowledgeLocationError:"This location does not match the frozen source. Refresh the recorded selection.",
+  knowledgeScopeError:"Choose a source from this project and execution basis.",
+  knowledgeEntryError:"This knowledge entry is unavailable. Refresh the list.",
+  knowledgeQueryError:"Search again within the current frozen source set.",
+  knowledgeFeedbackError:"Check the selected source version and feedback note.",
+  knowledgeRelationshipError:"Choose two exact source versions and describe their relationship.",
+  knowledgeReviewError:"This proposal is no longer awaiting this review. Refresh its recorded state.",
+  knowledgeRetainedError:"Archive and restore apply to retained lessons. Review a proposal first.",
+  templateStaleError:"The project or preview changed. Refresh the preview before applying.",
+  templateMissingError:"This template revision is unavailable. Refresh the library.",
+  templateRetiredError:"This template is retired. Existing pinned work remains available.",
+  templateBlockedError:"Resolve the listed conflicts and missing bindings before applying.",
+  templateSourceError:"The source definition changed or was removed. Select its current version.",
+  templateResolutionError:"Choose a listed project or template value, then review the preview again.",
+  templateTargetError:"Choose a compatible role or pipeline in this project.",
+  templateCapabilityError:"The project role does not meet this template’s requirements. Review its capabilities in Team.",
+  templateApplyError:"The update was not applied. Inspect the failure and refresh the preview.",
+
+  workflowBasis:'Workflow basis',workflowOrigin:'Definition source',workflowSelection:'Selected by',workflowUnknownOrigin:'Not recorded for this version',workflowBuiltin:'Starter workflow',workflowManual:'Owner creation',workflowCopy:'Independent copy',workflowAdoption:'Project adoption',workflowTemplate:'Reusable template',workflowImport:'Owner import',workflowProposal:'Reviewed proposal',workflowChosenManually:'You',workflowChosenOwnerApi:'Owner API',workflowChosenTool:'Project agent',workflowChosenCoordinator:'Coordinator',workflowChosenDependency:'Parent workflow',
+
+  proposed:'Pending review',declined:'Declined',knowledgePurpose:'Context use',knowledgePurposeAutomatic:'Automatic',knowledgePurposeHelp:'Required guidance is included in full; references are selected for the task. Automatic uses guidance only for the project’s root AGENTS.md.',knowledgeReference:'Reference',knowledgeGuidance:'Required guidance',knowledgeProposals:'Proposed lessons',knowledgeDeclined:'Declined lessons',knowledgeRetain:'Retain lesson',knowledgeDecline:'Decline',knowledgeReview:'Review lesson',knowledgeProposalHelp:'This suggestion is excluded from new tasks until you retain it.',knowledgeReviewNote:'Review note',knowledgeReviewRecorded:'Your review is saved.',knowledgePastRevision:'Historical version r{revision}',knowledgeFeedback:'Source feedback',knowledgeFeedbackKind:'Finding',knowledgeFeedbackRelevant:'Useful',knowledgeFeedbackIrrelevant:'Not relevant',knowledgeFeedbackOutdated:'Outdated',knowledgeFeedbackConflict:'Conflicting evidence',knowledgeFeedbackNote:'Evidence or note',knowledgeFeedbackRecorded:'Feedback recorded.',knowledgeResolve:'Mark resolved',knowledgeRelationships:'Source relationships',knowledgeSupersededBy:'Superseded by',knowledgeSupersedes:'Supersedes',knowledgeConflicts:'Conflicts with',knowledgeRelationshipTarget:'Related entry',knowledgeRelationshipConfirm:'Record relationship',knowledgeRelationshipHelp:'Confirmed conflicts between required guidance block only the affected roles. Historical task context stays unchanged.',knowledgeRelationshipRecorded:'Relationship recorded.',knowledgeNoProposals:'No lessons awaiting review.',knowledgeNoDeclined:'No declined lessons match these filters.',
+
   archived:'Archived', archivedLessons:'Archived lessons', archiveLesson:'Archive lesson', restoreLesson:'Restore lesson', lessonArchived:'Archived lesson: {title}', lessonRestored:'Restored lesson: {title}', archivedLessonHelp:'Excluded from new work. Its text and earlier uses are retained.', lessonLifecycleRecorded:'The change to “{title}” is saved. Refresh to observe its current state.', lessonLifecycleDetails:'Observation details', noArchivedLessons:'No archived lessons match these filters.',
   followUpNotReady:'The previous work has not finished. Wait for its result before following up.',invalidParentIntake:'The previous result is unavailable. Refresh and try again.',clarificationReplyRequired:'Reply to the question before continuing.',
   intakeAnswered:'Answered', directAnswer:'Answer', retainedGoalResult:'Generated result',

@@ -1,0 +1,12 @@
+import {useState} from 'react';
+import type {ReactNode} from 'react';
+import type {TemplateDefinition,TemplateHead,TemplateRevision,TemplateSource} from '../../src/template-types';
+import {api,uid} from '../api';
+import {Field,Modal} from '../components';
+import {useCopy} from './copy';
+
+export function TemplateDefinitionEditor({source,sourceName,revision,head,description,renderEditor,onSaved,onClose}:{source?:TemplateSource;sourceName?:string;revision?:TemplateRevision;head?:TemplateHead;description:string;renderEditor:(save:(definition:TemplateDefinition)=>Promise<void>)=>ReactNode;onSaved:(value:{template:TemplateHead;revision:TemplateRevision})=>void;onClose:()=>void}){
+  const{p}=useCopy(),[purpose,setPurpose]=useState(revision?.purpose??description),[useWhen,setUseWhen]=useState(revision?.useWhen??''),[avoidWhen,setAvoidWhen]=useState(revision?.avoidWhen??''),[summary,setSummary]=useState(''),[busy,setBusy]=useState(false),[key]=useState(uid);
+  const save=async(definition:TemplateDefinition)=>{if(busy)return;setBusy(true);try{const value=await api<{template:TemplateHead;revision:TemplateRevision}>(revision?`/api/templates/${encodeURIComponent(revision.templateId)}/revisions`:'/api/templates',{method:'POST',body:{...(revision?{expectedRecordRevision:head!.recordRevision}:{source}),definition,purpose,useWhen:useWhen||undefined,avoidWhen:avoidWhen||undefined,changeSummary:summary||(revision?p('templateDefaultChange'):p('templateSavedFrom',{name:sourceName??definition.name})),idempotencyKey:key}});onSaved(value);onClose();}finally{setBusy(false)}};
+  return <Modal wide busy={busy} title={p(revision?'editTemplate':'saveAsTemplate')} onClose={onClose}><div className="pf-template-editor"><details className="pf-template-guidance"><summary>{p('templateGuidance')}</summary><div className="form-stack"><Field label={p('templatePurpose')}><textarea rows={2} value={purpose} onChange={event=>setPurpose(event.target.value)}/></Field><Field label={p('templateUseWhen')}><textarea rows={2} value={useWhen} onChange={event=>setUseWhen(event.target.value)}/></Field><Field label={p('templateAvoidWhen')}><textarea rows={2} value={avoidWhen} onChange={event=>setAvoidWhen(event.target.value)}/></Field><Field label={p('templateChangeSummary')}><input value={summary} placeholder={revision?p('templateDefaultChange'):sourceName?p('templateSavedFrom',{name:sourceName}):undefined} onChange={event=>setSummary(event.target.value)}/></Field></div></details>{renderEditor(save)}</div></Modal>;
+}

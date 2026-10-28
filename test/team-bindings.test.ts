@@ -17,7 +17,7 @@ test('role template bindings preserve inheritance, explicit selections and unkno
   await t.test('observed inherited selections are visible, and the first edit starts from all of them',()=>{
     for(const locale of ['en','zh-CN']){
       const html=render('skillIds',role,observation,library,locale);
-      assert.equal((html.match(/checked=""/g)??[]).length,2);assert.ok(html.includes(locale==='en'?'Inherited from template':'继承模板绑定'));
+      assert.equal((html.match(/checked=""/g)??[]).length,2);assert.ok(html.includes(locale==='en'?'From the connected agent':'沿用已连接代理的设置'));
     }
     const added=editRoleBinding(role,'skillIds','synthetic-skill-c',true,observation);
     assert.deepEqual(added.multica.skillIds,['synthetic-skill-a','synthetic-skill-b','synthetic-skill-c']);
@@ -36,7 +36,7 @@ test('role template bindings preserve inheritance, explicit selections and unkno
     const explicit={...role,multica:{...role.multica,skillIds:[],mcpServerIds:[]}};
     assert.deepEqual(effectiveRoleBindingIds(explicit,'skillIds',observation),[]);assert.deepEqual(effectiveRoleBindingIds(explicit,'mcpServerIds',observation),[]);
     assert.equal((render('skillIds',explicit,observation).match(/checked=""/g)??[]).length,0);
-    assert.ok(!render('skillIds',explicit,observation).includes('Inherited from template'));
+    assert.ok(!render('skillIds',explicit,observation).includes('From the connected agent'));
     assert.deepEqual(JSON.parse(JSON.stringify(explicit)).multica.skillIds,[]);
   });
 
@@ -55,7 +55,7 @@ test('role template bindings preserve inheritance, explicit selections and unkno
     for(const locale of ['en','zh-CN']){
       const unknown={agentId:'synthetic-template',error:new Error('Synthetic template unavailable')};
       const html=render('skillIds',role,unknown,library,locale);
-      assert.ok(html.includes(locale==='en'?'Inheritance is retained.':'已保留继承设置。'));assert.ok(!html.includes('type="checkbox"'));
+      assert.ok(html.includes(locale==='en'?'Inheritance is retained.':'已保留沿用设置。'));assert.ok(!html.includes('type="checkbox"'));
       assert.ok(!html.includes(locale==='en'?'No skills are bound':'此角色尚未绑定技能'));
       assert.equal(editRoleBinding(role,'skillIds','synthetic-skill-c',true,unknown),role);
     }

@@ -1,0 +1,12 @@
+.knowledge-governance {border-block:1px solid var(--border,#30363d);padding-block:14px;margin-block:18px;display:grid;gap:12px;min-width:0}
+.knowledge-governance > details > summary {font-size:.85rem;color:var(--muted,#9198a1);cursor:pointer}
+.knowledge-governance .notice {margin:0;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.knowledge-governance .actions {margin-block:12px}
+.knowledge-governance pre {max-height:320px;overflow:auto;overflow-wrap:anywhere}
+.knowledge-relationship {padding-block:12px;border-top:1px solid var(--border,#30363d);display:grid;gap:6px;min-width:0;overflow-wrap:anywhere}
+.knowledge-relationship p {margin:0}
+.knowledge-relationship .button {justify-self:start}
+.pf-workflow-basis {margin-block:8px 18px;color:var(--muted,#9198a1);font-size:.85rem}
+.pf-workflow-basis > summary {display:flex;gap:8px;align-items:center;cursor:pointer;list-style:none}
+.pf-workflow-basis[open] > summary {margin-bottom:12px}
+.pf-workflow-basis p {margin-block:6px;max-width:75ch;overflow-wrap:anywhere}

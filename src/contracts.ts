@@ -1,4 +1,6 @@
 import type {AllowanceAssessment} from './account-allowance-types.ts';
+import type {DefinitionOrigin} from './template-types.ts';
+import type {KnowledgePurpose,KnowledgePurposeOrigin,LessonProposal} from './knowledge-context-types.ts';
 export const EXECUTORS = ['manual', 'codex', 'github', 'pipeline'] as const;
 export type Executor = typeof EXECUTORS[number];
 export type WorkStatus = 'queued' | 'running' | 'waiting' | 'review' | 'paused' | 'skipped' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
@@ -15,8 +17,9 @@ export type RoleProfile = {
   skills: {name: string; path: string}[]; tools: ControlTool[];
   inputs?:string[]; outputs?:string[]; checks?:string[]; retired?:boolean;
   multica?:{agentId?:string;runtimeId?:string;skillIds?:string[];mcpServerIds?:string[]};
+  origin?:DefinitionOrigin; templateBindingId?:string;
 };
-export type KnowledgeSource = {id: string; kind: 'document' | 'artifact' | 'memory'; path: string; roles: string[]; section?: string};
+export type KnowledgeSource = {id: string; kind: 'document' | 'artifact' | 'memory'; path: string; roles: string[]; section?: string; purpose?:KnowledgePurpose};
 export type Project = {
   id: string; revision: number; name: string; description: string; workspace: string; repository: string;
   roles: RoleProfile[]; knowledgeSources: KnowledgeSource[]; createdAt: string; updatedAt: string;
@@ -41,12 +44,13 @@ export type Stage = {
   options?: {repository?: string; workflow?: string; ref?: string; runId?: number; mode?: 'observe' | 'dispatch'; pipelineId?: string};
 };
 export type RunPolicy = {concurrency: number; maxAttempts: number; maxIterations: number; timeoutSeconds: number; tokenBudget: number};
-export type Pipeline = {id: string; projectId: string; revision: number; name: string; description: string; roleId: string; stages: Stage[]; policy: RunPolicy; updatedAt: string};
+export type Pipeline = {id: string; projectId: string; revision: number; name: string; description: string; roleId: string; stages: Stage[]; policy: RunPolicy; updatedAt: string; origin?:DefinitionOrigin;templateBindingId?:string};
 export type KnowledgeEntry = {
   id: string; projectId: string; sourceId: string; kind: KnowledgeSource['kind'] | 'lesson'; roles: string[];
   title: string; content: string; hash: string; revision: number; sourcePath?: string; sourceRevision?: string;
-  syncedAt: string; status: 'current' | 'missing' | 'error' | 'archived'; error?: string; errorCode?: 'SOURCE_CONFIGURATION_CHANGED'; originRunId?: string;
+  syncedAt: string; status: 'current' | 'missing' | 'error' | 'archived' | 'proposed' | 'declined'; error?: string; errorCode?: 'SOURCE_CONFIGURATION_CHANGED'; originRunId?: string;
   lifecycleRevision?: number;
+  purpose?:KnowledgePurpose; purposeOrigin?:KnowledgePurposeOrigin; sourceLineStart?:number; proposal?:LessonProposal;
 };
 export type LessonLifecycleInput = {expectedRevision:number;expectedLifecycleRevision:number;archived:boolean};
 export type Artifact = {label: string; path?: string; url?: string};
@@ -66,20 +70,23 @@ export type Attempt = {
   allowanceExecutionId?:string; allowanceFinishedAt?:string; allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING';
   provider?:'codex'|'multica'|'github'|'manual';
   nativeConfiguration?: {model?:string; modelProvider?:string; reasoningEffort?:string|null; serviceTier?:string|null};
+  knowledgeContextId?:string;
   review?: {decision: 'accept' | 'revise'; note: string; actor: string; at: string};
 };
 export type StageRun = {stageId: string; status: WorkStatus; attempts: Attempt[];resumeChildRunId?:string;childInputInvalidated?:boolean;allowanceHold?:{code:string;assessmentKey?:string}};
 export type Trigger = {kind: 'human' | 'agent' | 'loop' | 'replay'; actor: string};
+export type WorkflowSelection={method:'manual'|'owner-api'|'agent-tool'|'coordinator'|'dependency';pipeline:{id:string;revision:number};reason?:string;sourceRunId?:string;intakeId?:string;decisionRound?:number};
 export type Run = {
   executionKind?: 'native-goal'|'agent-goal';
   id: string; projectId: string; pipelineId: string; goal: string; baseline: string; trigger: Trigger;
   status: WorkStatus; iteration: number; mode: 'once' | 'loop'; createdAt: string; updatedAt: string; endedAt?: string;
   dependsOnRunIds: string[]; parentRunId?: string; parentStageId?: string; idempotencyKey: string; inputHash: string;
   pausedAt?:string;
-  snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]; conversation?: IntakeConversation};
+  snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]; conversation?: IntakeConversation;knowledgeCorpusId?:string};
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
   continuationDeclined?:{at:string;actor:string;note:string};
   recoveryOfRunId?:string;
+  selection?:WorkflowSelection;
   approvedPolicy?: RunPolicy;
   resourceMode?:'account'|'tokens';
   accountApprovals?:AccountStepApproval[];controlRevision?:number;
