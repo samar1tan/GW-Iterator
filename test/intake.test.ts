@@ -613,6 +613,48 @@ async function plannerFixture(t: TestContext) {
   return {...h, planner};
 }
 
+test('ordinary work recovery resumes confirmed connected coordinators without pipeline-stage reconciliation',async t=>{
+  for(const failure of ['preparation','terminal'] as const)await t.test(failure,async sub=>{
+    const h=await plannerFixture(sub),start=h.planner.start.bind(h.planner);let starts=0,reconciliations=0;
+    h.engine.goalPlanner={async start(input){
+      starts++;
+      if(starts>1)return start(input);
+      if(failure==='preparation'){
+        h.engine.store.put('multica-execution',{id:'synthetic-preparation-'+input.executionId,projectId:input.project.id,runId:input.executionId,stageId:'decision-1',status:'not_dispatched',cleanupConfirmed:true});
+        throw new AppError('RUNTIME_EXECUTION_POLICY_REQUIRED','Synthetic runtime update is required before assignment.',409);
+      }
+      const execution=await start(input);
+      return{...execution,completion:execution.completion.then(()=>{throw new AppError('SYNTHETIC_RESULT_REJECTED','The terminal synthetic result requires owner correction.',409);})};
+    }};
+    h.engine.reconcileExternal=async()=>{reconciliations++;return{status:'unknown',cleanupConfirmed:false};};
+    const item=create(h);
+    if(failure==='terminal')h.planner.calls[0].completion.resolve({decision:directAnswer()});
+    await pump(h,()=>current(h,item).status==='failed'&&current(h,item).canRetry===true,'the confirmed connected failure');
+    const previous=structuredClone(h.engine.run(item.routerRunId)),evidence=structuredClone(h.engine.store.list('multica-execution'));
+    const first=h.intake.continueWork(item.id,OWNER,{note:'Continue after correcting the synthetic runtime prerequisite.'}),second=h.intake.continueWork(item.id,OWNER);
+    assert.equal(first.workRecoveryHistory!.at(-1)!.id,second.workRecoveryHistory!.at(-1)!.id);
+    await pump(h,()=>starts===2&&current(h,item).workRecoveryHistory?.at(-1)?.phase==='completed','one resumed coordinator');
+    assert.equal(reconciliations,0);assert.equal(h.codex.tasks.length,0);assert.deepEqual(h.engine.run(previous.id),previous);
+    assert.equal(current(h,item).workRecoveryHistory!.length,1);assert.equal(current(h,item).supervisorRunIds!.length,2);
+    for(const record of evidence as {id:string}[])assert.deepEqual(h.engine.store.get('multica-execution',record.id),record);
+    h.planner.calls.at(-1)!.completion.resolve({decision:directAnswer()});
+    await pump(h,()=>current(h,item).status==='completed','the resumed answer');assert.equal(starts,2);
+  });
+});
+
+test('ordinary connected recovery retains unknown coordinator termination as a blocker',async t=>{
+  const h=await plannerFixture(t),start=h.planner.start.bind(h.planner);let reconciliations=0;
+  h.engine.goalPlanner={async start(input){const execution=await start(input);return{...execution,completion:execution.completion.then(value=>{
+    const record=h.engine.store.get<{id:string;cleanupConfirmed:boolean}>('multica-execution',input.executionId)!;record.cleanupConfirmed=false;h.engine.store.put('multica-execution',record);return value;
+  })};}};
+  h.engine.reconcileExternal=async()=>{reconciliations++;return{status:'unknown',cleanupConfirmed:false};};
+  const item=create(h);h.planner.calls[0].completion.resolve({decision:directAnswer()});
+  await pump(h,()=>current(h,item).status==='failed','the unknown coordinator termination');
+  h.intake.continueWork(item.id,OWNER);await pump(h,()=>reconciliations===1,'exact coordinator reconciliation');
+  assert.equal(current(h,item).workRecoveryHistory!.at(-1)!.phase,'checking');assert.equal(h.planner.calls.length,1);assert.equal(h.codex.tasks.length,0);
+  assert.equal(h.engine.store.get<{cleanupConfirmed:boolean}>('multica-execution',item.routerRunId)!.cleanupConfirmed,false);
+});
+
 test('new native and connected intake capture live sources once and share exact frozen lookup through their real inputs',async t=>{
   for(const mode of ['native','connected'] as const)await t.test(mode,async sub=>{
     const h=mode==='native'?await fixture(sub):await plannerFixture(sub),file=path.join(h.project.workspace,'receipt-guide.md');
