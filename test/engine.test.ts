@@ -172,6 +172,46 @@ test('new knowledge templates propose an owner-reviewed lesson without changing 
   for(const original of before)assert.deepEqual(h.engine.pipeline(original.id),original);assert.equal(h.codex.calls.length,0);
 });
 
+test('new owner entry captures registered live sources once while idempotent receipts and old context stay frozen',async t=>{
+  const h=await fixture(t);let p=await project(h);const document=path.join(h.workspace,'README.md');await writeFile(document,'# Receipt guide\nFIRST_LIVE_VERSION');
+  p=await h.engine.updateProject(p.id,p.revision,{...p,knowledgeSources:[{id:'live-reference',path:document,kind:'document',roles:[]}]},OWNER);
+  const flow=pipeline(h,p,[stage('accept',[],{executor:'manual'})]),input={projectId:p.id,pipelineId:flow.id,goal:'Inspect live registered evidence.',baseline:'Synthetic baseline.',idempotencyKey:'synthetic-live-first'};
+  const first=await h.engine.startRunWithContext(input,OWNER);assert.ok(first.snapshot.knowledgeCorpusId);assert.ok(first.snapshot.knowledge[0].content.includes('FIRST_LIVE_VERSION'));
+  const snapshot=structuredClone(first.snapshot);await writeFile(document,'# Receipt guide\nSECOND_LIVE_VERSION');
+  const repeated=await h.engine.startRunWithContext(input,OWNER);assert.equal(repeated.id,first.id);assert.deepEqual(repeated.snapshot,snapshot,'An acknowledged start does not recapture changed files.');
+  const second=await h.engine.startRunWithContext({...input,idempotencyKey:'synthetic-live-second'},OWNER);assert.ok(second.snapshot.knowledge[0].content.includes('SECOND_LIVE_VERSION'));assert.notEqual(second.snapshot.knowledgeCorpusId,first.snapshot.knowledgeCorpusId);assert.deepEqual(h.engine.run(first.id).snapshot,snapshot);assert.equal(h.codex.calls.length,0);
+});
+
+test('a child subset keeps captured relationship authority instead of joining later live governance',async t=>{
+  const h=await fixture(t);let p=await project(h);await writeFile(path.join(h.workspace,'first.md'),'Preserve ACK_AUTHORITY.');await writeFile(path.join(h.workspace,'second.md'),'Keep ACK_AUTHORITY.');await writeFile(path.join(h.workspace,'reference.md'),'An optional reference.');
+  p=await h.engine.updateProject(p.id,p.revision,{...p,knowledgeSources:[{id:'first',path:path.join(h.workspace,'first.md'),kind:'document',roles:[],purpose:'guidance'},{id:'second',path:path.join(h.workspace,'second.md'),kind:'document',roles:[],purpose:'guidance'},{id:'reference',path:path.join(h.workspace,'reference.md'),kind:'document',roles:[]}]},OWNER);const flow=pipeline(h,p,[stage('accept',[],{executor:'manual'})]);
+  const parent=await h.engine.startRunWithContext({projectId:p.id,pipelineId:flow.id,goal:'Inspect ACK_AUTHORITY.',baseline:'Synthetic baseline.',idempotencyKey:'synthetic-authority-parent'},OWNER),guides=parent.snapshot.knowledge.filter(item=>item.purpose==='guidance'),reference=(item:KnowledgeEntry)=>({entryId:item.id,revision:item.revision,hash:item.hash});
+  h.engine.knowledgeRelationship(p.id,{kind:'conflicts',from:reference(guides[0]),to:reference(guides[1]),note:'A later owner-confirmed synthetic conflict.'},OWNER);
+  const child=h.engine.startRun({projectId:p.id,pipelineId:flow.id,goal:parent.goal,baseline:parent.baseline,idempotencyKey:'synthetic-authority-child',parentRunId:parent.id,knowledgeIds:[guides[0].id]},OWNER,parent.snapshot),corpus=h.engine.knowledgeContext.corpus(child.snapshot.knowledgeCorpusId!,p.id);assert.notEqual(corpus.id,parent.snapshot.knowledgeCorpusId);assert.equal(corpus.relationships.length,0);assert.equal(corpus.manifest.captureStartedAt,h.engine.knowledgeContext.corpus(parent.snapshot.knowledgeCorpusId!,p.id).manifest.captureStartedAt);assert.equal(child.snapshot.knowledge.length,2,'A child cannot omit applicable required guidance.');
+  const plan=h.engine.knowledgeContext.select({projectId:p.id,corpusId:corpus.id,runId:child.id,stageId:'accept',attemptId:'synthetic-inspection',roleId:'development'},{request:parent.goal});assert.equal(plan.status,'ready');assert.equal(h.codex.calls.length,0);
+});
+
+test('missing and oversized applicable guidance stop a worker before adapter dispatch with a recorded context manifest',async t=>{
+  for(const mode of ['missing','oversized'] as const)await t.test(mode,async sub=>{
+    const h=await fixture(sub);let p=await project(h);const guide=path.join(h.workspace,'AGENTS.md');if(mode==='oversized')await writeFile(guide,'FIRST_REQUIRED_RULE\n'+'Preserve every exact execution reference.\n'.repeat(1500)+'LAST_REQUIRED_RULE');
+    p=await h.engine.updateProject(p.id,p.revision,{...p,knowledgeSources:[{id:'required-guide',path:guide,kind:'document',roles:['development']}]},OWNER);const flow=pipeline(h,p,[stage('work')]);
+    const run=await h.engine.startRunWithContext({projectId:p.id,pipelineId:flow.id,goal:'Use the approved guidance.',baseline:'Synthetic source state.',idempotencyKey:randomUUID()},OWNER);
+    await pump(h,()=>h.engine.run(run.id).status==='failed','guidance preflight failure');assert.equal(h.codex.calls.length,0);const attempt=state(h.engine.run(run.id),'work').attempts[0],record=h.engine.contextRecord(run.id,'work')!;
+    assert.equal(attempt.nativeDispatchState,'not_dispatched');assert.equal(record.plan.status,'blocked');assert.ok(record.plan.gaps.some(gap=>gap.code===(mode==='missing'?'GUIDANCE_MISSING':'GUIDANCE_OVERFLOW')));if(mode==='oversized')assert.ok(record.plan.guidance.some(item=>item.content.includes('LAST_REQUIRED_RULE')));
+  });
+});
+
+test('worker-authored lessons require an exact owner review and declined proposals cannot use archive restore',async t=>{
+  const h=await fixture(t),p=await project(h),writer:Actor={name:'development',kind:'agent',projectId:p.id,tools:['knowledge.write']};
+  const proposal=h.engine.lesson(p.id,{title:'Proposed receipt lesson',content:'Original proposed body.',roles:['development']},writer);assert.equal(proposal.status,'proposed');assert.equal(h.engine.search(p.id,'receipt').length,0);
+  assert.throws(()=>h.engine.reviewLesson(p.id,proposal.id,{expectedRevision:1,expectedLifecycleRevision:0,decision:'retain'},writer),errorCode('OWNER_REQUIRED'));
+  const retained=h.engine.reviewLesson(p.id,proposal.id,{expectedRevision:1,expectedLifecycleRevision:0,decision:'retain',content:'Owner-revised supported body.',note:'Reviewed against the recorded synthetic observation.'},OWNER);
+  assert.equal(retained.status,'current');assert.equal(retained.revision,2);assert.equal(retained.proposal?.original.content,'Original proposed body.');assert.equal(retained.proposal?.review?.actor,OWNER.name);assert.equal(h.engine.search(p.id,'supported')[0].id,retained.id);
+  assert.throws(()=>h.engine.reviewLesson(p.id,proposal.id,{expectedRevision:1,expectedLifecycleRevision:0,decision:'decline'},OWNER),errorCode('LESSON_REVIEW_REQUIRED'));
+  const declined=h.engine.lesson(p.id,{title:'Declined receipt proposal',content:'Unsupported claim.'},writer);h.engine.reviewLesson(p.id,declined.id,{expectedRevision:1,expectedLifecycleRevision:0,decision:'decline'},OWNER);
+  assert.throws(()=>h.engine.setLessonLifecycle(p.id,declined.id,{expectedRevision:1,expectedLifecycleRevision:1,archived:false},OWNER),errorCode('LESSON_REQUIRED'));assert.equal(h.engine.search(p.id,'claim').length,0);assert.equal(h.codex.calls.length,0);
+});
+
 test('run-specific owner approval freezes its allowance without editing the saved workflow',async t=>{
   const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('delivery',[],{executor:'manual'})]);
   const key=randomUUID(),run=start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:2000,timeoutSeconds:60}});
@@ -500,7 +540,7 @@ test('project, pipeline and knowledge revisions stay frozen for a run and its la
   assert.match(h.codex.calls[0].input.role.instructions, /Original synthetic child instructions/);
   assert.doesNotMatch(h.codex.calls[0].input.role.instructions, /Updated synthetic child instructions/);
   assert.match(h.codex.calls[0].input.prompt, /Original synthetic child instructions/);
-  assert.match(h.codex.calls[0].input.prompt, /Original synthetic knowledge/);
+  assert.deepEqual(child.snapshot.knowledge,frozen.knowledge);
   assert.doesNotMatch(h.codex.calls[0].input.prompt, /Updated synthetic knowledge/);
   const knowledge = await h.codex.calls[0].input.onTool('knowledge.search', {query: 'Original'});
   assert.equal((knowledge as KnowledgeEntry[])[0].revision, 1);
@@ -514,7 +554,8 @@ test('project, pipeline and knowledge revisions stay frozen for a run and its la
   assert.ok(h.codex.calls[1].input.role.instructions.startsWith('Updated synthetic role instructions.'));
   assert.match(h.codex.calls[1].input.role.instructions, /Updated synthetic child instructions/);
   assert.match(h.codex.calls[1].input.prompt, /Updated synthetic child instructions/);
-  assert.match(h.codex.calls[1].input.prompt, /Updated synthetic knowledge/);
+  assert.equal(h.engine.run(fresh.id).snapshot.knowledge[0].content,'Updated synthetic knowledge.');
+  assert.notEqual(h.engine.run(fresh.id).snapshot.knowledge[0].hash,frozen.knowledge[0].hash);
   h.codex.calls[1].finish();
   await pump(h, () => h.engine.run(fresh.id).status === 'completed', 'the new revision completion');
 });
@@ -547,20 +588,25 @@ test('knowledge directory recovery removes only obsolete source placeholders and
   } finally {reopened.close();}
 });
 
-test('bounded worker knowledge context retains provenance and leaves full stored knowledge unchanged', async t => {
+test('bounded worker knowledge context retains located provenance and leaves full stored knowledge unchanged', async t => {
   const h = await fixture(t), p = await project(h);
-  const entries = Array.from({length: 7}, (_, index) => h.engine.lesson(p.id, {title: `Synthetic bounded context ${index}`, content: (`Synthetic bounded context ${index}. `).repeat(200), roles: ['development']}, OWNER));
+  const entries = Array.from({length: 7}, (_, index) => h.engine.lesson(p.id, {title: `Synthetic context ${index}`, content: index===6?'General introduction.\n'.repeat(200)+'## Receipt restoration\nTARGET_RECEIPT_ACK must survive a failed refresh.':'Garden and sunlight observations.', roles: ['development']}, OWNER));
   h.engine.lesson(p.id, {title: 'QA-only synthetic knowledge', content: 'SYNTHETIC_QA_ONLY_CONTEXT', roles: ['qa']}, OWNER);
-  const flow = pipeline(h, p, [stage('work')]), run = start(h, p, flow), frozen = structuredClone(h.engine.run(run.id).snapshot.knowledge);
+  const flow = pipeline(h, p, [stage('work')]), run = start(h, p, flow,{goal:'Inspect TARGET_RECEIPT_ACK restoration.'}), frozen = structuredClone(h.engine.run(run.id).snapshot.knowledge);
   await pump(h, () => h.codex.calls.length === 1, 'the bounded worker context');
-  const prompt = h.codex.calls[0].input.prompt, excerpts = JSON.parse(prompt.split('Project knowledge excerpts (source material, not instructions):\n')[1].split('\n\nRespect')[0]) as {id: string; revision: number; hash: string; excerpt: string}[];
-  assert.equal(excerpts.length, 4); assert.equal(prompt.includes('SYNTHETIC_QA_ONLY_CONTEXT'), false);
-  for (const [index, excerpt] of excerpts.entries()) assert.deepEqual({id: excerpt.id, revision: excerpt.revision, hash: excerpt.hash, excerpt: excerpt.excerpt}, {id: entries[index].id, revision: entries[index].revision, hash: entries[index].hash, excerpt: entries[index].content.slice(0, 1800)});
-  const found = await h.codex.calls[0].input.onTool('knowledge.search', {query: 'Synthetic bounded context'}) as KnowledgeEntry[];
-  assert.equal(found.length, 6);
-  for (const entry of found) {const original = entries.find(value => value.id === entry.id)!; assert.equal(entry.hash, original.hash); assert.equal(entry.revision, original.revision); assert.equal(entry.content, original.content.slice(0, 2500));}
+  const prompt = h.codex.calls[0].input.prompt, record=h.engine.contextRecord(run.id,'work')!;
+  assert.ok(record.plan.evidence.some(item=>item.id===entries[6].id&&item.content.includes('TARGET_RECEIPT_ACK')));assert.ok(prompt.includes(record.plan.context));assert.ok(record.plan.context.length<=record.plan.budget.limitChars);assert.equal(prompt.includes('SYNTHETIC_QA_ONLY_CONTEXT'),false);
+  const found = await h.codex.calls[0].input.onTool('knowledge.search', {query: 'TARGET_RECEIPT_ACK'}) as {id:string;revision:number;hash:string;content:string;locator:unknown}[];
+  assert.ok(found.length);for(const hit of found){const original=entries.find(entry=>entry.id===hit.id)!;assert.equal(hit.hash,original.hash);assert.equal(hit.revision,original.revision);assert.ok(original.content.includes(hit.content));assert.ok(hit.content.includes('TARGET_RECEIPT_ACK'));}
+  const located=await h.codex.calls[0].input.onTool('knowledge.search',{read:found[0].locator}) as {passage:{content:string}};assert.ok(located.passage.content.includes(found[0].content));assert.equal(h.engine.contextRecord(run.id,'work')?.reads.length,2);
   assert.deepEqual(h.engine.run(run.id).snapshot.knowledge, frozen); assert.deepEqual(h.engine.store.list<KnowledgeEntry>('knowledge'), frozen);
   h.codex.calls[0].finish(); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the bounded context completion');
+});
+
+test('a retained worker tool callback records lookup against its own attempt rather than a later retry selection',async t=>{
+  const h=await fixture(t),p=await project(h);h.engine.lesson(p.id,{title:'Receipt retry contract',content:'ACK_ATTEMPT belongs to one exact attempt.',roles:['development']},OWNER);const flow=pipeline(h,p,[stage('work')]),run=start(h,p,flow,{goal:'Inspect ACK_ATTEMPT.'});await pump(h,()=>h.codex.calls.length===1,'the first context');const firstCall=h.codex.calls[0],firstAttempt=state(h.engine.run(run.id),'work').attempts[0],first=h.engine.contextRecord(run.id,'work',firstAttempt.id)!;
+  firstCall.completion.reject(new Error('Synthetic preparation mismatch.'));await pump(h,()=>h.engine.run(run.id).status==='failed','the known first failure');h.engine.retry(run.id,'work','Inspect the changed synthetic finding.',OWNER);await pump(h,()=>h.codex.calls.length===2,'the second context');const second=h.engine.contextRecord(run.id,'work')!;assert.notEqual(first.plan.id,second.plan.id);
+  const found=await firstCall.input.onTool('knowledge.search',{query:'ACK_ATTEMPT',format:'v2'}) as {corpusId:string};assert.equal(found.corpusId,first.plan.scope.corpusId);assert.equal(h.engine.contextRecord(run.id,'work',firstAttempt.id)!.reads.length,1);assert.equal(h.engine.contextRecord(run.id,'work')!.reads.length,0);h.codex.calls[1].finish();
 });
 
 test('configuration CAS, history and idempotency reject conflicting edits without duplicating work', async t => {
@@ -611,8 +657,8 @@ test('restart preserves review/manual waits, marks native work interrupted and r
   const reviewFlow = pipeline(h, p, [stage('reviewed', [], {review: true})]);
   const external = start(h, p, externalFlow), manual = start(h, p, manualFlow), reviewed = start(h, p, reviewFlow);
   await pump(h, () => h.codex.calls.length === 2, 'two original native tasks');
-  const externalCall = h.codex.calls.find(call => call.input.prompt.includes('Stage: Synthetic external'))!;
-  const reviewCall = h.codex.calls.find(call => call.input.prompt.includes('Stage: Synthetic reviewed'))!;
+  const externalCall = h.codex.calls.find(call => call.ref.threadId===state(h.engine.run(external.id),'external').attempts[0].ref?.threadId)!;
+  const reviewCall = h.codex.calls.find(call => call.ref.threadId===state(h.engine.run(reviewed.id),'reviewed').attempts[0].ref?.threadId)!;
   externalCall.input.onEvent({type: 'synthetic.usage', message: 'Synthetic native usage report.', usage: {input: 11, output: 4, total: 15}, ref: externalCall.ref});
   reviewCall.finish(result('Synthetic evidence awaits review.'));
   await pump(h, () => h.engine.run(reviewed.id).status === 'review', 'the preserved review');
@@ -666,7 +712,7 @@ test('explicit outcome branches handle revise/blocked, propagate skipped paths a
     for (const id of ['unused', 'unused-follow']) {assert.equal(state(selected, id).status, 'skipped'); assert.equal(state(selected, id).attempts.length, 0);}
     h.engine.completeManual(run.id, 'handle', result('Recorded the concrete branch resolution.'), OWNER);
     await pump(h, () => h.codex.calls.length === 2, 'the live-path merge');
-    assert.match(h.codex.calls[1].input.prompt, /Stage: Synthetic merge/);
+    assert.ok(h.codex.calls[1].input.prompt.includes(h.engine.contextRecord(run.id,'merge')!.plan.context));
     h.codex.calls[1].finish(); await pump(h, () => h.engine.run(run.id).status === 'completed', 'the handled outcome completion');
     assert.equal(state(h.engine.run(run.id), 'inspect').attempts.length, 1);
   });

@@ -21,11 +21,13 @@ Codex already supports goals, skills, review and subagents. It provides the reas
 | Start and adapt | Describe a goal; let Codex plan, delegate and adapt in the conversation. | Describe an outcome for the coordinator to choose existing workflows, or run a saved pipeline directly. Decisions and progress stay recorded. |
 | Supervise | Read chat and agent activity, inspect changes, and steer the next action. | Follow named stages, owners, handoffs, artifacts and pending human decisions in one workbench. |
 | Check and deliver | Ask Codex for checks/review and follow your project's acceptance and publication process. | Configured verification and human gates organize evidence, revision requests and delivery decisions. |
-| Reuse and recover | Reuse instructions and skills; resume or fork a conversation to continue work. | Reuse versioned roles, pipelines and selected knowledge. Keep earlier attempts and check external progress before continuing failed work. |
+| Reuse and recover | Reuse instructions and skills; resume or fork a conversation to continue work. | Reuse pinned role/workflow templates with reviewed project updates and task-selected knowledge. Keep earlier attempts and check external progress before continuing failed work. |
 
-Use Codex directly for a focused fix or exploration with less setup. Choose GWI when repeatable work needs several handoffs or regular human review. GWI requires local GWI/Multica services and adds coordination/context overhead; faster or cheaper completion still needs measurement.
+Use Codex directly for a focused fix or exploration with less setup. Choose GWI when repeatable work needs several handoffs or regular human review. GWI requires local GWI/Multica services and adds coordination/context overhead. In [two small maintenance comparisons](docs/acceptance/context-and-template-governance.md#bounded-provider-comparison), both routes passed the same external checks; GWI used more time and dispatches for coordination and independent QA.
 
 Native capability references: [Codex goals, review and skills](https://learn.chatgpt.com/docs/app-server#api-overview), [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+Template revisions, project choices and execution snapshots stay separate. Updates have a semantic preview; source guidance and selected passages retain their exact locations. See the [knowledge contract](docs/knowledge-context-prd.md) and [template contract](docs/template-governance-prd.md).
 
 ## Run locally
 
@@ -51,7 +53,7 @@ The [setup guide](docs/multica-setup.md) covers prerequisites, native permission
 - **Workbench** shows current outcomes, pending decisions and delivered artifacts. A general request can coordinate several saved workflows.
 - **Pipelines** contains reusable definitions and executions. The visual editor supports dependencies, conditions, human gates, child pipelines and bounded return paths. A focused change starts with implementation, independent QA and delivery review.
 - **Team** connects role contracts to actual agents, skills, MCP tools and runtimes. Role changes create revisions; older runs keep their basis.
-- **Knowledge** indexes selected documents, artifacts, memory sections and verified lessons with provenance.
+- **Knowledge** selects positioned evidence from registered documents, artifacts, memory sections and reviewed lessons. Inspect the actual frozen sources used by each execution.
 - **Settings** holds project bindings and deliberate configuration changes.
 
 Starts and continuations use Codex account availability and recent comparable task trends, without asking for a token estimate. Shared-account observations are ranges, not exact task charges; absent history stays explicit.

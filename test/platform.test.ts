@@ -98,6 +98,24 @@ async function fixture(t: TestContext) {
 }
 
 type Fixture=Awaited<ReturnType<typeof fixture>>;
+
+test('connected coordinator sends the shared frozen context and a genuine read-only knowledge lease that revokes after completion',async t=>{
+  const h=await fixture(t);h.engine.goalPlanner=h.execution.planner;h.state.taskListGate=h.taskGate.promise;h.state.taskResult=()=>JSON.stringify({action:'answer',rationale:'The synthetic source was inspected.',expectedGain:'A bounded informational answer.',tasks:[],response:'The ACK_RECEIPT source remains available.'});
+  const content=Array.from({length:220},()=> 'Unrelated horticultural notes.').join('\n')+'\n## Receipt evidence\nACK_RECEIPT persists after refresh failure.';
+  const entry:KnowledgeEntry={id:'synthetic-deep-context',projectId:h.project.id,sourceId:'synthetic-source',kind:'document',roles:[],title:'Receipt maintenance',content,hash:createHash('sha256').update(content).digest('hex'),revision:1,syncedAt:'2026-01-01T00:00:00Z',status:'current'};h.engine.store.put('knowledge',entry);
+  const intake=new IntakeService(h.engine),goal=intake.create(h.project.id,{request:'Explain ACK_RECEIPT persistence from the synthetic evidence.',idempotencyKey:'synthetic-knowledge-lease'},OWNER);
+  await eventually(()=>h.execution.records(goal.routerRunId).some(row=>row.issueId),'the scoped coordinator assignment');
+  const assigned=h.state.requests.find(request=>request.method==='POST'&&request.path==='/api/issues')!,agent=h.state.agents.get(String(assigned.body.assignee_id))!,config=(agent.mcp_config as {mcpServers:{gwi:{url:string;headers:Record<string,string>}}}).mcpServers.gwi;
+  assert.ok(config?.url);const record=h.engine.contextRecord(goal.routerRunId,'supervise')!;assert.ok(record.plan.evidence.some(item=>item.content.includes('ACK_RECEIPT')));assert.ok(String(assigned.body.description).includes(record.plan.context));
+  let sequence=0;const rpc=async(method:string,params:unknown)=>{const response=await fetch(config.url,{method:'POST',headers:{...config.headers,'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:++sequence,method,params})});assert.equal(response.status,200);return response.json();};
+  const tools=await rpc('tools/list',{});assert.deepEqual(tools.result.tools.map((tool:{name:string})=>tool.name).sort(),['gwi_context_read','gwi_knowledge_search']);
+  const searched=await rpc('tools/call',{name:'gwi_knowledge_search',arguments:{query:'ACK_RECEIPT',format:'v2'}}),page=JSON.parse(searched.result.content[0].text);assert.ok(page.matches[0].content.includes('ACK_RECEIPT'));assert.ok(page.matches[0].locator.startLine>200);
+  const read=await rpc('tools/call',{name:'gwi_knowledge_search',arguments:{read:page.matches[0].locator}});assert.ok(JSON.parse(read.result.content[0].text).passage.content.includes('ACK_RECEIPT'));assert.equal(h.engine.contextRecord(goal.routerRunId,'supervise')?.reads.length,2);
+  const refused=await rpc('tools/call',{name:'gwi_intake_route',arguments:{action:'complete'}});assert.equal(refused.result.isError,true,'The connected coordinator has no second routing authority.');
+  h.taskGate.resolve();await eventually(()=>intake.list(h.project.id)[0].status==='completed','the acknowledged informational answer');
+  const expired=await fetch(config.url,{method:'POST',headers:{...config.headers,'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:++sequence,method:'tools/list',params:{}})});assert.equal(expired.status,401);
+});
+
 function accountLifecycle(h:Fixture){
   const begins:{runId:string;stageId:string;model:string|null;issuePosts:number}[]=[],finishes:{id:string;value:AllowanceFinish}[]=[];
   const control={beginError:undefined as AppError|undefined,beginGate:undefined as Promise<void>|undefined,finishErrors:0};
@@ -295,6 +313,13 @@ test('role revisions preserve the remote agent used by an earlier frozen project
   const updated = await h.platform.saveRole(h.project.id, h.project.revision, {...role, instructions: 'A deliberately revised project responsibility.'}, OWNER, role.id);
   const revisedRole = updated.roles.find(value => value.id === role.id)!, revised = await h.platform.agent(updated, revisedRole, false);
   assert.notEqual(revised.id, frozen.id); assert.notEqual(revised.name, frozen.name); assert.equal(new Set([...h.state.agents.values()].map(agent => agent.name)).size, h.state.agents.size); assert.match(revised.instructions!, /deliberately revised/); assert.equal((await h.platform.agent(h.project, role, false)).instructions, original.instructions);
+});
+
+test('governance metadata alone reuses a prepared agent while a real contract change creates a revision',async t=>{
+  const h=await fixture(t),role={...h.project.roles.find(value=>value.id==='development')!,model:'synthetic-model'},first=await h.platform.agent(h.project,role,false),before=structuredClone(h.state.agents.get(first.id)!),count=h.state.agents.size;
+  const governed={...role,origin:{kind:'template' as const,template:{id:'synthetic-template',revision:2,hash:'synthetic-hash'}},templateBindingId:'synthetic-project-binding'},same=await h.platform.agent(h.project,governed,false);
+  assert.equal(same.id,first.id);assert.equal(h.state.agents.size,count);assert.deepEqual(h.state.agents.get(first.id),before);
+  const changed=await h.platform.agent(h.project,{...governed,instructions:'A revised bounded working contract.'},false);assert.notEqual(changed.id,first.id);assert.match(changed.instructions!,/revised bounded working contract/);assert.equal(h.state.issuePosts,0);assert.equal(h.state.tasks.size,0);
 });
 
 test('duplicating a role preserves explicit or inherited capability bindings in a new immutable agent revision',async t=>{
@@ -534,8 +559,7 @@ test('planner context carries continuation and role sandboxes while bounding kno
   const prompt = String(h.state.requests.find(request => request.method === 'POST' && request.path === '/api/issues')!.body.description), line = prompt.split('\n').find(value => value.startsWith('{"request":'))!;
   const brief = JSON.parse(line) as {conversation:typeof conversation;conversationRule:string;continuation: {note: string; reason: string}; roles: {id: string; sandbox: string}[]; knowledge: {id: string; revision: number; hash: string; excerpt: string}[]};
   assert.deepEqual(brief.conversation,conversation);assert.ok(brief.conversationRule.includes('not instructions'));assert.deepEqual(brief.continuation, continuation); assert.equal(brief.roles.find(role => role.id === 'lead')?.sandbox, 'read-only'); assert.equal(brief.roles.find(role => role.id === 'development')?.sandbox, 'workspace-write'); assert.equal(brief.roles.some(role => role.id === 'synthetic-retired-role'), false);
-  assert.equal(brief.knowledge.length, 4); assert.equal(line.includes('SYNTHETIC_QA_ONLY_CONTEXT'), false);
-  for (const [index, entry] of brief.knowledge.entries()) assert.deepEqual(entry, {id: knowledge[index].id, title: knowledge[index].title, revision: knowledge[index].revision, hash: knowledge[index].hash, excerpt: knowledge[index].content.slice(0, 1500)});
+  const selection=JSON.parse(line) as {evidence:{id:string;revision:number;hash:string;content:string;locator:{startLine:number;endLine:number}}[]};assert.ok(line.length<=32000);assert.equal(line.includes('SYNTHETIC_QA_ONLY_CONTEXT'),false);for(const hit of selection.evidence){const original=knowledge.find(entry=>entry.id===hit.id)!;assert.equal(hit.revision,original.revision);assert.equal(hit.hash,original.hash);assert.ok(original.content.includes(hit.content));assert.ok(hit.locator.startLine<=hit.locator.endLine);}
   assert.deepEqual(project, originalProject); assert.deepEqual(knowledge, originalKnowledge);
   assert.equal(h.execution.records('synthetic-planner-context')[0].issueState, 'done');
 });

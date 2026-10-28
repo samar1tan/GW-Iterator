@@ -51,7 +51,7 @@ A connection badge, animated stage or successful process is not proof of ongoing
 
 Roles are configurable working contracts: responsibility, inputs, expected outputs, acceptance checks, capabilities and handoffs. Initial roles are reusable templates, not a fixed seven-role product limit. Bind them to real Multica agents/runtimes and actual installed capabilities; show availability and assignments truthfully.
 
-Support creating, duplicating, changing, retiring and importing teams/roles. Project overrides inherit explicit defaults. Model/effort, skills/tools, approved knowledge and effective permissions remain inspectable but are not mandatory ordinary start fields. Historical work retains its original references and basis.
+Support creating, duplicating, changing, retiring and importing teams/roles. Reusable template revisions, project bindings/overrides and frozen execution are distinct layers; the governance revision below defines controlled inheritance. Model/effort, skills/tools, approved knowledge and effective permissions remain inspectable but are not mandatory ordinary start fields. Historical work retains its original references and basis.
 
 A role must be able to reference what it consumed and hand a concrete result to the next role. Changing a name or prompt alone does not demonstrate an operational team.
 
@@ -126,3 +126,8 @@ The native values `low`, `medium`, `high`, `xhigh`, `max`, `ultra` round-trip th
 Acceptance requires focused tests for new defaults, max/ultra validation and adapter pass-through, supported choices and locale-independent labels, plus typecheck and build. Independent QA exercises the three editors in English and Simplified Chinese. The supervising owner applies Max to active roles through the UI after delivery; this implementation does not change them. No paid model probes or publication are required. See [official model and reasoning guidance](https://learn.chatgpt.com/docs/agent-configuration/subagents#choosing-models-and-reasoning).
 
 The current [ownership and first-use cleanup](human-workbench-prd.md#ownership-and-first-use-debt-cleanup) gives project bindings, roles and knowledge sources separate editors, joins adoption to initial indexing, and reports committed-source readiness before paid work. Keep configuration compatibility and historical execution evidence intact.
+
+
+## Context and reusable-definition governance
+
+The [knowledge-context PRD](knowledge-context-prd.md) replaces first-document/prefix injection across all execution adapters. The [template-governance PRD](template-governance-prd.md) defines source/applicability records and explicit revision upgrades with project-owned choices. Their [interaction contract](platform-governance-ued.md), [architecture decisions](architecture/context-and-template-governance.md) and [acceptance plan](acceptance/governance-validation-plan.md) govern this iteration. Design documents are requirements until the corresponding implementation and evidence are recorded; they do not establish completed capability.

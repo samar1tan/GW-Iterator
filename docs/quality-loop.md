@@ -32,3 +32,10 @@ After the walk-through, remove accumulated copy, duplicated explanations and obs
 ## Waiting is a decision surface
 
 A blocked task needs its applicable action beside the state: approve/reject, retry/do not retry, manual result/review, resume or a named dependency. Show a usable instruction field when the next execution can consume it. Model-free checks belong behind the requested action; do not require a person to refresh, interpret a recommendation and find another retry entry. Routine observation expiry is background work, while genuine account exhaustion, changed scope and unconfirmed external termination remain authoritative. A confirmed receipt protects against older observations but must yield to a newer failure, Stop or completed outcome. Test rapid failure between polls and historical failed actions after goal completion.
+
+## Preserve configuration meaning through reuse
+
+- Keep logical role/target slots distinct from actual bindings and stage IDs. Test many-to-one role mappings, custom target-slot IDs and local target edits followed by an unrelated template update. A reverse lookup must not silently reassign work.
+- Treat explicit ownership separately from value equality. Preserve coincident overrides, absent versus inherited defaults and real project values. Preview the changing responsibility/defaults and show only unresolved conflicts as needing a decision.
+- Commit the reviewed definition, binding and receipt together. Failed reads cannot replay Apply or discard its acknowledgement. Resolve the active binding by identity, not the first historical record for that object; keep creation provenance separate from its current template source.
+- Exclude only non-executable origin and binding-record metadata from execution identity. A metadata-only change must reuse its prepared agent; changed instructions or actual model/capability settings must still produce the appropriate immutable execution revision.

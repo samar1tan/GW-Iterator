@@ -1,9 +1,12 @@
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
-import type { KnowledgeEntry, KnowledgeSource, KnowledgeSyncResult, Project } from './contracts.ts';
+import type { Actor, KnowledgeEntry, KnowledgeSource, KnowledgeSyncResult, Project } from './contracts.ts';
+import type {Store} from './store.ts';
+import {demand,isObject,text} from './validation.ts';
+import type {KnowledgeFeedback,KnowledgeFeedbackInput,KnowledgeReference,KnowledgeRelationship,KnowledgeRelationshipInput,LessonReviewInput} from './knowledge-context-types.ts';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
@@ -111,7 +114,7 @@ function markdownHeadings(content: string): Heading[] {
   return headings;
 }
 
-function selectContent(content: string, source: KnowledgeSource, path: string): { content: string; title: string } {
+function selectContent(content: string, source: KnowledgeSource, path: string): { content: string; title: string; sourceLineStart:number } {
   const headings = extname(path).toLowerCase() === '.md' ? markdownHeadings(content) : [];
   if (source.section !== undefined) {
     if (extname(path).toLowerCase() !== '.md') throw new SourceError('A section selector requires a Markdown file.');
@@ -120,9 +123,9 @@ function selectContent(content: string, source: KnowledgeSource, path: string): 
     if (matches.length > 1) throw new SourceError('The selected Markdown section is ambiguous.');
     const heading = matches[0];
     const end = headings.find(next => next.line > heading.line && next.level <= heading.level)?.line;
-    return { content: content.split('\n').slice(heading.line, end).join('\n').trimEnd(), title: heading.title };
+    return { content: content.split('\n').slice(heading.line, end).join('\n').trimEnd(), title: heading.title,sourceLineStart:heading.line+1 };
   }
-  return { content: content.trimEnd(), title: headings[0]?.title || basename(path) };
+  return { content: content.trimEnd(), title: headings[0]?.title || basename(path),sourceLineStart:1 };
 }
 
 async function readText(path: string, root: string, budget: { bytes: number }, explicitWorkflowArtifact = false): Promise<{ text: string; sourcePath: string }> {
@@ -171,7 +174,8 @@ async function readText(path: string, root: string, budget: { bytes: number }, e
 }
 
 /** Synchronize only explicitly registered sources; callers persist the returned state. */
-export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]): Promise<KnowledgeSyncResult> {
+export async function syncKnowledge(project: Project, previous: KnowledgeEntry[],options:{signal?:AbortSignal}={}): Promise<KnowledgeSyncResult> {
+  options.signal?.throwIfAborted();
   const syncedAt = new Date().toISOString();
   const stats: KnowledgeSyncResult['stats'] = { added: 0, changed: 0, unchanged: 0, missing: 0, errors: 0 };
   const projectPrevious = previous.filter(entry => entry.projectId === project.id);
@@ -180,8 +184,12 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
   for (const entry of projectPrevious.filter(entry => entry.kind === 'lesson')) result.set(entry.id, { ...entry, roles: [...entry.roles] });
   const configuredSources = new Set(project.knowledgeSources.map(source => source.id));
   const homeRoot = await realpath(homedir()).catch(() => resolve(homedir()));
+  const workspaceRoot=await realpath(project.workspace).catch(()=>resolve(project.workspace));
 
   for (const source of project.knowledgeSources) {
+    options.signal?.throwIfAborted();
+    const rootGuides=new Set([resolve(project.workspace,'AGENTS.md'),resolve(workspaceRoot,'AGENTS.md')]);
+    const purpose=(filename:string)=>({purpose:source.purpose??(rootGuides.has(resolve(filename))?'guidance' as const:'reference' as const),purposeOrigin:source.purpose?'owner' as const:rootGuides.has(resolve(filename))?'project-root-default' as const:'reference-default' as const});
     const declaredRoot = resolve(project.workspace, source.path);
     const sourcePrevious = projectPrevious.filter(entry => entry.sourceId === source.id && entry.kind !== 'lesson');
     const seen = new Set<string>();
@@ -198,7 +206,7 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
         title: prior?.title || source.section || basename(path), content: prior?.content || '',
         hash: prior?.hash || hashContent(''), revision: prior?.revision || 1,
         sourcePath: prior?.sourcePath || path, sourceRevision: prior?.sourceRevision,
-        syncedAt, status: error.missing ? 'missing' : 'error', error: error.message,
+        syncedAt, status: error.missing ? 'missing' : 'error', error: error.message,...purpose(prior?.sourcePath??path),sourceLineStart:prior?.sourceLineStart??1,
       };
       result.set(id, entry);
       seen.add(id);
@@ -207,8 +215,10 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
 
     async function indexFile(path: string, sourceRelativePath: string, root: string): Promise<void> {
       try {
+        options.signal?.throwIfAborted();
         if (isCredentialPath(path)) throw new SourceError('Credential and runtime configuration files cannot be indexed.');
         const read = await readText(path, root, budget, sourceRelativePath === '.' && source.kind === 'artifact' && isWorkflowFile(path));
+        options.signal?.throwIfAborted();
         const selected = selectContent(read.text, source, path);
         const id = entryId(project.id, source.id, sourceRelativePath);
         const prior = previousById.get(id);
@@ -217,12 +227,13 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
           id, projectId: project.id, sourceId: source.id, kind: source.kind, roles: [...roles],
           title: selected.title, content: selected.content, hash,
           revision: prior ? prior.revision + Number(prior.hash !== hash) : 1,
-          sourcePath: read.sourcePath, sourceRevision: `sha256:${hash}`, syncedAt, status: 'current',
+          sourcePath: read.sourcePath, sourceRevision: `sha256:${hashContent(read.text)}`, syncedAt, status: 'current',sourceLineStart:selected.sourceLineStart,...purpose(read.sourcePath),
         };
         result.set(id, entry);
         seen.add(id);
         stats[!prior ? 'added' : prior.hash === hash ? 'unchanged' : 'changed']++;
       } catch (error) {
+        options.signal?.throwIfAborted();
         const problem = readableError(error);
         if (problem.incomplete) throw problem;
         retainFailure(path, sourceRelativePath, problem);
@@ -316,17 +327,17 @@ export async function syncKnowledge(project: Project, previous: KnowledgeEntry[]
     const rightKey = `${right.sourceId}\0${right.sourcePath || ''}\0${right.id}`;
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
-  return { entries, stats };
+  options.signal?.throwIfAborted();return { entries, stats };
 }
 
 /** Search current project entries with deterministic, Unicode-aware substring matching. */
-export function searchKnowledge(entries: KnowledgeEntry[], query: string, role?: string, kind?: string, status:'current'|'archived'='current'): KnowledgeEntry[] {
+export function searchKnowledge(entries: KnowledgeEntry[], query: string, role?: string, kind?: string, status:'current'|'archived'|'proposed'|'declined'='current'): KnowledgeEntry[] {
   const normalize = (text: string): string => text.normalize('NFKC').toLowerCase();
   const phrase = normalize(query).trim();
   const terms = phrase.split(/\s+/).filter(Boolean);
   return entries
     .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => (status==='archived'?entry.kind==='lesson'&&entry.status==='archived':entry.status==='current')
+    .filter(({ entry }) => (status==='current'?entry.status==='current':entry.kind==='lesson'&&entry.status===status)
       && (!role || entry.roles.length === 0 || entry.roles.includes(role))
       && (!kind || entry.kind === kind))
     .map(({ entry, index }) => {
@@ -341,4 +352,46 @@ export function searchKnowledge(entries: KnowledgeEntry[], query: string, role?:
     .filter(result => result.matches)
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .map(result => result.entry);
+}
+
+function knowledgeReference(store:Store,projectId:string,value:unknown):KnowledgeReference{
+  demand(isObject(value)&&text(value.entryId,160)&&Number.isSafeInteger(value.revision)&&Number(value.revision)>0&&text(value.hash,160)&&(value.corpusId===undefined||text(value.corpusId,160)),'INVALID_KNOWLEDGE_REFERENCE','Name an exact entry revision and hash.');
+  const reference=value as KnowledgeReference;
+  const corpus=reference.corpusId?store.get<{manifest:{projectId:string};entries:KnowledgeEntry[]}>('knowledge-corpus',reference.corpusId):null;
+  const entry=reference.corpusId?(corpus?.manifest.projectId===projectId?corpus.entries.find(entry=>entry.projectId===projectId&&entry.id===reference.entryId):undefined):store.get<KnowledgeEntry>('knowledge',reference.entryId);
+  demand(entry&&entry.projectId===projectId&&entry.revision===reference.revision&&entry.hash===reference.hash,'KNOWLEDGE_REFERENCE_CHANGED','This evidence is unavailable or belongs to another revision/project.',409);
+  return{entryId:reference.entryId,revision:reference.revision,hash:reference.hash,...(reference.corpusId?{corpusId:reference.corpusId}:{})};
+}
+export function effectiveKnowledgeRelationships(values:KnowledgeRelationship[]):KnowledgeRelationship[]{
+  const result=new Map<string,KnowledgeRelationship>();
+  for(const value of values){const refs=[JSON.stringify([value.from.entryId,value.from.revision,value.from.hash]),JSON.stringify([value.to.entryId,value.to.revision,value.to.hash])];if(value.kind==='conflicts')refs.sort();const key=JSON.stringify([value.kind,...refs]);const prior=result.get(key);if(!prior||value.revision>prior.revision)result.set(key,value);}
+  return[...result.values()];
+}
+export function recordKnowledgeFeedback(store:Store,projectId:string,input:KnowledgeFeedbackInput,actor:Actor,origin?:{runId:string;roleId:string}):KnowledgeFeedback{
+  demand(isObject(input)&&['relevant','irrelevant','outdated','conflict'].includes(input.kind)&&(!input.note||text(input.note,4000))&&(input.selectionId===undefined||text(input.selectionId,160)),'INVALID_KNOWLEDGE_FEEDBACK','Describe relevance, obsolescence or conflict with bounded evidence.');
+  demand(input.evidence===undefined||Array.isArray(input.evidence)&&input.evidence.length<=20,'INVALID_KNOWLEDGE_FEEDBACK','Keep the evidence list bounded.');const reference=knowledgeReference(store,projectId,input.reference),evidence=(input.evidence??[]).map(value=>knowledgeReference(store,projectId,value));
+  if(input.selectionId){const selection=store.get<{plan:{scope:{projectId:string;runId:string}}}>('knowledge-context',input.selectionId);demand(selection?.plan.scope.projectId===projectId&&(!origin||selection.plan.scope.runId===origin.runId),'KNOWLEDGE_SCOPE','Use a selection from this originating work.',403);}
+  const result:KnowledgeFeedback={id:randomUUID(),projectId,at:new Date().toISOString(),actor:actor.name,status:'recorded',kind:input.kind,reference,evidence,...(input.note?{note:input.note}:{}),...(input.selectionId?{selectionId:input.selectionId}:{}),...(origin?{originRunId:origin.runId,roleId:origin.roleId}:{})};
+  store.transaction(()=>{store.put('knowledge-feedback',result);store.event({projectId,runId:origin?.runId??null,stageId:null,type:'knowledge.feedback',actor:actor.name,message:'Evidence-linked knowledge feedback recorded; no frozen context or ranking was changed.',data:{feedbackId:result.id,kind:result.kind,reference}});});return result;
+}
+export function recordKnowledgeRelationship(store:Store,projectId:string,input:KnowledgeRelationshipInput,actor:Actor):KnowledgeRelationship{
+  demand(!actor.projectId,'OWNER_REQUIRED','Knowledge relationships require owner review.',403);demand(isObject(input)&&['supersedes','conflicts'].includes(input.kind)&&(input.resolved===undefined||typeof input.resolved==='boolean'),'INVALID_KNOWLEDGE_RELATIONSHIP','Name an explicit supersession or conflict.');
+  const from=knowledgeReference(store,projectId,input.from),to=knowledgeReference(store,projectId,input.to);demand(from.entryId!==to.entryId||from.revision!==to.revision||from.hash!==to.hash,'INVALID_KNOWLEDGE_RELATIONSHIP','Relate two different retained versions.');
+  const same=(a:KnowledgeReference,b:KnowledgeReference)=>a.entryId===b.entryId&&a.revision===b.revision&&a.hash===b.hash;
+  const prior=effectiveKnowledgeRelationships(store.list<KnowledgeRelationship>('knowledge-relationship').filter(item=>item.projectId===projectId)).find(item=>item.kind===input.kind&&(same(item.from,from)&&same(item.to,to)||input.kind==='conflicts'&&same(item.from,to)&&same(item.to,from)));
+  const note=input.note??prior?.note;demand(text(note,4000),'INVALID_KNOWLEDGE_RELATIONSHIP','Record the evidence for this owner decision.');
+  demand(input.evidence===undefined||Array.isArray(input.evidence)&&input.evidence.length<=20,'INVALID_KNOWLEDGE_RELATIONSHIP','Keep the evidence list bounded.');const evidence=(input.evidence??prior?.evidence??[]).map(value=>knowledgeReference(store,projectId,value));
+  const result:KnowledgeRelationship={id:randomUUID(),projectId,kind:input.kind,from,to,note,evidence,resolved:input.resolved===true,revision:(prior?.revision??0)+1,at:new Date().toISOString(),actor:actor.name,ownerConfirmed:true};
+  store.transaction(()=>{store.put('knowledge-relationship',result);store.event({projectId,runId:null,stageId:null,type:'knowledge.relationship',actor:actor.name,message:input.resolved?'Owner resolved the retained knowledge relationship.':'Owner recorded an exact knowledge relationship.',data:{relationshipId:result.id,kind:result.kind,from,to,resolved:result.resolved}});});return result;
+}
+export function reviewKnowledgeLesson(store:Store,project:Project,entryId:string,input:LessonReviewInput,actor:Actor):KnowledgeEntry{
+  demand(!actor.projectId,'OWNER_REQUIRED','Lesson review requires the project owner.',403);demand(isObject(input)&&['retain','decline'].includes(input.decision)&&Number.isSafeInteger(input.expectedRevision)&&Number.isSafeInteger(input.expectedLifecycleRevision),'INVALID_LESSON_REVIEW','Review the exact pending lesson version.');
+  return store.transaction(()=>{
+    const entry=store.get<KnowledgeEntry>('knowledge',entryId);demand(entry?.projectId===project.id&&entry.kind==='lesson','KNOWLEDGE_NOT_FOUND','Choose a lesson in this project.',404);
+    demand(entry.status==='proposed'&&entry.proposal?.status==='pending','LESSON_REVIEW_REQUIRED','Only pending proposals can be reviewed.',409);demand(entry.revision===input.expectedRevision&&(entry.lifecycleRevision??0)===input.expectedLifecycleRevision,'REVISION_CONFLICT','This proposal changed. Refresh before reviewing it.',409);
+    const title=input.title??entry.title,content=input.content??entry.content,roles=input.roles??entry.roles;demand(text(title,300)&&text(content,200000)&&Array.isArray(roles)&&roles.every(role=>project.roles.some(item=>item.id===role)),'INVALID_LESSON','Retain a useful title/content and valid role scope.');
+    demand((input.evidence===undefined||Array.isArray(input.evidence)&&input.evidence.length<=20)&&(!input.note||text(input.note,4000)),'INVALID_LESSON_REVIEW','Keep review evidence and note bounded.');const evidence=(input.evidence??[]).map(value=>knowledgeReference(store,project.id,value));
+    const next:KnowledgeEntry={...entry,title,content,roles,hash:content===entry.content?entry.hash:hashContent(content),revision:entry.revision+Number(title!==entry.title||content!==entry.content||JSON.stringify(roles)!==JSON.stringify(entry.roles)),lifecycleRevision:(entry.lifecycleRevision??0)+1,status:input.decision==='retain'?'current':'declined',proposal:{...entry.proposal,status:input.decision==='retain'?'retained':'declined',review:{at:new Date().toISOString(),actor:actor.name,decision:input.decision,note:input.note,evidence}}};
+    store.put('knowledge',next);store.event({projectId:project.id,runId:entry.originRunId??null,stageId:null,type:input.decision==='retain'?'knowledge.lesson_retained':'knowledge.lesson_declined',actor:actor.name,message:'Owner reviewed the exact proposed lesson; earlier work remains unchanged.',data:{entryId,revision:next.revision,lifecycleRevision:next.lifecycleRevision,decision:input.decision}});return next;
+  });
 }

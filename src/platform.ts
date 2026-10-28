@@ -1,3 +1,4 @@
+import type {DefinitionCheckpoint,DefinitionMutation} from './template-types.ts';
 import {DEFAULT_EFFORT, EFFORTS} from './contracts.ts';
 import {randomUUID,createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
@@ -109,7 +110,8 @@ export class Platform {
   async agent(project:Project,role:RoleProfile,bind=true):Promise<MulticaAgent>{return this.one('agent:'+project.id+':'+JSON.stringify(role),async()=>{
     demand(!role.retired,'ROLE_RETIRED','Choose an active role for new work.');const runtime=await this.runtime(role);
     const template=role.multica?.agentId?await this.client.getAgent(role.multica.agentId):undefined;
-    const roleBasis={...role,executionContract:'gwi-structured-result-v2',multica:{...role.multica,agentId:undefined},effectiveRuntimeId:runtime.id,effectiveModel:role.model??this.defaultModel??this.profile.defaultModel,template:template&&!this.revisionAgent(template)?{id:template.id,updatedAt:template.updated_at}:undefined};
+    const executionRole={...role};delete executionRole.origin;delete executionRole.templateBindingId;
+    const roleBasis={...executionRole,executionContract:'gwi-structured-result-v2',multica:{...role.multica,agentId:undefined},effectiveRuntimeId:runtime.id,effectiveModel:role.model??this.defaultModel??this.profile.defaultModel,template:template&&!this.revisionAgent(template)?{id:template.id,updatedAt:template.updated_at}:undefined};
     const hash=createHash('sha256').update(JSON.stringify(roleBasis)).digest('hex').slice(0,20);
     const marker='[GWI '+project.id+'/'+role.id+'@'+hash+']';const listed=await this.client.listAgents();
     const existing=listed.find(item=>item.description?.startsWith(marker));
@@ -126,16 +128,16 @@ export class Platform {
     const roles=project.roles.map(role=>{const binding=this.engine.store.get<{id:string;agentId:string;runtimeId:string}>('multica-role',this.key(project.id+'/'+role.id));return binding?{...role,multica:{...role.multica,agentId:binding.agentId,runtimeId:binding.runtimeId}}:role;});
     return{roles,agents:agents.map(presentAgent),projectAgentIds:agents.filter(agent=>this.owns(project.id,agent)).map(agent=>agent.id),immutableAgentIds:agents.filter(agent=>this.revisionAgent(agent)).map(agent=>agent.id),skills,runtimes:runtimes.map(({metadata,...runtime})=>runtime),mcpServers,connection,revision:project.revision,capabilities:{steer:true,pauseDispatch:true,verification:this.verificationCapability(),execution:this.executionLimits()}};
   }
-  async saveRole(projectId:string,expectedRevision:number,value:Partial<RoleProfile>,actor:Actor,roleId?:string){
+  async saveRole(projectId:string,expectedRevision:number,value:Partial<RoleProfile>,actor:Actor,roleId?:string,checkpoint?:DefinitionCheckpoint<Project>,mutation?:DefinitionMutation){
     const project=this.owner(actor,projectId);demand(project.revision===expectedRevision,'REVISION_CONFLICT','Project configuration changed. Refresh before saving.',409);
     const previous=project.roles.find(item=>item.id===roleId);if(roleId)demand(previous,'ROLE_NOT_FOUND','Role not found.',404);
     demand(isObject(value),'INVALID_ROLE','Provide the role contract.');const role:RoleProfile={name:'Role',description:'',instructions:'',model:null,effort:DEFAULT_EFFORT,sandbox:'read-only',skills:[],tools:['context.read','knowledge.search','pipeline.read','run.read'],...previous,...value,id:roleId??value.id??randomUUID()};
     const candidate={...project,roles:previous?project.roles.map(item=>item.id===roleId?role:item):[...project.roles,role]};validateProject(candidate);
     if(!role.retired){const agent=await this.agent(candidate,role,false);role.multica={...role.multica,agentId:agent.id,runtimeId:agent.runtime_id};}
-    const saved=await this.engine.updateProject(projectId,expectedRevision,{...candidate,roles:candidate.roles.map(item=>item.id===role.id?role:item)},actor);
+    const saved=await this.engine.updateProject(projectId,expectedRevision,{...candidate,roles:candidate.roles.map(item=>item.id===role.id?role:item)},actor,checkpoint,{roleOrigins:mutation?.origin?{[role.id]:mutation.origin}:undefined,roleBindingIds:mutation?.bindingId?{[role.id]:mutation.bindingId}:undefined,managed:mutation?.managed});
     if(role.multica?.agentId)this.engine.store.put('multica-role',{id:this.key(projectId+'/'+role.id),projectId,roleId:role.id,agentId:role.multica.agentId,runtimeId:role.multica.runtimeId});return saved;
   }
-  async duplicateRole(projectId:string,roleId:string,expectedRevision:number,actor:Actor){const project=this.owner(actor,projectId),role=project.roles.find(item=>item.id===roleId);demand(role,'ROLE_NOT_FOUND','Role not found.',404);return this.saveRole(projectId,expectedRevision,{...role,id:randomUUID(),name:role.name+' copy',retired:false,...(role.multica?{multica:{...role.multica}}:{})},actor);}
+  async duplicateRole(projectId:string,roleId:string,expectedRevision:number,actor:Actor){const project=this.owner(actor,projectId),role=project.roles.find(item=>item.id===roleId);demand(role,'ROLE_NOT_FOUND','Role not found.',404);return this.saveRole(projectId,expectedRevision,{...role,id:randomUUID(),name:role.name+' copy',retired:false,...(role.multica?{multica:{...role.multica}}:{})},actor,undefined,undefined,{origin:{kind:'copy',projectId,objectId:role.id,revision:project.revision}});}
   async retireRole(projectId:string,roleId:string,expectedRevision:number,actor:Actor){const project=this.owner(actor,projectId),role=project.roles.find(item=>item.id===roleId);demand(role,'ROLE_NOT_FOUND','Role not found.',404);demand(project.roles.filter(item=>!item.retired).length>1,'LAST_ACTIVE_ROLE','Keep at least one active project role.');return this.engine.updateProject(projectId,expectedRevision,{...project,roles:project.roles.map(item=>item.id===roleId?{...item,retired:true}:item)},actor);}
   async saveAgent(projectId:string,body:unknown,actor:Actor,id?:string){
     this.owner(actor,projectId);demand(isObject(body),'INVALID_AGENT','Provide an agent configuration.');demand(!['custom_args','runtime_config'].some(key=>key in body),'MANAGED_RUNTIME_POLICY','Change permissions through the role contract.');
