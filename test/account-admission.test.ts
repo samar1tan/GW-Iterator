@@ -49,7 +49,7 @@ test('an explicit expert token cap cannot bypass fresh account exhaustion',async
   assert.ok(h.state.reads>reads);assert.equal(h.store.list('account-allowance-execution').length,0);assert.deepEqual(h.engine.run(run.id).snapshot,snapshot);assert.deepEqual(h.engine.run(run.id).approvedPolicy,policy);assert.equal(h.engine.run(run.id).resourceMode,'tokens');
 });
 
-test('healthy account admission keeps the expert token safeguard and genuine reader-less legacy behavior',async t=>{
+test('healthy account admission preserves historical policy without enforcing a token quota',async t=>{
   const h=await fixture(t),run=h.run('synthetic-expert-healthy','tokens'),policy=structuredClone(run.approvedPolicy);h.state.used=20;
   const execution=await h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model');assert.ok(execution);assert.equal(h.engine.run(run.id).resourceMode,'tokens');assert.deepEqual(h.engine.run(run.id).approvedPolicy,policy);await h.engine.finishAccountExecution(execution.id,{status:'not_dispatched',dispatched:false});
   h.engine.accountAllowances=undefined;const reads=h.state.reads;assert.equal(await h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model'),null);assert.equal(h.state.reads,reads);
@@ -71,11 +71,16 @@ test('Stop cancels a pending account continuation even when its prior pipeline h
   assert.equal(h.engine.run(run.id).status,'cancelled');assert.equal(h.engine.run(run.id).stages[0].attempts.length,1);assert.equal(h.store.list('account-allowance-execution').length,0);assert.deepEqual(h.engine.run(run.id).snapshot,run.snapshot);
 });
 
-test('new conflicting account and token policy inputs are rejected without erasing explicit safeguards',async t=>{
+test('legacy token metadata can accompany account admission without creating a second execution quota',async t=>{
   const h=await fixture(t);
-  assert.throws(()=>h.engine.startRun({projectId:h.project.id,pipelineId:h.pipeline.id,goal:'Synthetic conflicting policy.',baseline:'Synthetic source.',idempotencyKey:'synthetic-conflicting-run',resourceMode:'account',limits:{tokenBudget:100}},OWNER),code('CONFLICTING_ALLOWANCE_POLICY'));
-  const intake=new IntakeService(h.engine);assert.throws(()=>intake.create(h.project.id,{request:'Synthetic conflicting outcome.',idempotencyKey:'synthetic-conflicting-goal',resourceMode:'account',policy:{maxTotalTokens:1000}},OWNER),code('CONFLICTING_ALLOWANCE_POLICY'));
-  assert.equal(h.store.list('run').length,0);assert.equal(h.store.list('intake').length,0);assert.equal(h.state.reads,0);
+  const run=h.engine.startRun({projectId:h.project.id,pipelineId:h.pipeline.id,goal:'Synthetic historical policy.',baseline:'Synthetic source.',idempotencyKey:'synthetic-historical-run',resourceMode:'account',limits:{tokenBudget:100}},OWNER);
+  assert.equal(run.resourceMode,'account');assert.equal(run.approvedPolicy?.tokenBudget,100);
+  assert.equal(h.engine.allowance(run.id).remainingTokens,undefined);
+  h.engine.goalPlanner={async start(){throw new Error('This synchronous metadata check does not execute a planner.');}};
+  const intake=new IntakeService(h.engine),goal=intake.create(h.project.id,{request:'Synthetic historical outcome.',idempotencyKey:'synthetic-historical-goal',resourceMode:'account',policy:{maxTotalTokens:1000}},OWNER);
+  assert.equal(goal.resourceMode,'account');assert.equal(goal.policy.maxTotalTokens,1000);
+  assert.equal(goal.allowance?.remainingTokens,undefined);
+  await intake.cancel(goal.id,'End the synthetic admission check.',OWNER);
 });
 
 test('manual-only work starts and completes without consulting even a known exhausted account',async t=>{

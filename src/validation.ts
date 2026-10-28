@@ -47,8 +47,8 @@ export function validatePipeline(pipeline:Pipeline,project:Project,others:Pipeli
   for(const stage of stages.values())if(stage.reworkTo)demand(ancestors(stage.id).has(stage.reworkTo),'INVALID_REWORK','Revision work must return to an upstream dependency.');
   for(const stage of stages.values())if(stage.condition)demand(ancestors(stage.id).has(stage.condition.stageId),'INVALID_STAGE_CONDITION','A condition must observe an upstream dependency.');
   const policy=pipeline.policy;
-  demand(isObject(policy),'INVALID_POLICY','Provide bounded execution limits.');
-  for(const[key,min,max]of [['concurrency',1,4],['maxAttempts',1,5],['maxIterations',1,10],['timeoutSeconds',5,3600],['tokenBudget',100,1000000]] as const)demand(Number.isInteger(policy[key])&&policy[key]>=min&&policy[key]<=max,'INVALID_POLICY',`Check ${key}: ${min}–${max}.`);
+  demand(isObject(policy),'INVALID_POLICY','Provide a policy object; execution quotas are no longer required.');
+  for(const key of ['concurrency','maxAttempts','maxIterations','timeoutSeconds','tokenBudget'] as const)if(policy[key]!==undefined)demand(Number.isSafeInteger(policy[key])&&policy[key]!>0,'INVALID_POLICY',`Historical ${key} must be a positive integer.`);
   const all=new Map([...others.filter(item=>item.projectId===project.id),pipeline].map(item=>[item.id,item]));
   const stack=new Set<string>(),checked=new Set<string>();
   function childVisit(key:string){demand(!stack.has(key),'PIPELINE_CALL_CYCLE','Linked pipelines contain a cycle.');if(checked.has(key))return;stack.add(key);for(const stage of all.get(key)?.stages??[])if(stage.executor==='pipeline'){const target=stage.options?.pipelineId!;demand(all.has(target),'PIPELINE_NOT_FOUND','A linked pipeline is not in this project.');childVisit(target);}stack.delete(key);checked.add(key);}

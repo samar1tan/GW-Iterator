@@ -212,7 +212,7 @@ test('worker-authored lessons require an exact owner review and declined proposa
   assert.throws(()=>h.engine.setLessonLifecycle(p.id,declined.id,{expectedRevision:1,expectedLifecycleRevision:1,archived:false},OWNER),errorCode('LESSON_REQUIRED'));assert.equal(h.engine.search(p.id,'claim').length,0);assert.equal(h.codex.calls.length,0);
 });
 
-test('run-specific owner approval freezes its allowance without editing the saved workflow',async t=>{
+test('legacy run-specific policy metadata remains frozen without editing the saved workflow',async t=>{
   const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('delivery',[],{executor:'manual'})]);
   const key=randomUUID(),run=start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:2000,timeoutSeconds:60}});
   assert.equal(run.approvedPolicy?.tokenBudget,2000);assert.equal(runPolicy(run).timeoutSeconds,60);
@@ -220,7 +220,8 @@ test('run-specific owner approval freezes its allowance without editing the save
   assert.equal(start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:2000,timeoutSeconds:60}}).id,run.id);
   assert.throws(()=>start(h,p,flow,{idempotencyKey:key,limits:{tokenBudget:3000}}),errorCode('IDEMPOTENCY_CONFLICT'));
   assert.throws(()=>h.engine.startRun({projectId:p.id,pipelineId:flow.id,goal:'Scoped override.',baseline:'Synthetic',idempotencyKey:randomUUID(),limits:{tokenBudget:3000}},{name:'Synthetic role',kind:'agent',projectId:p.id,tools:['run.start']}),errorCode('OWNER_REQUIRED'));
-  assert.throws(()=>start(h,p,flow,{limits:{tokenBudget:1000001}}),errorCode('INVALID_POLICY'));
+  assert.equal(start(h,p,flow,{limits:{tokenBudget:1000001}}).approvedPolicy?.tokenBudget,1000001);
+  assert.throws(()=>start(h,p,flow,{limits:{tokenBudget:-1}}),errorCode('INVALID_POLICY'));
   const historical={...run};delete historical.approvedPolicy;
   assert.equal(runPolicy(historical).tokenBudget,1000);assert.equal(historical.approvedPolicy,undefined);
 });
@@ -232,53 +233,49 @@ test('continue retries one known-ended stage with existing allowance and no mand
   await pump(h,()=>h.codex.calls.length===2,'verification');h.codex.calls[1].completion.reject(new Error('Synthetic recoverable check failure.'));
   await pump(h,()=>h.engine.run(run.id).status==='failed','the known-ended failure');
   const accepted=structuredClone(state(h.engine.run(run.id),'prepare')),recovery=h.engine.recovery(run.id,'verify',OWNER);
-  assert.equal(recovery.action,'retry');assert.equal(recovery.allowance.remainingTokens,950);
+  assert.equal(recovery.action,'retry');assert.equal(recovery.allowance.remainingTokens,undefined);assert.equal(recovery.allowance.usedTokens,50);
   h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:recovery.recoveryKey},OWNER);
   await pump(h,()=>h.codex.calls.length===3,'the focused continuation');
   assert.deepEqual(state(h.engine.run(run.id),'prepare'),accepted);assert.equal(h.engine.run(run.id).limitRevisions,undefined);
-  assert.equal(h.codex.calls[2].input.tokenBudget,950);
+  assert.equal(h.codex.calls[2].input.tokenBudget,undefined);assert.equal(h.codex.calls[2].input.timeoutSeconds,undefined);
   assert.throws(()=>h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:recovery.recoveryKey},OWNER),errorCode('RECOVERY_CONFLICT'));
   h.codex.calls[2].finish();await pump(h,()=>h.engine.run(run.id).status==='completed','accepted continuation');
 });
 
-test('continuation recommendations require explicit current owner approval and retain unknown executions',async t=>{
-  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('verify')],{tokenBudget:100,maxAttempts:1});
-  const run=start(h,p,flow);await pump(h,()=>h.codex.calls.length===1,'the finite original attempt');
-  h.codex.calls[0].finish(result('A finite check needs revision.','blocked'),{input:120,output:5,total:125});
-  await pump(h,()=>h.engine.run(run.id).status==='failed','the observed boundary');
-  const recovery=h.engine.recovery(run.id,'verify',OWNER),input={stageId:'verify',recoveryKey:recovery.recoveryKey};
-  assert.equal(recovery.action,'approve');assert.equal(recovery.recommendation?.basis.previousAttemptTokens,125);
-  assert.equal(recovery.recommendation?.basis.purpose,'one-failed-stage');assert.equal(recovery.recommendation?.limits.maxAttempts,2);
-  assert.throws(()=>h.engine.continueRun(run.id,input,OWNER),errorCode('CONTINUATION_APPROVAL_REQUIRED'));
-  assert.throws(()=>h.engine.continueRun(run.id,{...input,approveRecommendation:true},{name:'Synthetic role',kind:'agent',projectId:p.id}),errorCode('OWNER_REQUIRED'));
-  assert.equal(h.codex.calls.length,1);assert.equal(state(h.engine.run(run.id),'verify').attempts.length,1);
+test('legacy quotas do not demand extension approval while unknown external execution still blocks retry',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('verify')],{tokenBudget:100,maxAttempts:1,timeoutSeconds:5});
+  const run=start(h,p,flow);await pump(h,()=>h.codex.calls.length===1,'the original attempt');
+  h.codex.calls[0].finish(result('The actual check needs revision.','blocked'),{input:1200000,output:5,total:1200005});
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the actual check failure');
+  const recovery=h.engine.recovery(run.id,'verify',OWNER);
+  assert.equal(recovery.action,'retry');assert.equal(recovery.recommendation,undefined);assert.equal(recovery.allowance.usedTokens,1200005);
   h.engine.store.put('multica-execution',{id:'synthetic-uncertain',runId:run.id,cleanupConfirmed:false});
   const unknown=h.engine.recovery(run.id,'verify',OWNER);assert.equal(unknown.action,'reconcile');
-  assert.throws(()=>h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:unknown.recoveryKey,approveRecommendation:true},OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  assert.throws(()=>h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:unknown.recoveryKey},OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
   h.engine.store.put('multica-execution',{id:'synthetic-uncertain',runId:run.id,cleanupConfirmed:true});
   const current=h.engine.recovery(run.id,'verify',OWNER);
-  h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:current.recoveryKey,approveRecommendation:true},OWNER);
-  await pump(h,()=>h.codex.calls.length===2,'the approved single retry');
-  const continued=h.engine.run(run.id);assert.equal(continued.snapshot.pipeline.policy.tokenBudget,100);assert.equal(continued.approvedPolicy?.tokenBudget,100);
-  assert.equal(continued.limitRevisions?.length,1);assert.equal(continued.stages[0].attempts[0].usage?.total,125);
-  assert.ok(h.codex.calls[1].input.tokenBudget>0&&h.codex.calls[1].input.tokenBudget<=1000000);
-  h.codex.calls[1].finish();
+  h.engine.continueRun(run.id,{stageId:'verify',recoveryKey:current.recoveryKey},OWNER);
+  await pump(h,()=>h.codex.calls.length===2,'a continuation without quota approval');
+  const continued=h.engine.run(run.id);assert.equal(continued.snapshot.pipeline.policy.tokenBudget,100);assert.equal(continued.limitRevisions,undefined);
+  assert.equal(h.codex.calls[1].input.tokenBudget,undefined);assert.equal(h.codex.calls[1].input.timeoutSeconds,undefined);
+  h.codex.calls[1].finish();await pump(h,()=>h.engine.run(run.id).status==='completed','the verified continuation');
 });
 
-test('parallel workers reserve disjoint finite shares and missing final usage stays held',async t=>{
-  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('left'),stage('right'),stage('join',['left','right'])],{concurrency:2,tokenBudget:1000});
+test('independent stages exceed former concurrency quotas without token reservations and retain unknown usage',async t=>{
+  const h=await fixture(t),p=await project(h),ids=['first','second','third','fourth','fifth','sixth'];
+  const flow=pipeline(h,p,[...ids.map(id=>stage(id)),stage('join',ids)],{concurrency:1,tokenBudget:100});
   h.codex.reportTerminalUsage=false;const run=start(h,p,flow);
-  await pump(h,()=>h.codex.calls.length===2,'two bounded parallel workers');
-  assert.deepEqual(h.codex.calls.map(call=>call.input.tokenBudget),[500,500]);
-  h.codex.calls[0].input.onEvent({type:'usage',message:'Synthetic active meter.',usage:{input:90,output:10,total:100}});
-  let allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,100);assert.equal(allowance.reservedTokens,900);assert.equal(allowance.remainingTokens,0);
-  h.codex.calls[0].finish();h.codex.calls[1].finish();
-  await pump(h,()=>h.codex.calls.length===3,'the join using only unpromised allowance');
-  assert.equal(h.codex.calls[2].input.tokenBudget,400);
-  allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,100);assert.equal(allowance.reservedTokens,900);assert.equal(allowance.usageComplete,false);
-  h.codex.calls[2].finish(OUTPUT,{input:20,output:5,total:25});
-  await pump(h,()=>h.engine.run(run.id).status==='completed','the finite joined result');
-  allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,125);assert.equal(allowance.reservedTokens,500);assert.equal(allowance.remainingTokens,375);
+  await pump(h,()=>h.codex.calls.length===6,'six independent workers despite the legacy concurrency value');
+  assert.ok(h.codex.calls.every(call=>call.input.tokenBudget===undefined&&call.input.timeoutSeconds===undefined));
+  h.codex.calls[0].input.onEvent({type:'usage',message:'Synthetic active meter.',usage:{input:9000000,output:10,total:9000010}});
+  let allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,9000010);assert.equal(allowance.reservedTokens,0);assert.equal(allowance.remainingTokens,undefined);
+  for(const call of h.codex.calls.slice())call.finish();
+  await pump(h,()=>h.codex.calls.length===7,'the dependency join');
+  assert.equal(h.codex.calls[6].input.tokenBudget,undefined);
+  allowance=h.engine.allowance(run.id);assert.equal(allowance.usageComplete,false);assert.equal(allowance.reservedTokens,0);
+  h.codex.calls[6].finish(OUTPUT,{input:20,output:5,total:25});
+  await pump(h,()=>h.engine.run(run.id).status==='completed','the joined result');
+  allowance=h.engine.allowance(run.id);assert.equal(allowance.usedTokens,9000035);assert.equal(allowance.usageComplete,false);
 });
 
 test('existing read-only QA roles get a task-only review purpose and owner gates stay human',async t=>{
@@ -315,34 +312,26 @@ test('manual dependencies and delivery wait for real recorded outcomes', async t
   assert.equal(h.engine.store.events({runId: run.id}).filter(event => event.type === 'manual.completed').length, 2);
 });
 
-test('finite run allowance revisions retain spent work and unblock only an explicit bounded retry', async t => {
-  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('first'),stage('follow',['first'])],{tokenBudget:100});
-  const run=start(h,p,flow);
-  await pump(h,()=>h.codex.calls.length===1,'the first bounded execution');
-  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'More useful work.',OWNER),errorCode('INVALID_RUN_STATE'));
+test('legacy policy metadata revisions preserve actual work but do not grant or restrict a retry',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('first'),stage('follow',['first'])],{tokenBudget:100,maxAttempts:1});
+  const run=start(h,p,flow);await pump(h,()=>h.codex.calls.length===1,'the first execution');
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'Historical metadata.',OWNER),errorCode('INVALID_RUN_STATE'));
   h.codex.calls[0].finish(OUTPUT,{input:110,output:10,total:120});
-  await pump(h,()=>h.engine.run(run.id).status==='failed','the exhausted run');
-  const before=h.engine.run(run.id),count=state(before,'follow').attempts.length;
-  assert.throws(()=>h.engine.retry(run.id,'follow','The old quota is exhausted.',OWNER),errorCode('RUN_TOKEN_BUDGET'));
-  assert.equal(state(h.engine.run(run.id),'follow').attempts.length,count);
-  assert.throws(()=>h.engine.changeLimits(run.id,0,{concurrency:2},'An unrelated policy change.',OWNER),errorCode('INVALID_RUN_LIMITS'));
+  await pump(h,()=>h.codex.calls.length===2,'the successor beyond the old budget');
+  h.codex.calls[1].finish(result('An actual dependency problem.','blocked'));
+  await pump(h,()=>h.engine.run(run.id).status==='failed','an actual failure');
+  const before=h.engine.run(run.id);
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{concurrency:2},'Unsupported metadata.',OWNER),errorCode('INVALID_RUN_LIMITS'));
   h.engine.store.put('multica-execution',{id:'synthetic-unconfirmed',runId:run.id,cleanupConfirmed:false});
-  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:500},'Unconfirmed work remains.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
+  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:50},'Unconfirmed work remains.',OWNER),errorCode('EXTERNAL_RECONCILIATION_REQUIRED'));
   h.engine.store.put('multica-execution',{id:'synthetic-unconfirmed',runId:run.id,cleanupConfirmed:true});
-  const extended=h.engine.changeLimits(run.id,0,{tokenBudget:500,maxAttempts:3},'The remaining dependency has useful bounded work.',OWNER);
-  assert.deepEqual(extended.snapshot,before.snapshot);
-  assert.deepEqual(extended.stages,before.stages);
-  assert.equal(extended.limitRevisions?.[0].policy.tokenBudget,500);
-  assert.equal(extended.limitRevisions?.[0].note,'The remaining dependency has useful bounded work.');
-  assert.equal(h.codex.calls.length,1);
-  assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:600},'Stale basis.',OWNER),errorCode('REVISION_CONFLICT'));
-  h.engine.retry(run.id,'follow','Allowance extended; keep the accepted predecessor.',OWNER);
-  await pump(h,()=>h.codex.calls.length===2,'only the failed dependency');
-  assert.equal(h.codex.calls[1].input.tokenBudget,380);
-  h.codex.calls[1].finish(OUTPUT,{input:8,output:2,total:10});
-  await pump(h,()=>h.engine.run(run.id).status==='completed','the preserved work and retry');
-  assert.equal(state(h.engine.run(run.id),'first').attempts.length,1);
-  assert.deepEqual(state(h.engine.run(run.id),'first').attempts[0].usage,{input:110,output:10,total:120});
+  const recorded=h.engine.changeLimits(run.id,0,{tokenBudget:50,maxAttempts:1},'Retain an older client policy as metadata.',OWNER);
+  assert.deepEqual(recorded.snapshot,before.snapshot);assert.deepEqual(recorded.stages,before.stages);assert.equal(recorded.resourceMode,before.resourceMode);
+  assert.equal(recorded.limitRevisions?.[0].policy.tokenBudget,50);assert.throws(()=>h.engine.changeLimits(run.id,0,{tokenBudget:600},'Stale basis.',OWNER),errorCode('REVISION_CONFLICT'));
+  h.engine.retry(run.id,'follow','Keep the accepted predecessor and inspect the actual failure.',OWNER);
+  await pump(h,()=>h.codex.calls.length===3,'only the failed dependency');assert.equal(h.codex.calls[2].input.tokenBudget,undefined);
+  h.codex.calls[2].finish();await pump(h,()=>h.engine.run(run.id).status==='completed','the preserved work and retry');
+  assert.equal(state(h.engine.run(run.id),'first').attempts.length,1);assert.deepEqual(state(h.engine.run(run.id),'first').attempts[0].usage,{input:110,output:10,total:120});
 });
 
 test('a parent cannot bypass an uncertain child and reuses the accepted child after local repair',async t=>{
@@ -424,20 +413,15 @@ test('completed output requesting revision returns to the upstream task and inva
   assert.equal(current.stages.some(stage => stage.attempts.some(attempt => attempt.error?.includes('ACTIVE_REWORK'))), false);
 });
 
-test('review rework stops at the frozen attempt limit', async t => {
-  const h = await fixture(t), p = await project(h);
-  const flow = pipeline(h, p, [stage('work', [], {review: true})], {maxAttempts: 2});
-  const run = start(h, p, flow);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await pump(h, () => h.codex.calls.length === attempt + 1, 'a bounded attempt');
-    h.codex.calls[attempt].finish(result(`Synthetic attempt ${attempt + 1}.`));
-    await pump(h, () => state(h.engine.run(run.id), 'work').status === 'review', 'bounded review');
-    h.engine.review(run.id, 'work', 'revise', 'The synthetic requirement remains unmet.', OWNER);
+test('owner-guided review can exceed former attempt limits while retaining every result',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('work',[],{review:true})],{maxAttempts:1}),run=start(h,p,flow);
+  for(let attempt=0;attempt<7;attempt++){
+    await pump(h,()=>h.codex.calls.length===attempt+1,'the owner-guided attempt');h.codex.calls[attempt].finish(result(`Synthetic revision ${attempt+1}.`));
+    await pump(h,()=>state(h.engine.run(run.id),'work').status==='review','independent review');
+    h.engine.review(run.id,'work',attempt===6?'accept':'revise',`Review finding for actual revision ${attempt+1}.`,OWNER);
   }
-  await pump(h, () => h.engine.run(run.id).status === 'failed', 'the attempt limit');
-  assert.equal(h.codex.calls.length, 2);
-  assert.equal(state(h.engine.run(run.id), 'work').attempts.length, 2);
-  assert.match(h.engine.run(run.id).stopReason!, /Attempt limit/);
+  await pump(h,()=>h.engine.run(run.id).status==='completed','accepted evidence');assert.equal(h.codex.calls.length,7);
+  assert.equal(state(h.engine.run(run.id),'work').attempts.length,7);assert.equal(h.engine.run(run.id).snapshot.pipeline.policy.maxAttempts,1);
 });
 
 test('cancellation waits for an in-flight GitHub observation and closes every local state', async t => {
@@ -742,17 +726,15 @@ test('loop no_change exits through skipped leaves without reusing an earlier sel
   assert.deepEqual(state(ended, 'follow').attempts, [accepted]);
 });
 
-test('loop budgets accumulate uncached tokens across iterations and retain prior attempts', async t => {
-  const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')], {maxIterations: 5, tokenBudget: 1000}), run = start(h, p, flow, {mode: 'loop'});
-  await pump(h, () => h.codex.calls.length === 1, 'the first budgeted iteration');
-  h.codex.calls[0].finish(result('First useful synthetic increment.'), {input: 800, cachedInput: 700, output: 100, total: 900});
-  await pump(h, () => h.codex.calls.length === 2, 'the remaining cumulative allowance');
-  assert.equal(h.codex.calls[1].input.tokenBudget, 800);
-  h.codex.calls[1].finish(result('Second useful synthetic increment.'), {input: 650, cachedInput: 0, output: 150, total: 800});
-  await pump(h, () => h.engine.run(run.id).status === 'completed', 'the cumulative budget stop');
-  const ended = h.engine.run(run.id), attempts = state(ended, 'work').attempts;
-  assert.equal(ended.iteration, 2); assert.equal(h.codex.calls.length, 2); assert.match(ended.stopReason!, /Token budget/);
-  assert.deepEqual(attempts.map(attempt => attempt.iteration), [1, 2]); assert.deepEqual(attempts.map(attempt => attempt.usage?.total), [900, 800]);
+test('evidence-driven loops exceed historical iteration and token quotas until an actual no-change result',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('work')],{maxIterations:1,tokenBudget:100}),run=start(h,p,flow,{mode:'loop'});
+  for(let iteration=1;iteration<=12;iteration++){
+    await pump(h,()=>h.codex.calls.length===iteration,'the next useful iteration');assert.equal(h.codex.calls[iteration-1].input.tokenBudget,undefined);
+    h.codex.calls[iteration-1].finish(result(`Useful synthetic increment ${iteration}.`,iteration===12?'no_change':'done'),{input:800,cachedInput:700,output:100,total:900});
+  }
+  await pump(h,()=>h.engine.run(run.id).status==='completed','the actual no-change exit');const ended=h.engine.run(run.id),attempts=state(ended,'work').attempts;
+  assert.equal(ended.iteration,12);assert.match(ended.stopReason!,/No further change/);assert.deepEqual(attempts.map(attempt=>attempt.iteration),Array.from({length:12},(_,index)=>index+1));
+  assert.equal(h.engine.allowance(ended).usedTokens,2400);assert.equal(h.engine.allowance(ended).remainingTokens,undefined);
 });
 
 test('independent review rejection retains accepted parallel work and rechecks only the affected path', async t => {
@@ -977,7 +959,7 @@ test('development server blocks synthetic private files through direct, raw, enc
   assert.equal(await readFile(nativeCalls, 'utf8').catch(()=>''), '', 'Manual-only starts, recovery and nested work never launch native discovery or model work.');
 });
 
-test('upstream rework invalidates a completed child even when the wrapper hits its attempt limit before relaunch', async t => {
+test('upstream rework invalidates an accepted child and relaunches beyond historical wrapper attempt limits', async t => {
   const h = await fixture(t), p = await project(h), manual = (id: string, dependsOn: string[] = [], extra: Partial<Stage> = {}) => stage(id, dependsOn, {executor: 'manual', ...extra});
   const childFlow = pipeline(h, p, [manual('leaf')], {maxAttempts: 2});
   const parentFlow = pipeline(h, p, [manual('upstream'), stage('handoff', ['upstream'], {executor: 'pipeline', options: {pipelineId: childFlow.id}}), manual('qa', ['handoff'], {reworkTo: 'upstream'})], {maxAttempts: 2});
@@ -1000,10 +982,6 @@ test('upstream rework invalidates a completed child even when the wrapper hits i
   h.engine.completeManual(parent.id, 'qa', result('Upstream version one must change.', 'revise'), OWNER);
   await pump(h, () => state(h.engine.run(parent.id), 'upstream').status === 'waiting', 'upstream version two');
   h.engine.completeManual(parent.id, 'upstream', result('Upstream version two.'), OWNER);
-  await pump(h, () => h.engine.run(parent.id).status === 'failed', 'the invalidated wrapper attempt limit');
-  assert.equal(state(h.engine.run(parent.id), 'handoff').attempts.length, 2);
-  h.engine.changeLimits(parent.id, 0, {maxAttempts: 3}, 'Authorize one execution against the changed upstream input.', OWNER);
-  h.engine.retry(parent.id, 'handoff', 'The earlier accepted child belongs to the old upstream input.', OWNER);
   await pump(h, () => h.engine.store.list<Run>('run').filter(run => run.parentRunId === parent.id).length === 2, 'a fresh child for the changed input');
   const current = h.engine.run(parent.id), handoff = state(current, 'handoff'), newChildId = handoff.attempts[2].ref!.childRunId!;
   assert.notEqual(newChildId, oldChildId); assert.equal(handoff.resumeChildRunId, undefined);
@@ -1016,4 +994,66 @@ test('upstream rework invalidates a completed child even when the wrapper hits i
   h.engine.completeManual(parent.id, 'qa', result('The fresh result matches upstream version two.'), OWNER);
   await pump(h, () => h.engine.run(parent.id).status === 'completed', 'the corrected parent outcome');
   assert.equal(h.codex.calls.length, 0); assert.equal(h.engine.store.list<Run>('run').filter(run => run.parentRunId === parent.id).length, 2);
+});
+
+test('unchanged automatic revision requests need guidance while an owner can continue the same work',async t=>{
+  for(const upstream of [false,true])await t.test(upstream?'upstream return':'same-stage return',async sub=>{
+    const h=await fixture(sub),p=await project(h),flow=pipeline(h,p,upstream?[stage('prepare'),stage('inspect',['prepare'],{reworkTo:'prepare'})]:[stage('inspect')],{maxAttempts:1}),run=start(h,p,flow);
+    const requested=result('The same evidenced requirement remains unmet.','revise');let calls=0;
+    for(let round=0;round<2;round++){
+      if(upstream){const expected=++calls;await pump(h,()=>h.codex.calls.length===expected,'the prepared input');h.codex.calls[calls-1].finish(result('The unchanged prepared artifact.'));}
+      const expected=++calls;await pump(h,()=>h.codex.calls.length===expected,'the independent revision finding');h.codex.calls[calls-1].finish(requested);
+    }
+    await pump(h,()=>h.engine.run(run.id).status==='failed','the unchanged-evidence handoff');
+    assert.equal(state(h.engine.run(run.id),'inspect').attempts.at(-1)?.failureCode,'STAGNATION');assert.deepEqual(state(h.engine.run(run.id),'inspect').attempts.at(-1)?.output,requested);
+    for(let n=0;n<5;n++){await h.engine.tick();await immediate();}assert.equal(h.codex.calls.length,calls);
+    h.engine.retry(run.id,'inspect','Owner identifies the authoritative source and asks for a focused recheck.',OWNER);
+    await pump(h,()=>h.codex.calls.length===calls+1,'the owner-guided continuation');h.codex.calls[calls].finish(result('The identified source satisfies the check.'));
+    await pump(h,()=>h.engine.run(run.id).status==='completed','the actual accepted result');
+  });
+});
+
+test('unchanged loop output is a recoverable finding rather than fabricated completion',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('work')]),run=start(h,p,flow,{mode:'loop'});
+  for(let iteration=0;iteration<2;iteration++){await pump(h,()=>h.codex.calls.length===iteration+1,'the loop observation');h.codex.calls[iteration].finish(result('The identical synthetic result.'));}
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the stagnation boundary');assert.equal(state(h.engine.run(run.id),'work').attempts.at(-1)?.failureCode,'STAGNATION');
+  h.engine.retry(run.id,'work','Owner confirms there is no further requested change.',OWNER);await pump(h,()=>h.codex.calls.length===3,'the guided verification');h.codex.calls[2].finish(result('No further change is supported.','no_change'));
+  await pump(h,()=>h.engine.run(run.id).status==='completed','the verified exit');
+});
+
+test('agent retries cannot repeat unchanged capacity failures by changing transport request identities',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('work')]),run=start(h,p,flow),agent:Actor={name:'goal-planner',kind:'agent',projectId:p.id},note='Recheck this exact transient provider failure.';
+  const capacity='Selected model is at capacity. Please try a different model.';
+  await pump(h,()=>h.codex.calls.length===1,'the original task');h.codex.calls[0].completion.reject(new Error(capacity+' request_id=req-first'));await pump(h,()=>h.engine.run(run.id).status==='failed','the first actual failure');
+  h.engine.retry(run.id,'work',note,agent);await pump(h,()=>h.codex.calls.length===2,'the evidence-based retry');h.codex.calls[1].completion.reject(new Error(capacity+' request_id=req-second'));await pump(h,()=>h.engine.run(run.id).status==='failed','the unchanged failure cause');
+  assert.throws(()=>h.engine.retry(run.id,'work',note,agent),errorCode('STAGNATION'));assert.equal(h.codex.calls.length,2);
+  h.engine.retry(run.id,'work','Owner has verified provider recovery and requests another attempt.',OWNER);await pump(h,()=>h.codex.calls.length===3,'the deliberate owner continuation');h.codex.calls[2].finish();await pump(h,()=>h.engine.run(run.id).status==='completed','the actual result');
+});
+
+test('worker tools expose executable contracts without reintroducing historical quota instructions',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('work')],{tokenBudget:100,maxAttempts:1,concurrency:1,timeoutSeconds:5}),run=start(h,p,flow),snapshot=structuredClone(run.snapshot);
+  await pump(h,()=>h.codex.calls.length===1,'the worker');const worker=h.codex.calls[0];
+  const context=await worker.input.onTool('context.read',{}) as {pipeline:Pipeline};assert.deepEqual(context.pipeline.policy,{});
+  const definition=await worker.input.onTool('pipeline.read',{pipelineId:flow.id}) as Pipeline;assert.deepEqual(definition.policy,{});
+  const history=await worker.input.onTool('run.read',{}) as Run;assert.deepEqual(history.snapshot.pipeline.policy,{});assert.ok(history.snapshot.pipelines.every(value=>Object.keys(value.policy).length===0));assert.equal(history.approvedPolicy,undefined);
+  assert.deepEqual(h.engine.run(run.id).snapshot,snapshot);assert.equal(h.engine.pipeline(flow.id).policy.tokenBudget,100);worker.finish();
+});
+
+test('automatic revision and loop supervision detect alternating evidence cycles within the same guidance basis',async t=>{
+  for(const mode of ['revision','loop'] as const)await t.test(mode,async sub=>{
+    const h=await fixture(sub),p=await project(h),flow=pipeline(h,p,[stage('work')]),run=start(h,p,flow,{mode:mode==='loop'?'loop':'once'});
+    for(const [index,summary] of ['Observed state A.','Observed state B.','Observed state A.'].entries()){
+      await pump(h,()=>h.codex.calls.length===index+1,'the next distinct observation');h.codex.calls[index].finish(result(summary,mode==='revision'?'revise':'done'));
+    }
+    await pump(h,()=>h.engine.run(run.id).status==='failed','the repeated evidence cycle');assert.equal(h.codex.calls.length,3);assert.equal(state(h.engine.run(run.id),'work').attempts.at(-1)?.failureCode,'STAGNATION');
+    h.engine.retry(run.id,'work','Owner supplies a new verified source and requests a focused check.',OWNER);await pump(h,()=>h.codex.calls.length===4,'the new owner guidance basis');h.codex.calls[3].finish(result('The newly verified source settles the work.','no_change'));await pump(h,()=>h.engine.run(run.id).status==='completed','the verified exit');
+  });
+});
+
+test('generic provider failure codes retain distinct business findings while transport-only changes remain stagnant',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('work')]),run=start(h,p,flow),agent:Actor={name:'goal-planner',kind:'agent',projectId:p.id},note='Inspect and correct this actual finding in the retained source.';
+  await pump(h,()=>h.codex.calls.length===1,'the implementation');h.codex.calls[0].completion.reject(new AppError('MULTICA_TASK_FAILED','Compiler rejected the module. request_id=req-one'));await pump(h,()=>h.engine.run(run.id).status==='failed','the compiler finding');
+  h.engine.retry(run.id,'work',note,agent);await pump(h,()=>h.codex.calls.length===2,'the compiler correction');h.codex.calls[1].completion.reject(new AppError('MULTICA_TASK_FAILED','A functional test failed after compilation passed. request_id=req-two'));await pump(h,()=>h.engine.run(run.id).status==='failed','the genuinely different test finding');
+  h.engine.retry(run.id,'work',note,agent);await pump(h,()=>h.codex.calls.length===3,'the new test correction');h.codex.calls[2].completion.reject(new AppError('MULTICA_TASK_FAILED','A functional test failed after compilation passed. request_id=req-three'));await pump(h,()=>h.engine.run(run.id).status==='failed','the unchanged test finding');
+  assert.throws(()=>h.engine.retry(run.id,'work',note,agent),errorCode('STAGNATION'));assert.equal(h.codex.calls.length,3);
 });

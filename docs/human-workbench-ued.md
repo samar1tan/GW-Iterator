@@ -61,7 +61,7 @@ Keep request submission, background observation and execution feedback separate.
 ## Continue, review and stop
 
 - Continue identifies the failed scope and preserves accepted work. Sufficient approved allowance needs no separate top-up form.
-- Attempt/time/round ceilings present a concise finite recommendation. Account exhaustion offers wait/refresh; unavailable or caution readings name the uncertainty before one-step approval. Token diagnostics remain expandable history.
+- Execution has no attempt/time/round/token ceilings or extension recommendations. Account exhaustion offers wait/refresh; unavailable or caution readings name the uncertainty before one-step approval. Token diagnostics and deprecated policy values remain expandable history.
 - An uncertain external task offers Check state with a useful explanation, not an ordinary retry button that duplicates work.
 - Review offers Accept or Request changes with relevant evidence. A requested revision needs a concrete finding, not generic mandatory prose for every normal action.
 - Manual delivery provides a short result/checklist and artifact inputs. Distinguish prepared, reviewed, integrated and published facts.

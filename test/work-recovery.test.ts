@@ -87,13 +87,13 @@ test('a timed-out GitHub dispatch requires external review instead of another wo
   h.work.begin(h.goal.id,'manual');await h.drain();assert.equal(currentWorkRecovery(h.get())?.code,'EXTERNAL_REVIEW_REQUIRED');assert.equal(h.engine.run(h.run.id).status,'failed');
 });
 
-test('account refresh respects Stop and exhausted original execution bounds',async t=>{
+test('account refresh respects Stop while historical execution quotas do not block recovery',async t=>{
   const h=await fixture(t);let release!:(value:any)=>void;
   h.engine.accountAllowances={assess:()=>new Promise(resolve=>{release=resolve;})} as unknown as AccountAllowanceService;
   t.mock.method(h.engine,'resolvedAllowanceTarget',async()=>({projectId:h.goal.projectId,pipelineId:'synthetic-flow',stageId:'work',roleId:'development',model:null,effort:'max',kind:'stage'}));
   h.work.begin(h.goal.id,'manual');await h.drain();h.work.tick();await immediate();
   const stopped=h.get();stopped.status='stopped';stopped.controlRevision=1;h.work.cancel(stopped);h.store.put('intake',stopped);release({status:'ready',action:'continue',account:{expiresAt:new Date(Date.now()+60000).toISOString()}});await h.drain();assert.equal(h.engine.run(h.run.id).status,'failed');
-  const next=h.get();next.status='failed';h.store.put('intake',next);h.setActive(false);h.setRemaining(0);h.work.begin(h.goal.id,'manual');await h.drain();assert.equal(currentWorkRecovery(h.get())?.code,'GOAL_BOUNDARY');assert.equal(h.engine.run(h.run.id).status,'failed');
+  const next=h.get();next.status='failed';h.store.put('intake',next);h.setActive(false);h.setRemaining(0);h.work.begin(h.goal.id,'manual');await h.drain();assert.equal(currentWorkRecovery(h.get())?.code,'RETRY_SCHEDULED');h.work.tick();await immediate();release({status:'ready',action:'continue',account:{expiresAt:new Date(Date.now()+60000).toISOString()}});await h.drain();assert.equal(h.engine.run(h.run.id).stages[1].status,'queued');
 });
 
 test('a rejected old account check cannot finish a newer recovery generation',async t=>{

@@ -15,7 +15,7 @@ import {submittedDraftKey} from './workStart';
 import {requestEnterAction} from './requestKeys';
 
 export function LaunchPipeline({pipeline,pipelines=[],project,onClose,onStarted}:{pipeline:Pipeline;pipelines?:Pipeline[];project:Project;onClose:()=>void;onStarted:(run:Run)=>Promise<void>}) {
-  const {p,number}=useCopy(),formId=useId();
+  const {p}=useCopy(),formId=useId();
   const composing=useRef(false);
   const [goal,setGoal,clearGoal]=useTextDraft(`pipeline:${project.id}:${pipeline.id}`),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(null),[storedKey,setStoredKey,clearStoredKey]=useTextDraft(`pipeline-key:${project.id}:${pipeline.id}`),[account,setAccount]=useState<AllowanceAssessment|null>(null);
   const {requiresAccount,manualOnly,modelRoles:scopeRoles}=workflowScope(pipeline,pipelines);
@@ -39,7 +39,7 @@ export function LaunchPipeline({pipeline,pipelines=[],project,onClose,onStarted}
       {manualOnly&&<p className="pf-launch-manual"><Icon name="team"/>{p('humanWorkflow')}</p>}
       {requiresAccount&&<AccountAllowance context={{projectId:project.id,pipelineId:pipeline.id}} onAssessment={setAccount}/>}
       <details className="pf-launch-details"><summary><Icon name="settings"/>{p('technical')}<Icon name="chevron-down" className="pf-launch-disclosure"/></summary>
-        <dl className="metadata-list"><div><dt>{p('seconds')}</dt><dd>{number(pipeline.policy.timeoutSeconds)}</dd></div><div><dt>{p('attempts')}</dt><dd>{pipeline.policy.maxAttempts}</dd></div></dl>
+
         {modelRoles.length>0&&<ul className="pf-launch-role-details">{modelRoles.map(role=><li key={role.id}><strong>{role.name}</strong><span>{p('modelSummary',{model:role.model??p('defaultModel'),effort:EFFORT_LABELS[role.effort]})}</span><span className="muted">{p(role.sandbox==='read-only'?'readSourceBoundary':'writeWorkspaceBoundary')}</span></li>)}</ul>}
       </details>
     </form>

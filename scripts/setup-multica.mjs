@@ -7,9 +7,12 @@ import {homedir} from 'node:os';
 import {basename, dirname, isAbsolute, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createMulticaClient} from '../src/adapters/multica.ts';
+import {MULTICA_SOURCE_REVISION, SUPERVISED_EXECUTION_POLICY, MULTICA_EXECUTION_PATCH_SHA256, hasSupervisedExecutionHealth} from '../src/runtime-execution-policy.ts';
+import {createMulticaClient,isMulticaTaskTerminal} from '../src/adapters/multica.ts';
 
-export const SOURCE = {url: 'https://github.com/multica-ai/multica.git', sha: 'a097f592be73067d56908ca50ece557fa2af1293'};
+export const SOURCE = {url: 'https://github.com/multica-ai/multica.git', sha: MULTICA_SOURCE_REVISION};
+export const EXECUTION_POLICY = SUPERVISED_EXECUTION_POLICY;
+export const EXECUTION_PATCH_SHA256 = MULTICA_EXECUTION_PATCH_SHA256;
 const POSTGRES = 'pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d';
 const GO_IMAGE = 'golang:1.26.9-alpine';
 const SELF = fileURLToPath(import.meta.url);
@@ -21,11 +24,12 @@ export function contained(root, path) {
   return !isAbsolute(part) && part !== '..' && !part.startsWith('..' + sep);
 }
 export function parseArgs(args, cwd = process.cwd()) {
-  const options = {stateDir: resolve(cwd, '.local/multica'), model: 'gpt-6.1-sol', check: false, help: false};
+  const options = {stateDir: resolve(cwd, '.local/multica'), model: 'gpt-6.1-sol', check: false, refreshRuntime: false, help: false};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--check') options.check = true;
+    else if (arg === '--refresh-runtime') options.refreshRuntime = true;
     else if (['--state-dir', '--model', '--codex-bin'].includes(arg)) {
       const value = args[++i]; if (!value || value.startsWith('--')) throw new SetupError('arguments', 'Missing value for ' + arg);
       if (arg === '--state-dir') options.stateDir = resolve(cwd, value);
@@ -33,6 +37,7 @@ export function parseArgs(args, cwd = process.cwd()) {
       if (arg === '--codex-bin') options.codexBin = value;
     } else throw new SetupError('arguments', 'Unknown option: ' + arg);
   }
+  if (options.check && options.refreshRuntime) throw new SetupError('arguments', 'Choose either --check or --refresh-runtime.');
   if (!contained(resolve(cwd, '.local'), options.stateDir) || options.stateDir === resolve(cwd, '.local'))
     throw new SetupError('arguments', 'The state directory must be a dedicated directory under .local.');
   return options;
@@ -119,6 +124,36 @@ async function command(binary, args, {step, stateDir, cwd, env, quiet = true} = 
     child.once('error', () => {log?.end(); reject(new SetupError(step ?? 'prerequisites', 'Required command is unavailable: ' + basename(binary)));});
     child.once('exit', code => {log?.end(); if (code === 0) resolveResult(stdout.trim()); else reject(new SetupError(step ?? 'command', 'Command failed. Private details are in setup.log; existing data was retained.'));});
   });
+}
+export async function executionPatch() {
+  const filename = resolve(dirname(SELF), 'patches/multica-supervised-execution.patch');
+  const contents = await readFile(filename, 'utf8'), sha256 = createHash('sha256').update(contents).digest('hex');
+  if (sha256 !== EXECUTION_PATCH_SHA256) throw new SetupError('runtime-patch', 'The reviewed execution compatibility patch changed. Review its hash before building a runtime.');
+  return {filename, sha256, contents, executionPolicy: EXECUTION_POLICY, sourceRevision: SOURCE.sha};
+}
+export async function prepareBuildSource(source, state) {
+  const patch = await executionPatch();
+  if (await command('git', ['-C', source, 'rev-parse', 'HEAD'], {step: 'runtime-patch', stateDir: state}) !== SOURCE.sha)
+    throw new SetupError('runtime-patch', 'The execution patch requires the exact pinned Multica revision.');
+  if (await command('git', ['-C', source, 'status', '--porcelain', '--untracked-files=all'], {step: 'runtime-patch', stateDir: state}))
+    throw new SetupError('runtime-patch', 'The upstream checkout changed; the source was not modified or built.');
+  const build = resolve(state, 'upstream-gwi');
+  if (!(await exists(resolve(build, '.git')))) {
+    if (await exists(build)) throw new SetupError('runtime-patch', 'The isolated build directory already exists without a recognized Git checkout.');
+    await command('git', ['clone', '--shared', '--no-checkout', source, build], {step: 'runtime-patch', stateDir: state});
+    await command('git', ['-C', build, 'checkout', '--detach', SOURCE.sha], {step: 'runtime-patch', stateDir: state});
+    await command('git', ['-C', build, 'apply', '--check', patch.filename], {step: 'runtime-patch', stateDir: state});
+    await command('git', ['-C', build, 'apply', patch.filename], {step: 'runtime-patch', stateDir: state});
+    await command('git', ['-C', build, 'add', '--intent-to-add', '--', 'server/pkg/agent/gwi_supervised_execution_test.go'], {step: 'runtime-patch', stateDir: state});
+  }
+  if (await command('git', ['-C', build, 'rev-parse', 'HEAD'], {step: 'runtime-patch', stateDir: state}) !== SOURCE.sha)
+    throw new SetupError('runtime-patch', 'The isolated build checkout has a different revision.');
+  const diff = await command('git', ['-C', build, 'diff', '--no-ext-diff', '--binary', 'HEAD'], {step: 'runtime-patch', stateDir: state});
+  if (diff.replace(/^index .*\n/gm, '').replace(/^(@@ .* @@).*$/gm, '$1').trim() !== patch.contents.trim())
+    throw new SetupError('runtime-patch', 'The isolated build source differs from the reviewed compatibility patch. Existing files were retained.');
+  const untracked = await command('git', ['-C', build, 'ls-files', '--others', '--exclude-standard'], {step: 'runtime-patch', stateDir: state});
+  if (untracked) throw new SetupError('runtime-patch', 'The isolated build source contains unreviewed files.');
+  return {source: build, sha256: patch.sha256, executionPolicy: patch.executionPolicy};
 }
 async function waitFor(fn, step, timeout = 180_000) {
   const end = Date.now() + timeout;
@@ -215,14 +250,15 @@ async function startDaemon(state, manifest, connection, source) {
   const link = resolve(homedir(), '.multica/profiles', profile); await mkdir(dirname(link), {recursive: true, mode: 0o700});
   if (!(await exists(link))) await symlink(profileState, link, 'dir');
   else if (!(await lstat(link)).isSymbolicLink() || await realpath(link) !== await realpath(profileState)) throw new SetupError('daemon-profile', 'The dedicated Multica profile name is already in use.');
-  await save(resolve(profileState, 'config.json'), {server_url: connection.baseUrl, app_url: connection.baseUrl, workspace_id: connection.workspaceId, token: connection.token, workspaces_root: resolve(state, 'workspaces/tasks'), device_name: 'GWI guarded local runtime', runtime_name: 'GWI Codex', max_concurrent_tasks: 2, agent_timeout: '15m', disable_auto_update: true, disable_auto_reload: true});
+  await save(resolve(profileState, 'config.json'), {server_url: connection.baseUrl, app_url: connection.baseUrl, workspace_id: connection.workspaceId, token: connection.token, workspaces_root: resolve(state, 'workspaces/tasks'), device_name: 'GWI guarded local runtime', runtime_name: 'GWI Codex', agent_timeout: '0s', disable_auto_update: true, disable_auto_reload: true});
   const env = {...process.env}; for (const key of Object.keys(env)) if (key.startsWith('MULTICA_')) delete env[key];
   const probes = await readFile(resolve(source, 'server/internal/daemon/agents_probe.go'), 'utf8');
   for (const match of probes.matchAll(/"(MULTICA_[A-Z0-9_]+_PATH)"/g)) env[match[1]] = resolve(state, 'missing-agent');
-  Object.assign(env, {MULTICA_CODEX_PATH: resolve(state, 'codex-guard'), MULTICA_CODEX_MODEL: manifest.model, CODEX_HOME: resolve(state, 'codex-home'), MULTICA_DAEMON_AUTO_UPDATE: 'false', MULTICA_DAEMON_AUTO_RELOAD: 'false', DO_NOT_TRACK: 'true', ANALYTICS_DISABLED: 'true', GOTELEMETRY: 'off'});
+  Object.assign(env, {MULTICA_CODEX_PATH: resolve(state, 'codex-guard'), MULTICA_CODEX_MODEL: manifest.model, CODEX_HOME: resolve(state, 'codex-home'), MULTICA_DAEMON_AUTO_UPDATE: 'false', MULTICA_DAEMON_AUTO_RELOAD: 'false', DO_NOT_TRACK: 'true', ANALYTICS_DISABLED: 'true', GOTELEMETRY: 'off', MULTICA_GWI_SUPERVISED_EXECUTION: '1', MULTICA_GWI_EXECUTION_PATCH_SHA: EXECUTION_PATCH_SHA256, MULTICA_AGENT_IDLE_WATCHDOG: '0', MULTICA_AGENT_TOOL_WATCHDOG: '0'});
   const out = createWriteStream(resolve(state, 'daemon-launch.log'), {flags: 'a', mode: 0o600});
-  const child = spawn(resolve(state, 'bin/multica'), ['--profile', profile, 'daemon', 'start', '--foreground', '--daemon-id', manifest.daemonId, '--no-auto-update', '--no-auto-reload', '--max-concurrent-tasks', '2', '--agent-timeout', '15m'], {cwd: resolve(state, 'workspaces'), env, detached: true, stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(resolve(state, 'bin/multica'), ['--profile', profile, 'daemon', 'start', '--foreground', '--daemon-id', manifest.daemonId, '--no-auto-update', '--no-auto-reload', '--agent-timeout', '0'], {cwd: resolve(state, 'workspaces'), env, detached: true, stdio: ['ignore', 'pipe', 'pipe']});
   child.stdout.pipe(out); child.stderr.pipe(out); child.unref(); child.stdout.unref(); child.stderr.unref();
+  manifest.executionPolicy = EXECUTION_POLICY; manifest.executionPatchSha256 = EXECUTION_PATCH_SHA256;
   manifest.daemonPid = child.pid; manifest.daemonStartedAt = new Date().toISOString(); await save(resolve(state, 'manifest.json'), manifest);
   const client = createMulticaClient(connection);
   const runtime = await waitFor(async () => (await client.listRuntimes()).find(row => row.daemon_id === manifest.daemonId && row.status === 'online'), 'daemon-registration', 60_000);
@@ -240,6 +276,8 @@ export async function ownedDaemonIdentity(state, manifest) {
   const health = await response.json();
   if (health.pid !== manifest.daemonPid || health.profile !== manifest.instance || health.daemon_id !== manifest.daemonId || health.cli_commit !== SOURCE.sha || health.status !== 'running')
     throw new SetupError('daemon-health', 'The serving daemon identity changed; reconcile pending work before replacement.');
+  if (manifest.executionPolicy === EXECUTION_POLICY && !hasSupervisedExecutionHealth(health,{pid:manifest.daemonPid,profile:manifest.instance,daemonId:manifest.daemonId,cliCommit:SOURCE.sha}))
+    throw new SetupError('daemon-execution-policy', 'The serving daemon has not confirmed supervised execution. Stop GWI and reconcile pending work before refreshing this runtime.');
   return {healthUrl, pid: health.pid, profile: health.profile, daemonId: health.daemon_id, cliCommit: health.cli_commit,
     startedAt: manifest.daemonStartedAt, startedAtSource: 'owned-launch-record'};
 }
@@ -249,6 +287,7 @@ export function executionProfile(state, manifest, identity) {
     authorizedRootsFile: resolve(state, 'authorized-roots.json'), guardBinary: resolve(state, 'codex-guard'),
     permissions: {readOnly: {name: 'gwi-readonly', args: ['-c', 'default_permissions="gwi-readonly"'], verified: true, network: 'enabled'},
       workspaceWrite: {name: 'gwi-workspace', args: ['-c', 'default_permissions="gwi-workspace"'], verified: true, network: 'enabled'}},
+    executionPolicy: manifest.executionPolicy, executionPatchSha256: manifest.executionPatchSha256,
     defaultModel: manifest.model, approvalPolicy: 'never', serviceTier: 'default', defaultEffort: 'low',
     network: {enabled: true, domainEnforcement: false, scope: 'not restricted to local services'}, readIsolation: false,
     permissionEvidence: 'permission-proof.json', sourceSha: SOURCE.sha, daemon: identity,
@@ -263,6 +302,11 @@ export async function checkSetup(state, {probe = nativeProof} = {}) {
   const runtime = (await client.listRuntimes()).find(row => row.id === manifest.runtimeId && row.daemon_id === manifest.daemonId && row.status === 'online');
   if (!runtime) throw new SetupError('check-daemon', 'The owned runtime is offline. Inspect pending work before restarting it.');
   const identity = await ownedDaemonIdentity(state, manifest);
+  if (manifest.executionPolicy !== EXECUTION_POLICY || manifest.executionPatchSha256 !== EXECUTION_PATCH_SHA256)
+    throw new SetupError('runtime-policy-upgrade', 'The owned daemon still uses the earlier execution policy. Stop GWI, finish or explicitly stop and reconcile pending work, stop this dedicated idle Multica daemon, then run setup with --refresh-runtime. No active process was restarted.');
+  const runtimeConfig = await json(resolve(state, 'daemon/config.json'));
+  if (runtimeConfig.agent_timeout !== '0s' || Object.hasOwn(runtimeConfig, 'max_concurrent_tasks'))
+    throw new SetupError('runtime-policy-upgrade', 'The stored runtime still has execution quota overrides. Refresh the dedicated stopped runtime with --refresh-runtime.');
   await probe(state, manifest);
   await save(resolve(state, 'execution-profile.json'), executionProfile(state, manifest, identity));
   return {backend: true, authenticated: true, runtime: true, nativePermissions: true, modelTurnStarted: false};
@@ -272,7 +316,29 @@ export async function setup(options, log = console.log) {
   await mkdir(options.stateDir, {recursive: true, mode: 0o700});
   if (!contained(resolve(process.cwd(), '.local'), await realpath(options.stateDir)))
     throw new SetupError('state-directory', 'Private state must not escape .local through a symlink.');
-  return withSetupLock(options.stateDir, () => setupLocked(options, log));
+  return withSetupLock(options.stateDir, () => options.refreshRuntime ? refreshRuntime(options.stateDir, log) : setupLocked(options, log));
+}
+export async function refreshRuntime(state, log = console.log) {
+  const manifest = await json(resolve(state, 'manifest.json')), connection = await json(resolve(state, 'connection.json'));
+  if (!manifest.ready || manifest.source?.sha !== SOURCE.sha) throw new SetupError('runtime-refresh', 'A completed setup at the pinned revision is required.');
+  if (!Number.isSafeInteger(manifest.daemonPid) || manifest.daemonPid <= 0) throw new SetupError('runtime-refresh', 'The previous daemon process identity is unknown. Reconcile it before refreshing this runtime.');
+  if (Number.isInteger(manifest.daemonPid)) {
+    try {process.kill(manifest.daemonPid, 0); throw new SetupError('runtime-refresh', 'The recorded daemon process is still alive. Stop GWI, reconcile pending tasks and stop the dedicated idle daemon before --refresh-runtime. No process was stopped.');}
+    catch (error) {if (error instanceof SetupError || error.code !== 'ESRCH') throw error;}
+  }
+  const client = createMulticaClient(connection), info = await client.info();
+  if (!info.authenticated) throw new SetupError('runtime-refresh', 'The existing backend authentication is unavailable; credentials and data were retained.');
+  for (const agent of await client.listAgents()) if ((await client.listAgentTasks(agent.id)).some(task => !isMulticaTaskTerminal(task)))
+    throw new SetupError('pending-work', 'Pending work must be authoritatively reconciled before refreshing this stopped runtime.');
+  const compatible = await prepareBuildSource(resolve(state, 'upstream'), state);
+  const buildArgs = ['--build-arg', 'CLI_OS=' + process.platform, '--build-arg', 'CLI_ARCH=' + (process.arch === 'x64' ? 'amd64' : process.arch), '-f', resolve(state, 'Dockerfile')];
+  log('Building the reviewed execution-policy update for the dedicated stopped runtime. Existing backend data and authentication are retained.');
+  await command('docker', ['build', ...buildArgs, '--target', 'cli', '--output', 'type=local,dest=' + resolve(state, 'bin'), compatible.source], {step: 'build-native-cli', stateDir: state});
+  await chmod(resolve(state, 'bin/multica'), 0o700);
+  await nativeProof(state, manifest);
+  await startDaemon(state, manifest, connection, compatible.source);
+  await save(resolve(state, 'execution-profile.json'), executionProfile(state, manifest, manifest.daemon));
+  return {runtime: true, nativePermissions: true, executionPolicy: EXECUTION_POLICY, modelTurnStarted: false};
 }
 async function setupLocked(options, log) {
   const state = options.stateDir;
@@ -294,11 +360,12 @@ async function setupLocked(options, log) {
   if (!current) {await command('git', ['-C', source, 'fetch', '--depth', '1', 'origin', SOURCE.sha], {step: 'source', stateDir: state}); await command('git', ['-C', source, 'checkout', '--detach', SOURCE.sha], {step: 'source', stateDir: state});}
   if (await command('git', ['-C', source, 'status', '--porcelain', '--untracked-files=all'], {step: 'source', stateDir: state}))
     throw new SetupError('source', 'The pinned dependency has local modifications; they were not overwritten or executed.');
+  const compatible = await prepareBuildSource(source, state);
   await writeFile(resolve(state, 'Dockerfile'), dockerfile()); await mkdir(resolve(state, 'bin'), {recursive: true});
   const image = 'gwi-multica-backend:' + SOURCE.sha.slice(0, 12), buildArgs = ['--build-arg', 'CLI_OS=' + process.platform, '--build-arg', 'CLI_ARCH=' + (process.arch === 'x64' ? 'amd64' : process.arch), '-f', resolve(state, 'Dockerfile')];
   log('Building the backend and native daemon from the pinned source. First setup downloads build dependencies.');
-  await command('docker', ['build', ...buildArgs, '--target', 'backend', '-t', image, source], {step: 'build-backend', stateDir: state});
-  await command('docker', ['build', ...buildArgs, '--target', 'cli', '--output', 'type=local,dest=' + resolve(state, 'bin'), source], {step: 'build-native-cli', stateDir: state});
+  await command('docker', ['build', ...buildArgs, '--target', 'backend', '-t', image, compatible.source], {step: 'build-backend', stateDir: state});
+  await command('docker', ['build', ...buildArgs, '--target', 'cli', '--output', 'type=local,dest=' + resolve(state, 'bin'), compatible.source], {step: 'build-native-cli', stateDir: state});
   await chmod(resolve(state, 'bin/multica'), 0o700);
   const secrets = resolve(state, 'stack.env'); if (!(await exists(secrets))) await writeFile(secrets, 'POSTGRES_PASSWORD=' + randomBytes(24).toString('hex') + '\nJWT_SECRET=' + randomBytes(32).toString('hex') + '\n', {mode: 0o600});
   await writeFile(resolve(state, 'compose.yml'), composeFile(instance, image));
@@ -311,7 +378,7 @@ async function setupLocked(options, log) {
   await save(manifestPath, manifest);
   await waitFor(async () => (await api(manifest.baseUrl, '/healthz')).status === 'ok', 'backend-migrations');
   const connection = await bootstrap(state, manifest, compose); const client = createMulticaClient(connection);
-  for (const agent of await client.listAgents()) if ((await client.listAgentTasks(agent.id)).some(task => ['queued', 'dispatched', 'running', 'waiting_local_directory'].includes(task.status))) throw new SetupError('pending-work', 'Existing pending work needs reconciliation before a stopped daemon can be restarted.');
+  for (const agent of await client.listAgents()) if ((await client.listAgentTasks(agent.id)).some(task => !isMulticaTaskTerminal(task))) throw new SetupError('pending-work', 'Existing pending work needs reconciliation before a stopped daemon can be restarted.');
   await prepareNative(state, manifest); log('Verifying both native permission modes and local service communication without a model turn.');
   await nativeProof(state, manifest); await startDaemon(state, manifest, connection, source);
   manifest.ready = true; manifest.readIsolation = false; manifest.network = 'enabled; no domain restriction'; await save(manifestPath, manifest);
@@ -344,7 +411,7 @@ export async function nativeGuard(state, args) {
 async function main() {
   if (process.argv[2] === '--native-guard') {await nativeGuard(resolve(process.argv[3]), process.argv.slice(process.argv.indexOf('--') + 1)); return;}
   const options = parseArgs(process.argv.slice(2));
-  if (options.help) {console.log('Usage: node scripts/setup-multica.mjs [--check] [--state-dir .local/name] [--codex-bin PATH] [--model MODEL]\nRequires Node 24+, Docker with Compose, Git, curl and an authenticated Codex installation.\nCreates an isolated loopback backend, database and guarded native daemon. Credentials stay private.\n--check verifies existing services and native permissions without starting a model task.'); return;}
+  if (options.help) {console.log('Usage: node scripts/setup-multica.mjs [--check | --refresh-runtime] [--state-dir .local/name] [--codex-bin PATH] [--model MODEL]\nRequires Node 24+, Docker with Compose, Git, curl and an authenticated Codex installation.\nCreates an isolated loopback backend, database and guarded native daemon. Credentials stay private.\n--check verifies existing services and native permissions without starting a model task.\n--refresh-runtime rebuilds and starts only a dedicated already-stopped runtime after pending-work checks; it never stops live work.'); return;}
   const result = await setup(options); if (options.check) console.log(result);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => {console.error('Multica setup failed at ' + (error.step ?? 'runtime') + ': ' + (error instanceof SetupError ? error.message : 'Inspect the private setup.log; credentials were not printed.')); process.exitCode = 1;});

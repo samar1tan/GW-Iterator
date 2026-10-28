@@ -10,7 +10,7 @@ When no comparable history exists, say that the first bounded execution will pro
 
 ## Continue
 
-The failed-stage inspector retains the concrete result and current recovery identity. The main recovery section shows account allowance plus the task's recent observed range, duration and sample count. The primary action uses the existing approved task/attempt boundary. At a real execution bound, describe one more attempt and its effect. At account exhaustion, show refresh and the actual reset time; do not offer an invented token refill.
+The failed-stage inspector retains the concrete result and current recovery identity. The main recovery section shows account availability plus the task's recent observed range, duration and sample count. The primary action checks the remaining real boundaries; it never requests an attempt, time, round or token quota extension. At account exhaustion, show refresh and the actual reset time.
 
 If the account view cannot support an estimate or contradicts a previous approval, show that state directly and refresh the decision. A deliberate one-step owner continuation in an unavailable-data case must name its uncertainty and remain bounded. Unknown external execution is reconciled first.
 

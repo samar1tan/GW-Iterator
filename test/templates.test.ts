@@ -55,6 +55,21 @@ test('template revisions are immutable, idempotent and retired without deleting 
   assert.throws(()=>h.templates.preview(h.project.id,{template:{id:created.template.id,revision:1},expectedProjectRevision:h.project.revision},OWNER),code('TEMPLATE_RETIRED'));
 });
 
+test('historical quota changes do not create template conflicts or replace project history',async t=>{
+  const h=await fixture(t),policy={concurrency:1,maxAttempts:1,maxIterations:1,timeoutSeconds:5,tokenBudget:100};
+  const flow=h.engine.updatePipeline(h.flow.id,h.flow.revision,{...h.flow,policy},OWNER);
+  assert.deepEqual(portablePipeline(flow,h.project).policy,{});
+  const definition={...portablePipeline(flow,h.project),policy};
+  const created=h.templates.create({source:h.source('pipeline',flow.id),definition,idempotencyKey:'historical-policy-source'},OWNER);
+  const first=h.templates.preview(h.project.id,{template:{id:created.template.id,revision:1},target:{kind:'pipeline',id:flow.id},expectedProjectRevision:h.project.revision,expectedPipelineRevision:flow.revision},OWNER);
+  const installed=await h.templates.apply(h.project.id,first.id,{previewKey:first.key,idempotencyKey:'historical-policy-install'},OWNER);
+  const next=h.templates.revise(created.template.id,{expectedRecordRevision:created.template.recordRevision,definition:{...definition,policy:{concurrency:20,maxAttempts:40,maxIterations:30,timeoutSeconds:7200,tokenBudget:2000000}},changeSummary:'Retain an imported historical policy.',idempotencyKey:'historical-policy-revision'},OWNER);
+  const preview=h.templates.preview(h.project.id,{template:{id:created.template.id,revision:next.revision.revision},target:{kind:'pipeline',id:flow.id},expectedProjectRevision:installed.project.revision,expectedPipelineRevision:installed.pipeline!.revision},OWNER);
+  assert.equal(preview.state,'ready');assert.ok(preview.changes.every(change=>!change.path.startsWith('/policy')));
+  assert.deepEqual((preview.candidate as Pipeline).policy,policy);
+  assert.deepEqual((h.templates.revision(created.template.id,1,OWNER).definition as PipelineTemplateDefinition).policy,policy);
+});
+
 test('independent workflow stage edits merge, while conflicting changes and deletion require a choice',async t=>{
   const h=await fixture(t),created=h.templates.create({source:h.source('pipeline',h.flow.id),idempotencyKey:'synthetic-workflow-template'},OWNER);
   const first=h.templates.preview(h.project.id,{template:{id:created.template.id,revision:1},target:{kind:'pipeline',id:h.flow.id},expectedProjectRevision:h.project.revision,expectedPipelineRevision:h.flow.revision},OWNER);

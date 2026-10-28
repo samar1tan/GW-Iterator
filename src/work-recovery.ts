@@ -3,6 +3,7 @@ import type {Engine} from './engine.ts';
 import type {Intake,Run,WorkRecoveryRecord} from './contracts.ts';
 import {isNativeCapacityFailure} from './execution-failures.ts';
 import {AppError,demand} from './validation.ts';
+import {executionFailureIdentity} from './execution-evidence.ts';
 
 const ended=(run:Run)=>['completed','failed','interrupted','cancelled'].includes(run.status);
 const pending=new Set(['checking','backoff','retrying','resuming']);
@@ -17,7 +18,7 @@ type Context={
   engine:Engine;get:(id:string)=>Intake;all:()=>Intake[];family:(goal:Intake)=>Run[];
   save:(goal:Intake,event:string)=>void;active:(id:string)=>boolean;
   pause:(goal:Intake)=>void;resume:(goal:Intake,record:WorkRecoveryRecord)=>Promise<void>;
-  remaining:(goal:Intake)=>{seconds:number;tokens:number};confirmed:(run:Run)=>boolean;
+  confirmed:(run:Run)=>boolean;
 };
 
 /** Model-free, finite recovery around the existing scheduler and admission checks. */
@@ -58,8 +59,9 @@ export class WorkRecovery {
         const previous=currentWorkRecovery(goal);
         if(previous?.phase==='needs_input'||previous?.phase==='cancelled')continue;
         if(!this.context.family(goal).every(ended))continue;
-        const used=(goal.workRecoveryHistory??[]).filter(row=>row.trigger==='automatic'&&row.retriedAt).length+(goal.recoveryHistory??[]).filter(row=>row.trigger==='automatic'&&row.newRunId&&!row.workRecoveryId).length;
-        if(used>=2){goal=this.begin(goal.id,'automatic');this.finish(goal,'AUTOMATIC_RETRY_LIMIT');continue;}
+        const {stage}=this.target(goal),attempt=stage.attempts.at(-1)!;
+        const unchanged=stage.attempts.slice(0,-1).some(previous=>executionFailureIdentity(previous)===executionFailureIdentity(attempt));
+        if(unchanged){goal=this.begin(goal.id,'automatic');this.finish(goal,attempt.failureCode==='STAGE_TIMEOUT'?'REPEATED_TIMEOUT':'UNCHANGED_FAILURE');continue;}
         goal=this.begin(goal.id,'automatic');
       }
       if(!workRecoveryPending(goal)||this.busy.has(goal.id))continue;
@@ -119,11 +121,9 @@ export class WorkRecovery {
         const latest=this.valid(id,record);if(!latest)return;goal=latest;record=currentWorkRecovery(goal)!;
         if(this.cleanup(goal)){record.nextAt=new Date(Math.min(Date.parse(record.deadlineAt),Date.now()+Math.min(15000,record.checks*5000))).toISOString();this.context.save(goal,'work.recovery_waiting');return;}
       }
-      if(this.context.remaining(goal).seconds<=0||this.context.remaining(goal).tokens<1000){this.finish(goal,'GOAL_BOUNDARY');return;}
       if(run.executionKind){await this.complete(goal,record);return;}
       record.phase='backoff';record.code='RETRY_SCHEDULED';record.nextAt=new Date(Date.now()+(record.trigger==='automatic'?30000:0)).toISOString();this.context.save(goal,'work.recovery_scheduled');return;
     }
-    if(this.context.remaining(goal).seconds<=0||this.context.remaining(goal).tokens<1000){this.finish(goal,'GOAL_BOUNDARY');return;}
     if(this.context.engine.accountMode(run)&&this.context.engine.accountAllowances){
       const account=await within((async()=>this.context.engine.accountAllowances!.assess(await this.context.engine.resolvedAllowanceTarget(run,stage.stageId),{refresh:true}))(),15000);
       const latest=this.valid(id,record);if(!latest)return;goal=latest;record=currentWorkRecovery(goal)!;
@@ -132,9 +132,8 @@ export class WorkRecovery {
     const fresh=this.context.engine.run(record.runId).stages.find(stage=>stage.stageId===record.stageId);
     if(fresh?.attempts.at(-1)?.id!==record.attemptId||!['failed','interrupted','cancelled'].includes(fresh?.status??'')){record.phase='cancelled';record.code='RECOVERY_TARGET_CHANGED';record.endedAt=new Date().toISOString();this.context.save(goal,'work.recovery_cancelled');return;}
     if(this.cleanup(goal)){this.finish(goal,'TERMINATION_UNCONFIRMED');return;}
-    if(this.context.remaining(goal).seconds<=0||this.context.remaining(goal).tokens<1000){this.finish(goal,'GOAL_BOUNDARY');return;}
     record.phase='retrying';record.code='RETRYING_STEP';record.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');
-    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step within its existing limits. Inspect retained work and prior findings; preserve accepted upstream work.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',projectId:goal.projectId});}
+    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step from retained work and prior findings; preserve accepted upstream work and current boundaries.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',projectId:goal.projectId});}
     catch(error){this.finish(this.context.get(id),error instanceof Error&&'code'in error?String(error.code):'RETRY_FAILED',error instanceof Error?error.message:String(error));}
   }
   private async complete(goal:Intake,record:WorkRecoveryRecord){

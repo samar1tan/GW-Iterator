@@ -1,4 +1,5 @@
 import type {DefinitionCheckpoint,DefinitionMutation} from './template-types.ts';
+import {SUPERVISED_EXECUTION_POLICY,MULTICA_EXECUTION_PATCH_SHA256,hasSupervisedExecutionHealth} from './runtime-execution-policy.ts';
 import {DEFAULT_EFFORT, EFFORTS} from './contracts.ts';
 import {randomUUID,createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
@@ -59,7 +60,7 @@ export class Platform {
   private owner(actor:Actor,projectId:string):Project{const project=this.engine.detail(projectId,actor).project;demand(!actor.projectId,'OWNER_REQUIRED','Team and capability changes require the project owner.',403);return project;}
   private async one<T>(key:string,action:()=>Promise<T>):Promise<T>{const pending=this.pending.get(key);if(pending)return pending as Promise<T>;const result=action().finally(()=>this.pending.delete(key));this.pending.set(key,result);return result;}
   async connection(){const info=await this.client.info();return{...info,connected:info.available&&info.authenticated};}
-  executionLimits(){return{maxTaskSeconds:null,nativeTaskLimit:'unknown' as const,timeoutEnforcement:'observer-cancellation' as const};}
+  executionLimits(){return{maxTaskSeconds:null,nativeTaskLimit:'unknown' as const,timeoutEnforcement:'owner-control' as const,...(this.profile.executionPolicy===SUPERVISED_EXECUTION_POLICY&&this.profile.executionPatchSha256===MULTICA_EXECUTION_PATCH_SHA256?{configuredExecutionPolicy:SUPERVISED_EXECUTION_POLICY}:{})};}
   verificationCapability(){
     const available=this.profile.verified===true&&!!this.profile.runtimeId&&!!this.profile.daemonId&&!!this.profile.permissionEvidence&&this.profile.permissions?.workspaceWrite?.verified===true&&this.profile.permissions.workspaceWrite.name==='gwi-workspace'&&this.profile.permissions?.readOnly?.verified===true&&this.profile.permissions.readOnly.name==='gwi-readonly'&&typeof this.profile.guardBinary==='string'&&path.isAbsolute(this.profile.guardBinary)&&typeof this.profile.scratchHome==='string'&&path.isAbsolute(this.profile.scratchHome)&&typeof this.profile.authorizedRootsFile==='string'&&path.isAbsolute(this.profile.authorizedRootsFile);
     return{requested:'review' as const,mode:available?'disposable-copy' as const:'unavailable' as const,available,requiresProbe:true as const,sourceProtection:available?'probe-required' as const:'unavailable' as const,scratchWrite:available?'probe-required' as const:'unavailable' as const,readIsolation:false as const,network:this.profile.permissions?.workspaceWrite?.network==='enabled'?'enabled' as const:'unknown' as const,networkDomainRestriction:false as const,...(!available?{reason:'The protected verification runner is unavailable. Use a capable configured runner or record pending checks for owner delivery.'}:{})};
@@ -88,7 +89,24 @@ export class Platform {
     const all=await this.client.listRuntimes(),selected=role?.multica?.runtimeId??this.profile.runtimeId;
     const runtime=all.find(item=>selected?item.id===selected:item.status==='online');
     demand(runtime&&runtime.status==='online','RUNTIME_UNAVAILABLE','The selected execution runtime is offline. Connect it before starting agent work.',409);
-    if(forExecution)demand(runtime.id===this.profile.runtimeId&&runtime.daemon_id===this.profile.daemonId&&!!this.profile.permissionEvidence&&this.profile.verified===true&&this.profile.permissions?.readOnly?.verified===true&&this.profile.permissions?.workspaceWrite?.verified===true,'RUNTIME_VERIFICATION_REQUIRED','Run the protected Multica setup/check before assigning project work to this runtime.',409);return runtime;
+    if(forExecution)demand(runtime.id===this.profile.runtimeId&&runtime.daemon_id===this.profile.daemonId&&!!this.profile.permissionEvidence&&this.profile.verified===true&&this.profile.permissions?.readOnly?.verified===true&&this.profile.permissions?.workspaceWrite?.verified===true,'RUNTIME_VERIFICATION_REQUIRED','Run the protected Multica setup/check before assigning project work to this runtime.',409);
+    if(forExecution){
+      demand(this.profile.executionPolicy===SUPERVISED_EXECUTION_POLICY&&this.profile.executionPatchSha256===MULTICA_EXECUTION_PATCH_SHA256,'RUNTIME_EXECUTION_POLICY_REQUIRED','This runtime needs the supervised execution update. Stop GWI, reconcile pending work and refresh the dedicated stopped runtime before starting new work.',409);
+      const identity=this.profile.daemon;
+      let confirmed=false;
+      if(identity){
+        try{
+          const url=new URL(identity.healthUrl);
+          if(url.protocol==='http:'&&['127.0.0.1','[::1]'].includes(url.hostname)&&identity.daemonId===runtime.daemon_id&&identity.profile&&Number.isSafeInteger(identity.pid)&&identity.pid>0){
+            process.kill(identity.pid,0);
+            const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(5000)});
+            confirmed=response.ok&&hasSupervisedExecutionHealth(await response.json(),identity);
+          }
+        }catch{}
+      }
+      demand(confirmed,'RUNTIME_EXECUTION_POLICY_REQUIRED','The currently serving runtime did not confirm its execution policy and identity. Check the dedicated runtime before starting new work; active tasks were not stopped.',409);
+    }
+    return runtime;
   }
   async authorizeExecutionRoot(){
     demand(this.profile.authorizedRootsFile&&path.isAbsolute(this.profile.authorizedRootsFile),'RUNTIME_VERIFICATION_REQUIRED','The runtime has no execution-directory policy.',409);
@@ -111,12 +129,12 @@ export class Platform {
     demand(!role.retired,'ROLE_RETIRED','Choose an active role for new work.');const runtime=await this.runtime(role);
     const template=role.multica?.agentId?await this.client.getAgent(role.multica.agentId):undefined;
     const executionRole={...role};delete executionRole.origin;delete executionRole.templateBindingId;
-    const roleBasis={...executionRole,executionContract:'gwi-structured-result-v2',multica:{...role.multica,agentId:undefined},effectiveRuntimeId:runtime.id,effectiveModel:role.model??this.defaultModel??this.profile.defaultModel,template:template&&!this.revisionAgent(template)?{id:template.id,updatedAt:template.updated_at}:undefined};
+    const roleBasis={...executionRole,executionContract:'gwi-supervised-structured-result-v3',multica:{...role.multica,agentId:undefined},effectiveRuntimeId:runtime.id,effectiveModel:role.model??this.defaultModel??this.profile.defaultModel,template:template&&!this.revisionAgent(template)?{id:template.id,updatedAt:template.updated_at}:undefined};
     const hash=createHash('sha256').update(JSON.stringify(roleBasis)).digest('hex').slice(0,20);
     const marker='[GWI '+project.id+'/'+role.id+'@'+hash+']';const listed=await this.client.listAgents();
     const existing=listed.find(item=>item.description?.startsWith(marker));
     const model=role.model??this.defaultModel??this.profile.defaultModel??template?.model;
-    const agentInput:MulticaAgentInput={name:(project.name+' · '+role.name).slice(0,80)+' · '+hash.slice(0,8),runtime_id:runtime.id,description:marker+'\n'+role.description,instructions:'GWI owns coordination and result delivery. Complete only the assigned bounded action, then return the requested final JSON directly; GWI persists it automatically. Do not create Multica comments, reporting files, nested agents or polling loops for delivery. Your own sandbox applies only to this action, not to other roles.\n'+role.instructions+'\nInputs: '+JSON.stringify(role.inputs??[])+'\nOutputs: '+JSON.stringify(role.outputs??[])+'\nAcceptance: '+JSON.stringify(role.checks??[]),thinking_level:role.effort,service_tier:'default',max_concurrent_tasks:1,visibility:'private',permission_mode:'private',custom_args:['-c','default_permissions="'+(role.sandbox==='read-only'?'gwi-readonly':'gwi-workspace')+'"','-c','approval_policy="never"'],skill_ids:role.multica?.skillIds??template?.skills?.map(item=>item.id)??[],...(model?{model}:{}),...(isObject(template?.mcp_config)?{mcp_config:template.mcp_config}:{})};
+    const agentInput:MulticaAgentInput={name:(project.name+' · '+role.name).slice(0,80)+' · '+hash.slice(0,8),runtime_id:runtime.id,description:marker+'\n'+role.description,instructions:'GWI owns coordination and result delivery. Complete only the assigned bounded action, then return the requested final JSON directly; GWI persists it automatically. Do not create Multica comments, reporting files, nested agents or polling loops for delivery. Your own sandbox applies only to this action, not to other roles.\n'+role.instructions+'\nInputs: '+JSON.stringify(role.inputs??[])+'\nOutputs: '+JSON.stringify(role.outputs??[])+'\nAcceptance: '+JSON.stringify(role.checks??[]),thinking_level:role.effort,service_tier:'default',visibility:'private',permission_mode:'private',custom_args:['-c','default_permissions="'+(role.sandbox==='read-only'?'gwi-readonly':'gwi-workspace')+'"','-c','approval_policy="never"'],skill_ids:role.multica?.skillIds??template?.skills?.map(item=>item.id)??[],...(model?{model}:{}),...(isObject(template?.mcp_config)?{mcp_config:template.mcp_config}:{})};
     let remote=existing??await this.client.createAgent(agentInput);
     if(!existing){const inherited=role.multica?.skillIds??(template?(await this.client.listAgentSkills(template.id)).map(skill=>skill.id):[]);const skills=await this.client.setAgentSkills(remote.id,inherited);remote={...remote,skills};}else remote={...remote,skills:await this.client.listAgentSkills(remote.id)};
     if(!existing){const serverIds=role.multica?.mcpServerIds??(template?(await this.client.listAgentMcpServers(template.id)).filter(server=>server.enabled!==false).map(server=>server.id):[]);for(const serverId of serverIds)await this.client.addAgentMcpServer(remote.id,serverId);}

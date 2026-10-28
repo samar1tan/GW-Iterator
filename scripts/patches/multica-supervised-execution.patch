@@ -1,0 +1,200 @@
+diff --git a/server/internal/daemon/config.go b/server/internal/daemon/config.go
+--- a/server/internal/daemon/config.go
++++ b/server/internal/daemon/config.go
+@@ -102,6 +102,8 @@
+ 
+ // Config holds all daemon configuration.
+ type Config struct {
++	SupervisedExecution            bool
++	GWIExecutionPatchSHA           string
+ 	ServerBaseURL                  string
+ 	DaemonID                       string
+ 	LegacyDaemonIDs                []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+@@ -646,6 +648,8 @@
+ 		AutoReloadEnabled:               autoReloadEnabled,
+ 		HealthPort:                      healthPort,
+ 		MaxConcurrentTasks:              maxConcurrentTasks,
++		SupervisedExecution:             os.Getenv("MULTICA_GWI_SUPERVISED_EXECUTION") == "1",
++		GWIExecutionPatchSHA:            os.Getenv("MULTICA_GWI_EXECUTION_PATCH_SHA"),
+ 		PollInterval:                    pollInterval,
+ 		WSClaimPollInterval:             wsClaimPollInterval,
+ 		HeartbeatInterval:               heartbeatInterval,
+diff --git a/server/internal/daemon/daemon.go b/server/internal/daemon/daemon.go
+--- a/server/internal/daemon/daemon.go
++++ b/server/internal/daemon/daemon.go
+@@ -8753,6 +8753,7 @@
+ 		idleWatchdogTimeout = d.cfg.OpenCodeIdleWatchdog
+ 	}
+ 	execOpts := agent.ExecOptions{
++		SupervisedExecution:        d.cfg.SupervisedExecution,
+ 		EnableTaskSupplement:       taskSupplementNegotiated,
+ 		CursorHookCommand:          cursorHookCommand,
+ 		Cwd:                        env.WorkDir,
+diff --git a/server/internal/daemon/health.go b/server/internal/daemon/health.go
+--- a/server/internal/daemon/health.go
++++ b/server/internal/daemon/health.go
+@@ -19,8 +19,13 @@
+ 
+ // HealthResponse is returned by the daemon's local health endpoint.
+ type HealthResponse struct {
+-	Status string `json:"status"`
+-	PID    int    `json:"pid"`
++	GWISupervisedExecution  bool   `json:"gwi_supervised_execution"`
++	GWIAgentTimeoutDisabled bool   `json:"gwi_agent_timeout_disabled"`
++	GWIIdleWatchdogDisabled bool   `json:"gwi_idle_watchdog_disabled"`
++	GWIToolWatchdogDisabled bool   `json:"gwi_tool_watchdog_disabled"`
++	GWIExecutionPatchSHA    string `json:"gwi_execution_patch_sha,omitempty"`
++	Status                  string `json:"status"`
++	PID                     int    `json:"pid"`
+ 	// OS is the daemon's runtime.GOOS. The desktop app compares it against its
+ 	// own host OS to detect a daemon it cannot manage — e.g. a Windows desktop
+ 	// reaching a Linux daemon inside WSL2 over localhost forwarding. The
+@@ -345,22 +350,27 @@
+ 		}
+ 
+ 		resp := HealthResponse{
+-			Status:                status,
+-			PID:                   os.Getpid(),
+-			OS:                    runtime.GOOS,
+-			Uptime:                time.Since(startedAt).Truncate(time.Second).String(),
+-			Profile:               d.cfg.Profile,
+-			LaunchedBy:            d.cfg.LaunchedBy,
+-			DaemonID:              d.cfg.DaemonID,
+-			DeviceName:            d.cfg.DeviceName,
+-			ServerURL:             d.cfg.ServerBaseURL,
+-			CLIVersion:            d.cfg.CLIVersion,
+-			CLICommit:             d.cfg.CLICommit,
+-			ActiveTaskCount:       d.activeTasks.Load(),
+-			RunningTaskCount:      d.runningTasks.Load(),
+-			ResourceWaitTaskCount: d.resourceWaitTasks.Load(),
+-			Agents:                agents,
+-			SkippedAgents:         d.skippedAgentsSnapshot(),
++			Status:                  status,
++			PID:                     os.Getpid(),
++			OS:                      runtime.GOOS,
++			Uptime:                  time.Since(startedAt).Truncate(time.Second).String(),
++			Profile:                 d.cfg.Profile,
++			LaunchedBy:              d.cfg.LaunchedBy,
++			DaemonID:                d.cfg.DaemonID,
++			DeviceName:              d.cfg.DeviceName,
++			ServerURL:               d.cfg.ServerBaseURL,
++			CLIVersion:              d.cfg.CLIVersion,
++			CLICommit:               d.cfg.CLICommit,
++			GWISupervisedExecution:  d.cfg.SupervisedExecution,
++			GWIAgentTimeoutDisabled: d.cfg.AgentTimeout == 0,
++			GWIIdleWatchdogDisabled: d.cfg.AgentIdleWatchdog == 0,
++			GWIToolWatchdogDisabled: d.cfg.AgentToolWatchdog == 0,
++			GWIExecutionPatchSHA:    d.cfg.GWIExecutionPatchSHA,
++			ActiveTaskCount:         d.activeTasks.Load(),
++			RunningTaskCount:        d.runningTasks.Load(),
++			ResourceWaitTaskCount:   d.resourceWaitTasks.Load(),
++			Agents:                  agents,
++			SkippedAgents:           d.skippedAgentsSnapshot(),
+ 
+ 			ReloadPendingReason: d.reloadPending(),
+ 			Workspaces:          wsList,
+diff --git a/server/pkg/agent/agent.go b/server/pkg/agent/agent.go
+--- a/server/pkg/agent/agent.go
++++ b/server/pkg/agent/agent.go
+@@ -24,6 +24,8 @@
+ 
+ // ExecOptions configures a single execution.
+ type ExecOptions struct {
++	// SupervisedExecution keeps model duration and silence under owner control.
++	SupervisedExecution bool
+ 	// EnableTaskSupplement installs provider hooks only for runs whose daemon/server
+ 	// capability handshake enabled additional messages.
+ 	EnableTaskSupplement bool
+diff --git a/server/pkg/agent/codex.go b/server/pkg/agent/codex.go
+--- a/server/pkg/agent/codex.go
++++ b/server/pkg/agent/codex.go
+@@ -1692,8 +1692,13 @@
+ 
+ 		lastSemanticActivity := time.Now()
+ 		lastSemanticActivityDescription := "turn/start"
+-		semanticTimer := time.NewTimer(semanticInactivityTimeout)
+-		defer semanticTimer.Stop()
++		var semanticTimer *time.Timer
++		var semanticTimerC <-chan time.Time
++		if !opts.SupervisedExecution {
++			semanticTimer = time.NewTimer(semanticInactivityTimeout)
++			semanticTimerC = semanticTimer.C
++			defer semanticTimer.Stop()
++		}
+ 
+ 		firstTurnNoProgressTimeout := codexFirstTurnNoProgressTimeout(semanticInactivityTimeout, opts.FirstTurnNoProgressTimeout)
+ 		var firstTurnNoProgressTimer *time.Timer
+@@ -1724,12 +1729,16 @@
+ 			case activity := <-semanticActivityCh:
+ 				lastSemanticActivity = time.Now()
+ 				lastSemanticActivityDescription = activity
+-				resetTimer(semanticTimer, semanticInactivityTimeout)
++				if semanticTimer != nil {
++					resetTimer(semanticTimer, semanticInactivityTimeout)
++				}
+ 				if activity == "status:running" && !firstTurnStarted {
+ 					firstTurnStarted = true
+ 					firstItemWait.start(time.Now(), c.activeTurnID())
+-					firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
+-					firstTurnNoProgressTimerC = firstTurnNoProgressTimer.C
++					if !opts.SupervisedExecution {
++						firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
++						firstTurnNoProgressTimerC = firstTurnNoProgressTimer.C
++					}
+ 				} else if firstTurnStarted && !firstTurnProgressObserved && isCodexFirstTurnProgressActivity(activity) {
+ 					firstTurnProgressObserved = true
+ 					if activity == "error:terminal" {
+@@ -1759,7 +1768,7 @@
+ 					"timeout", firstTurnNoProgressTimeout.String(),
+ 					"last_activity", lastSemanticActivityDescription,
+ 				)
+-			case <-semanticTimer.C:
++			case <-semanticTimerC:
+ 				waitingForTurn = false
+ 				finishFirstItemWait("semantic_inactivity_timeout")
+ 				finalStatus = "timeout"
+diff --git a/server/pkg/agent/gwi_supervised_execution_test.go b/server/pkg/agent/gwi_supervised_execution_test.go
+new file mode 100644
+--- /dev/null
++++ b/server/pkg/agent/gwi_supervised_execution_test.go
+@@ -0,0 +1,40 @@
++package agent
++
++import (
++	"runtime"
++	"testing"
++	"time"
++)
++
++func TestGWISupervisedExecutionKeepsSilentModelWork(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("the synthetic RPC process uses a POSIX shell")
++	}
++	for _, supervised := range []bool{false, true} {
++		name := "upstream-watchdogs"
++		if supervised {
++			name = "owner-supervision"
++		}
++		t.Run(name, func(t *testing.T) {
++			fake := writeFakeCodexAppServer(t, ""+
++				"read line\n"+
++				"echo '{\"id\":1,\"result\":{}}'\n"+
++				"read line\nread line\n"+
++				"echo '{\"id\":2,\"result\":{\"thread\":{\"id\":\"synthetic-thread\"}}}'\n"+
++				"read line\n"+
++				"echo '{\"id\":3,\"result\":{}}'\n"+
++				"echo '{\"method\":\"turn/started\",\"params\":{\"threadId\":\"synthetic-thread\",\"turn\":{\"id\":\"synthetic-turn\"}}}'\n"+
++				"sleep 0.12\n"+
++				"echo '{\"method\":\"item/completed\",\"params\":{\"threadId\":\"synthetic-thread\",\"item\":{\"type\":\"agentMessage\",\"id\":\"synthetic-result\",\"text\":\"Verified synthetic result\"}}}'\n"+
++				"echo '{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"synthetic-thread\",\"turn\":{\"id\":\"synthetic-turn\",\"status\":\"completed\"}}}'\n")
++			result := executeFakeCodex(t, fake, ExecOptions{SupervisedExecution: supervised, SemanticInactivityTimeout: 40 * time.Millisecond, FirstTurnNoProgressTimeout: 30 * time.Millisecond})
++			if supervised {
++				if result.Status != "completed" || result.Output != "Verified synthetic result" {
++					t.Fatalf("supervised execution was cut short: %#v", result)
++				}
++			} else if result.Status != "timeout" {
++				t.Fatalf("the opt-in patch changed upstream default behavior: %#v", result)
++			}
++		})
++	}
++}

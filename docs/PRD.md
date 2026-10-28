@@ -1,5 +1,7 @@
 # GW-Iterator: integrated iteration pipelines
 
+Current execution revision: [Supervised stages without numeric quotas](stage-execution-prd.md), with [interaction guidance](stage-execution-ued.md). It supersedes earlier numerical concurrency, attempt, iteration, action-round, model-time and token limits, including their recovery/extension interactions. Security, scope, human decisions, real provider availability and verified progress boundaries remain in force.
+
 Current allowance revision: [Account-aware execution allowance](account-allowance-prd.md). Ordinary allowance decisions use Codex account availability and observed task trends; raw token counters are technical diagnostics.
 
 Current interaction revision: [Human workbench](human-workbench-prd.md), extended by the [global workbench](global-workbench-prd.md). It supersedes the earlier default-canvas, exposed-configuration and separate manual-top-up interactions. Historical execution/configuration bases remain intact.
@@ -74,9 +76,9 @@ Distinguish worker correction loops, cross-role review/delivery loops and projec
 
 Independent checks must substantiate the requested outcome. A completion message, successful process or passing unit suite cannot replace configured product review or live evidence. Detect repeated actions and unchanged failures; stop or escalate when further work has no supported benefit. Record the useful next human action.
 
-Bound concurrency, attempts, rounds and active execution time. Ordinary admission uses current Codex account allowance and comparable task trends; token counts remain diagnostics and explicit expert safeguards. Human/CI waits do not spend model tokens. Capacity recovery is finite and uses an allowed model pool; permission and task blockers are distinct. Reconcile authoritative work after restart before resuming; never blindly relaunch uncertain external operations.
+Do not impose numerical concurrency, attempt, iteration, action-round, model-time or token quotas. Ordinary admission uses current Codex account availability and comparable task observations; counts and duration are diagnostics. Human/CI waits do not spend model tokens. Capacity recovery requires verified useful progress and an allowed model pool; unchanged failures, permission and task blockers require attention. Reconcile authoritative work after restart before resuming; never blindly relaunch uncertain external operations.
 
-When an attempt, round or time limit prevents further work, identify the limiting pipeline or supervising outcome and offer a concrete bounded continuation. Account exhaustion blocks paid dispatch; unavailable or caution readings require a deliberate owner step, with shared-account uncertainty visible. Retain original definitions, prior limits, consumption and attempts. Stop invalidates pending continuation; stopped gaps, human review and manual waiting do not become model-execution time. See the account-aware allowance revision for admission and compatibility rules.
+Account exhaustion blocks paid dispatch; unavailable or caution readings require a deliberate owner step, with shared-account uncertainty visible. Retain original definitions, historical policy values, consumption and attempts without enforcing deprecated execution quotas. Stop invalidates pending continuation; stopped gaps, human review and manual waiting do not become model-execution time. See the stage-execution and account-aware revisions for current admission and compatibility rules.
 
 Retain verified findings as project/role knowledge. Loop/team/pipeline improvements are reviewable revisions linked to their evidence; self-improvement cannot grant broader permissions or waive checks.
 

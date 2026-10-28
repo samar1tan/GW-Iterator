@@ -153,7 +153,7 @@ test('recovery surfaces explain deadlines and stopping reasons in both locales w
     assert.ok(!checking.includes('Synthetic earlier dispatch rationale.'));
     assert.match(checking,/<p class="pf-work-recovery-time">/);
     const smart=render(GoalWorkspace,{...props,goal:{...goal,policy:{...goal.policy,smartRetry:true}}});
-    assert.ok(smart.includes(locale==='en'?'at most two automatic retries':'最多自动重试两次'));assert.ok(!smart.includes('class="goal-recovery-policy"'));assert.ok(failed.includes('class="goal-recovery-policy"'));
+    assert.ok(smart.includes(locale==='en'?'confirmed termination and a useful next action':'先确认旧任务结束'));assert.ok(!smart.includes('class="goal-recovery-policy"'));assert.ok(failed.includes('class="goal-recovery-policy"'));
     const stopped=render(WorkRecoverySurface,{goal:{...goal,workRecoveryHistory:[{...record,phase:'needs_input',code:'REPEATED_TIMEOUT'}]},runs:[run],id:'synthetic-surface',busy:false,error:null,observationFailed:false,onRefresh:async()=>{},onRetry(){},onStep(){}});
     assert.ok(stopped.includes(locale==='en'?'This step timed out again':'这个步骤再次超时'));assert.ok(stopped.includes(locale==='en'?'Review step recovery':'查看步骤恢复选项'));
     const needsInput={...goal,workRecoveryHistory:[{...record,phase:'needs_input' as const,code:'REPEATED_TIMEOUT'}]};

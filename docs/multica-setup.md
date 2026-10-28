@@ -1,6 +1,6 @@
 # Local Multica runtime
 
-GWI uses the real [Multica backend and daemon](https://github.com/multica-ai/multica) for projects, agents, skills, tool bindings and task execution. The setup command builds the dependency at commit `a097f592be73067d56908ca50ece557fa2af1293`; it does not substitute a mock or depend on a mutable `latest` backend image.
+GWI uses the real [Multica backend and daemon](https://github.com/multica-ai/multica) for projects, agents, skills, tool bindings and task execution. Setup pins commit `a097f592be73067d56908ca50ece557fa2af1293` and applies the separately maintained [supervised-execution compatibility patch](../scripts/patches/README.md) in an isolated build checkout. It does not use a mutable `latest` backend image or relicense the dependency.
 
 ## Start and check
 
@@ -17,12 +17,27 @@ The first setup needs network access to the official Git repository, container r
 
 Optional advanced arguments are `--state-dir .local/name`, `--codex-bin PATH` and `--model MODEL`. The default model is `gpt-6.1-sol`; setup verifies that it exists in the selected CLI's actual catalog. There is no implicit fallback to another model or a premium service tier. On macOS, setup checks the installed desktop application's bundled Codex before the PATH fallback. It never installs or upgrades Codex.
 
+## Supervised execution and existing runtimes
+
+GWI imposes no model duration, silence, token or concurrency quota. The dedicated daemon uses upstream's supported `--agent-timeout 0`, disables the idle/tool watchdogs and explicitly opts into the reviewed Codex semantic-inactivity/first-turn-silence adaptation. Startup RPC, permission probes, request transport and cancellation/reconciliation retain technical deadlines. A failed observation does not establish task termination. Actual upstream resource capacity may queue work.
+
+The original clean `upstream/` checkout and license remain separate. Setup verifies the exact source revision and patch hash, builds from `upstream-gwi/`, and rejects unrelated changes. The runtime records `executionPolicy:supervised-no-quotas-v1` and `executionPatchSha256`. Serving health must confirm the exact owned process, source commit, patch hash and actual disabled task/idle/tool deadlines before every new dispatch; a configuration label alone is insufficient.
+
+An earlier daemon may still enforce a hidden deadline. `--check` reports the mismatch without restarting it. Finish or explicitly stop and reconcile its tasks, stop GWI, then stop only the dedicated idle daemon. Refresh an installer-managed instance with its existing state directory:
+
+```sh
+node scripts/setup-multica.mjs --state-dir .local/multica --refresh-runtime
+node scripts/setup-multica.mjs --state-dir .local/multica --check
+```
+
+Refresh requires a valid recorded previous PID that is already stopped and checks complete paginated task history for pending or unknown states. It never kills a live process, guesses termination, changes the account or deletes backend data. Missing installer manifests or unverifiable manually provisioned instances cannot be upgraded by editing a profile marker. Create a maintained instance through ordinary setup and review its project/runtime bindings before switching; retain original execution references and history.
+
 ## Created state
 
 The default private instance directory is `.local/multica/`. A different directory beneath `.local/` creates a separate instance. Its deterministic Compose project name keeps containers and volumes separate from other installations.
 
 - `connection.json` contains the local backend URL, workspace identity and bearer token. It is server-side configuration, not a browser response.
-- `execution-profile.json` contains the actual runtime/daemon references, verified permission profiles, baseline and serving daemon identity.
+- `execution-profile.json` contains actual runtime/daemon references, verified permission profiles, baseline, execution-policy/patch identity and serving daemon identity.
 - `authorized-roots.json` has the shape `{ "roots": ["absolute authorized directory"] }`. Initially it permits only the instance's task workspaces. GWI may add its controlled execution root after resolving it. Adding a working directory does not import the user's home or the main checkout into a task.
 - `codex-home/` contains generated minimal configuration and a symlink to the existing native Codex authentication file. GWI never reads or copies that authentication file's contents. File-backed native authentication must already exist; keychain-only login is not automatically migrated.
 - `daemon/` contains one named Multica profile. A dedicated symlink under `~/.multica/profiles/` points to it. The default Multica profile and global Codex configuration are not edited.
@@ -55,6 +70,7 @@ A successful check verifies the backend, authentication, online runtime, both na
 
 ```text
 verified, runtimeId, daemonId, provider, version, baseline
+executionPolicy, executionPatchSha256
 permissions.readOnly / permissions.workspaceWrite: name, args, verified, network
 scratchHome, authorizedRootsFile, guardBinary, approvalPolicy, serviceTier
 network, readIsolation, daemon: healthUrl, pid, profile, daemonId, cliCommit, startedAt

@@ -111,9 +111,9 @@ test('one native goal dispatches multiple workflows, waits for evidence and reco
   await pump(h, () => h.codex.tasks.length === 2, 'two delegated workflows');
   assert.equal(current(h, item).status, 'dispatched');
   const allocations=current(h,item).targetRunIds.map(id=>h.engine.run(id));
-  assert.deepEqual(allocations.map(run=>run.approvedPolicy?.tokenBudget),[5000,5000]);
+  assert.deepEqual(allocations.map(run=>run.approvedPolicy?.tokenBudget),[10000,10000]);
   assert.deepEqual(allocations.map(run=>run.snapshot.pipeline.policy.tokenBudget),[10000,10000]);
-  assert.equal(current(h,item).allowance?.reservedTokens,10000);assert.equal(current(h,item).allowance?.remainingTokens,0);
+  assert.equal(current(h,item).allowance?.reservedTokens,0);assert.equal(current(h,item).allowance?.remainingTokens,undefined);
   await assert.rejects(goal.input.onTool('intake.route', decision('dispatch', [task(h.flows[0])])), code('ACTION_IN_PROGRESS'));
   assert.equal(h.engine.store.list<Run>('run').length, 3);
   h.codex.tasks[0].completion.resolve({output: {...OUTPUT, summary: 'First accepted synthetic action.'}});
@@ -156,7 +156,7 @@ test('native-goal tools preserve project/family scope and the frozen workflow ba
   h.engine.updatePipeline(original.id, original.revision, {...original, name: 'Updated live synthetic workflow'}, OWNER);
   const values = await goal.input.onTool('pipeline.read', {pipelineId: original.id}) as Pipeline[];
   assert.equal(values[0].revision, original.revision);
-  assert.equal(values[0].name, original.name);
+  assert.equal(values[0].name, original.name);assert.deepEqual(values[0].policy,{});
   await assert.rejects(goal.input.onTool('context.read', {projectId: 'another-synthetic-project'}), code('PROJECT_SCOPE'));
   await assert.rejects(goal.input.onTool('pipeline.read', {pipelineId: 'outside-the-goal-basis'}), code('PIPELINE_NOT_FOUND'));
   const outside = h.engine.startRun({projectId: h.project.id, pipelineId: original.id, goal: 'A separate synthetic run.', baseline: 'Synthetic baseline.', idempotencyKey: randomUUID()}, OWNER);
@@ -177,18 +177,11 @@ test('duplicate tasks in one native decision cannot start duplicate paid work', 
   assert.equal(current(h, item).targetRunIds.length, 0);
 });
 
-test('expired native decisions cannot launch children or overwrite a stopped goal', async t => {
-  const h = await fixture(t), item = create(h, {maxElapsedSeconds: 30}), goal = h.codex.goals[0];
-  h.engine.store.put('intake', {...item, createdAt: new Date(Date.now() - 31000).toISOString()});
-  const native=h.engine.run(item.routerRunId);native.createdAt=new Date(Date.now()-31000).toISOString();native.stages[0].attempts[0].startedAt=native.createdAt;h.engine.store.put('run',native);
-  const pending = goal.input.onTool('intake.route', decision('dispatch', h.flows.map(flow => task(flow))));
-  void pending.catch(() => {});
-  await immediate();
-  assert.equal(h.codex.tasks.length, 0, 'No child starts after the global elapsed boundary.');
-  await assert.rejects(pending, /boundary|elapsed|limit|stopped/i);
-  await h.engine.tick();
-  assert.equal(current(h, item).status, 'stopped');
-  assert.equal(current(h, item).targetRunIds.length, 0);
+test('explicit Stop prevents stale native decisions from launching or overwriting work',async t=>{
+  const h=await fixture(t),item=create(h,{maxElapsedSeconds:30}),goal=h.codex.goals[0];
+  h.intake.cancel(item.id,'Owner stopped this work.',OWNER);await pump(h,()=>current(h,item).status==='stopped','explicit owner Stop');
+  await assert.rejects(goal.input.onTool('intake.route',decision('dispatch',h.flows.map(flow=>task(flow)))),/current native goal|stopped|scope/i);
+  assert.equal(h.codex.tasks.length,0);assert.equal(current(h,item).targetRunIds.length,0);assert.equal(current(h,item).outcome,'Owner stopped this work.');
 });
 
 test('a partial dispatch failure cancels the native goal and every already-started child', async t => {
@@ -206,56 +199,36 @@ test('a partial dispatch failure cancels the native goal and every already-start
   assert.equal(current(h, item).status, 'stopped');
 });
 
-test('global token boundaries include native goal totals and every active action', async t => {
-  for (const source of ['native', 'thread'] as const) await t.test(source, async sub => {
-    const h = await fixture(sub), item = create(h, {maxTotalTokens: 5000}), goal = h.codex.goals[0];
-    const pending = goal.input.onTool('intake.route', decision('dispatch', h.flows.map(flow => task(flow))));
-    void pending.catch(() => {});
-    await pump(h, () => h.codex.tasks.length === 2, 'two bounded actions');
-    if (source === 'native') goal.input.onEvent({type: 'thread/goal/updated', message: 'Synthetic native token report.', ref: goal.ref, data: {goal: {status: 'active', tokensUsed: 2000, timeUsedSeconds: 3}}});
-    else goal.input.onEvent({type: 'thread/tokenUsage/updated', message: 'Synthetic newer thread token report.', ref: goal.ref, usage: {input: 1500, output: 500, total: 2000}});
-    h.codex.tasks[0].input.onEvent({type: 'synthetic.usage', message: 'Synthetic first action usage.', usage: {input: 800, output: 200, total: 1000}});
-    h.codex.tasks[1].input.onEvent({type: 'synthetic.usage', message: 'Synthetic second action usage.', usage: {input: 1500, output: 501, total: 2001}});
-    if(source==='native'){
-      await h.engine.tick();await immediate();
-      assert.equal(current(h,item).status,'dispatched','An unproven native meter is not an exact GWI new-token total.');
-      goal.input.onEvent({type:'thread/tokenUsage/updated',message:'Actual GWI usage with cache detail.',ref:goal.ref,usage:{input:2500,cachedInput:1000,output:500,total:3000}});
-    }
-    await pump(h, () => current(h, item).status === 'stopped' && current(h, item).targetRunIds.every(id => h.engine.run(id).status === 'cancelled'), 'aggregate boundary cleanup');
-    await pending;
-    assert.equal(goal.aborted, true);
-    assert.ok(h.codex.tasks.every(task => task.aborted));
-    assert.match(current(h, item).outcome!, /boundary/);
-  });
+test('native and delegated token diagnostics never stop work at historical goal quotas',async t=>{
+  const h=await fixture(t),item=create(h,{maxTotalTokens:1000,maxElapsedSeconds:30}),goal=h.codex.goals[0];
+  const pending=goal.input.onTool('intake.route',decision('dispatch',h.flows.map(flow=>task(flow))));
+  await pump(h,()=>h.codex.tasks.length===2,'independent delegated work');
+  goal.input.onEvent({type:'thread/tokenUsage/updated',message:'A large actual synthetic usage report.',ref:goal.ref,usage:{input:9000000,output:500,total:9000500}});
+  h.codex.tasks[0].input.onEvent({type:'usage',message:'Actual synthetic worker usage.',usage:{input:800000,output:200,total:800200}});
+  const stored=h.engine.run(item.routerRunId);stored.stages[0].attempts[0].startedAt=new Date(Date.now()-86400000).toISOString();h.engine.store.put('run',stored);
+  await h.engine.tick();await immediate();assert.equal(current(h,item).status,'dispatched');assert.equal(goal.aborted,false);assert.ok(h.codex.tasks.every(task=>!task.aborted));
+  assert.equal(goal.input.tokenBudget,undefined);assert.equal(goal.input.timeoutSeconds,undefined);assert.ok(current(h,item).allowance!.usedTokens>1000);
+  for(const work of h.codex.tasks)work.completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','actual results');await pending;
+  await goal.input.onTool('intake.route',decision('complete'));goal.completion.resolve({status:'complete',summary:'Actual accepted results complete the goal.'});await pump(h,()=>current(h,item).status==='completed','verified completion');
 });
 
-test('the action-round boundary permits completion and stops another paid dispatch', async t => {
-  for (const next of ['complete', 'dispatch'] as const) await t.test(next, async sub => {
-    const h = await fixture(sub), item = create(h, {maxRounds: 1}), goal = h.codex.goals[0];
-    const observations = goal.input.onTool('intake.route', decision('dispatch', [task(h.flows[0])]));
-    await pump(h, () => h.codex.tasks.length === 1, 'the only permitted action round');
-    h.codex.tasks[0].completion.resolve({output: OUTPUT});
-    await pump(h, () => current(h, item).status === 'routing', 'the last action observations');
-    await observations;
-    if (next === 'complete') {
-      const accepted = await goal.input.onTool('intake.route', decision('complete')) as {accepted: boolean};
-      assert.equal(accepted.accepted, true);
-      goal.completion.resolve({status: 'complete', summary: 'The final permitted synthetic action satisfies the goal.'});
-      await pump(h, () => current(h, item).status === 'completed', 'completion at the action-round boundary');
-    } else {
-      await assert.rejects(goal.input.onTool('intake.route', decision('dispatch', [task(h.flows[1], 'A different extra action.')])), code('GOAL_ROUND_LIMIT'));
-      await pump(h, () => current(h, item).status === 'stopped', 'the extra action refusal');
-      assert.equal(goal.aborted, true);
-    }
-    assert.equal(h.codex.tasks.length, 1);
-  });
+test('a goal can exceed historical action-round and parallel-task quotas until actual completion',async t=>{
+  const h=await fixture(t),item=create(h,{maxRounds:1,maxParallel:1}),goal=h.codex.goals[0];
+  for(let round=0;round<12;round++){
+    const before=h.codex.tasks.length,tasks=Array.from({length:3},(_,index)=>task(h.flows[index%2],`Distinct useful action ${round}-${index}.`));
+    const observed=goal.input.onTool('intake.route',decision('dispatch',tasks));await pump(h,()=>h.codex.tasks.length===before+3,'three independent actions');
+    for(const action of h.codex.tasks.slice(before))action.completion.resolve({output:{...OUTPUT,summary:`Accepted increment ${round}.`}});
+    await pump(h,()=>current(h,item).status==='routing','the completed action observations');await observed;
+  }
+  assert.equal(current(h,item).rounds.length,12);assert.equal(h.codex.tasks.length,36);assert.equal(goal.aborted,false);
+  await goal.input.onTool('intake.route',decision('complete'));goal.completion.resolve({status:'complete',summary:'The requested work is complete.'});await pump(h,()=>current(h,item).status==='completed','actual goal completion');
 });
 
 const CAPACITY='Selected model is at capacity. Please try a different model.';
-async function capacityFailure(h:Fixture,item:Intake,usage?:{input:number;output:number;total:number;cachedInput?:number}) {
+async function capacityFailure(h:Fixture,item:Intake,usage?:{input:number;output:number;total:number;cachedInput?:number},message=CAPACITY) {
   const goal=h.codex.goals.at(-1)!;
-  goal.input.onEvent({type:'error',message:CAPACITY,ref:goal.ref,data:{code:'model_at_capacity',willRetry:false}});
-  goal.completion.resolve({status:'cleared',summary:CAPACITY,...(usage?{usage}:{})});
+  goal.input.onEvent({type:'error',message,ref:goal.ref,data:{code:'model_at_capacity',willRetry:false}});
+  goal.completion.resolve({status:'cleared',summary:message,...(usage?{usage}:{})});
   await pump(h,()=>['failed','retry_wait'].includes(current(h,item).status),'a confirmed native capacity failure');
 }
 
@@ -281,7 +254,7 @@ test('manual recovery retains evidence, usage, identity and immutable old snapsh
   assert.notEqual(recovered.routerRunId,item.routerRunId);assert.deepEqual(recovered.supervisorRunIds,[item.routerRunId,recovered.routerRunId]);
   assert.equal(recovered.request,item.request);assert.equal(recovered.createdAt,item.createdAt);assert.deepEqual(recovered.rounds,oldRound);
   assert.deepEqual(h.engine.run(item.routerRunId).snapshot,frozen);assert.deepEqual(h.engine.run(item.routerRunId).stages[0].attempts[0].usage,{input:300,cachedInput:200,output:20,total:320});
-  const second=h.codex.goals[1];assert.equal(second.input.role.model,'synthetic-fallback');assert.equal(second.input.tokenBudget,9810);assert.ok(second.input.timeoutSeconds<=300&&second.input.timeoutSeconds>290);
+  const second=h.codex.goals[1];assert.equal(second.input.role.model,'synthetic-fallback');assert.equal(second.input.tokenBudget,undefined);assert.equal(second.input.timeoutSeconds,undefined);
   assert.equal(h.engine.run(recovered.routerRunId).recoveryOfRunId,item.routerRunId);assert.match(second.input.prompt,/Synthetic delegated action completed/);
   await assert.rejects(first.input.onTool('intake.route',decision('stop')),code('INTAKE_SCOPE'));
   const reused=await second.input.onTool('intake.route',decision('dispatch',[task(h.flows[0])])) as {reused:boolean};assert.equal(reused.reused,true);assert.equal(h.codex.tasks.length,1);
@@ -290,58 +263,39 @@ test('manual recovery retains evidence, usage, identity and immutable old snapsh
   assert.equal(current(h,item).recoveryHistory?.[0].status,'completed');assert.equal(current(h,item).recoveryHistory?.[0].newRef?.threadId,second.ref.threadId);
 });
 
-test('manual policy extension is explicit and a fresh execution receives only the remainder', async t=>{
-  const h=await fixture(t),item=create(h);await capacityFailure(h,item,{input:9000,output:500,total:9500});
-  assert.equal(current(h,item).canRetry,false);assert.equal(current(h,item).retryBlockedCode,'GOAL_TOKEN_BUDGET');
-  await assert.rejects(h.intake.retry(item.id,{note:'Attempt without more budget.',model:'synthetic-primary'},OWNER),code('GOAL_BOUNDARY'));
-  const recovered=await h.intake.retry(item.id,{note:'Approve a larger cumulative synthetic allowance.',model:'synthetic-primary',policy:{maxTotalTokens:20000,maxElapsedSeconds:600}},OWNER);
-  assert.equal(h.codex.goals[1].input.tokenBudget,10500);assert.ok(h.codex.goals[1].input.timeoutSeconds>590&&h.codex.goals[1].input.timeoutSeconds<=600);
-  assert.equal(recovered.policy.maxTotalTokens,20000);assert.equal(h.engine.run(item.routerRunId).snapshot.pipeline.policy.tokenBudget,10000);
-  assert.equal(recovered.recoveryHistory?.[0].previousPolicy?.maxTotalTokens,10000);assert.equal(recovered.recoveryHistory?.[0].newPolicy?.maxTotalTokens,20000);
-  assert.ok(h.engine.store.events({runId:recovered.routerRunId}).some(event=>event.type==='goal.policy_extended'));
+test('legacy goal policy metadata remains auditable without restricting fresh model execution',async t=>{
+  const h=await fixture(t),item=create(h);await capacityFailure(h,item,{input:9000000,output:500,total:9000500});
+  assert.equal(current(h,item).canRetry,true);assert.equal(current(h,item).recoveryRecommendation,undefined);
+  const original=structuredClone(h.engine.run(item.routerRunId).snapshot);
+  const recovered=await h.intake.retry(item.id,{note:'Retain the old client metadata without imposing a quota.',model:'synthetic-primary',policy:{maxTotalTokens:50,maxElapsedSeconds:1}},OWNER);
+  assert.equal(h.codex.goals[1].input.tokenBudget,undefined);assert.equal(h.codex.goals[1].input.timeoutSeconds,undefined);
+  assert.equal(recovered.policy.maxTotalTokens,50);assert.deepEqual(h.engine.run(item.routerRunId).snapshot,original);
+  assert.equal(recovered.recoveryHistory?.[0].previousPolicy?.maxTotalTokens,10000);assert.equal(recovered.recoveryHistory?.[0].newPolicy?.maxTotalTokens,50);
 });
 
-test('an outcome can explicitly approve its current finite recommendation without estimating tokens',async t=>{
-  const h=await fixture(t),item=create(h);await capacityFailure(h,item,{input:9000,output:500,total:9500});
-  const stopped=current(h,item),recommendation=stopped.recoveryRecommendation!;
-  assert.equal(recommendation.purpose,'one-focused-continuation');assert.equal(recommendation.basis.usedTokens,9500);
-  assert.ok(recommendation.policy.maxTotalTokens!>stopped.policy.maxTotalTokens&&recommendation.policy.maxTotalTokens!<=1000000);
-  await assert.rejects(h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:'stale'},OWNER),code('RECOVERY_CONFLICT'));
-  assert.equal(h.codex.goals.length,1);
-  const resumed=await h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:stopped.recoveryKey},OWNER);
-  assert.equal(h.codex.goals.length,2);assert.equal(resumed.policy.maxTotalTokens,recommendation.policy.maxTotalTokens);
-  assert.deepEqual(resumed.recoveryHistory?.at(-1)?.approvedRecommendation,{key:stopped.recoveryKey,recommendation});
-  assert.equal(h.codex.goals[1].input.tokenBudget,resumed.policy.maxTotalTokens-9500);
+test('legacy exhausted counters need no refill approval while current recovery identity is still checked',async t=>{
+  const h=await fixture(t),item=create(h);await capacityFailure(h,item,{input:9000000,output:500,total:9000500});
+  const stopped=current(h,item);assert.equal(stopped.recoveryRecommendation,undefined);assert.equal(stopped.allowance?.usedTokens,9000500);
+  await assert.rejects(h.intake.retry(item.id,{recoveryKey:'stale'},OWNER),code('RECOVERY_CONFLICT'));assert.equal(h.codex.goals.length,1);
+  const resumed=await h.intake.retry(item.id,{recoveryKey:stopped.recoveryKey},OWNER);assert.equal(h.codex.goals.length,2);
+  assert.deepEqual(resumed.policy,stopped.policy);assert.equal(resumed.recoveryHistory?.at(-1)?.approvedRecommendation,undefined);assert.equal(h.codex.goals[1].input.tokenBudget,undefined);
 });
 
-test('separate outcome and pipeline ceilings can be approved without a deadlock or a doomed coordinator',async t=>{
+test('historical goal and pipeline ceilings do not create nested continuation gates',async t=>{
   const h=await fixture(t),original=h.flows[0],flow=h.engine.updatePipeline(original.id,original.revision,{...original,policy:{...original.policy,tokenBudget:100,maxAttempts:1}},OWNER);
-  const item=create(h,{maxTotalTokens:1000}),native=h.codex.goals[0];
-  const observed=native.input.onTool('intake.route',decision('dispatch',[task(flow)]));await pump(h,()=>h.codex.tasks.length===1,'the bounded child');
-  h.codex.tasks[0].input.onEvent({type:'usage',message:'Synthetic delayed final usage report.',usage:{input:1190,output:10,total:1200}});
-  h.codex.tasks[0].completion.reject(new Error('Synthetic child crossed its reported ceiling.'));
-  await observed;native.completion.resolve({status:'budgetLimited',summary:'Synthetic supervising allowance ended.'});
-  await pump(h,()=>current(h,item).status==='stopped','the two known-ended ceilings');
-  const before=current(h,item),targetId=before.targetRunIds[0];assert.equal(before.retryBlockedScope?.kind,'goal');
-  const approved=await h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:before.recoveryKey},OWNER);
-  assert.equal(h.codex.goals.length,1);assert.equal(approved.status,'failed','Explicitly reauthorized outcome bounds reopen only the owner decision; the child still waits for its separate approval.');assert.equal(approved.limitRevisions?.length,1);
-  assert.equal(approved.retryBlockedCode,'RUN_TOKEN_BUDGET');assert.deepEqual(approved.retryBlockedScope,{kind:'run',id:targetId});
-  const recovery=h.engine.recovery(targetId,'inspect',OWNER);assert.equal(recovery.action,'approve');
-  h.engine.continueRun(targetId,{stageId:'inspect',recoveryKey:recovery.recoveryKey,approveRecommendation:true},OWNER);
-  await pump(h,()=>h.codex.tasks.length===2,'the separately approved child');h.codex.tasks[1].completion.resolve({output:OUTPUT});
-  await pump(h,()=>h.engine.run(targetId).status==='completed','the accepted child');
+  const item=create(h,{maxTotalTokens:1000}),native=h.codex.goals[0],observed=native.input.onTool('intake.route',decision('dispatch',[task(flow)]));
+  await pump(h,()=>h.codex.tasks.length===1,'the worker');h.codex.tasks[0].input.onEvent({type:'usage',message:'Actual usage above old metadata.',usage:{input:1190,output:10,total:1200}});h.codex.tasks[0].completion.reject(new Error('An actual check failed.'));
+  await observed;await capacityFailure(h,item);const before=current(h,item),targetId=before.targetRunIds[0];assert.equal(before.canRetry,true);
   await h.intake.retry(item.id,{},OWNER);assert.equal(h.codex.goals.length,2);
+  const recovery=h.engine.recovery(targetId,'inspect',OWNER);assert.equal(recovery.action,'retry');assert.equal(recovery.recommendation,undefined);
+  h.engine.continueRun(targetId,{stageId:'inspect',recoveryKey:recovery.recoveryKey},OWNER);await pump(h,()=>h.codex.tasks.length===2,'the focused child continuation');h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>h.engine.run(targetId).status==='completed','accepted child');
 });
 
-test('legacy coordinator history without a usage meter is never treated as free allowance',async t=>{
-  const h=await fixture(t),item=create(h),native=h.codex.goals[0];
-  native.completion.resolve({status:'blocked',summary:'Synthetic known-ended legacy coordinator.'});
-  await pump(h,()=>current(h,item).status==='clarification','the ended legacy coordinator');
-  const legacy=h.engine.run(item.routerRunId);delete legacy.stages[0].attempts[0].usage;delete legacy.stages[0].attempts[0].tokenReservation;
-  h.engine.store.put('run',legacy);
-  const stopped=current(h,item);assert.equal(stopped.allowance?.usedTokens,0);assert.equal(stopped.allowance?.reservedTokens,item.policy.maxTotalTokens);
-  assert.equal(stopped.canRetry,false);assert.equal(stopped.retryBlockedCode,'GOAL_TOKEN_BUDGET');
-  await assert.rejects(h.intake.retry(item.id,{note:'Use the synthetic recorded evidence.'},OWNER),code('GOAL_BOUNDARY'));assert.equal(h.codex.goals.length,1);
+test('missing historical coordinator usage remains unknown without inventing a reserved execution quota',async t=>{
+  const h=await fixture(t),item=create(h),native=h.codex.goals[0];native.completion.resolve({status:'blocked',summary:'Synthetic ended coordinator.'});await pump(h,()=>current(h,item).status==='clarification','the ended coordinator');
+  const legacy=h.engine.run(item.routerRunId);delete legacy.stages[0].attempts[0].usage;delete legacy.stages[0].attempts[0].tokenReservation;h.engine.store.put('run',legacy);
+  const stopped=current(h,item);assert.equal(stopped.allowance?.usedTokens,0);assert.equal(stopped.allowance?.reservedTokens,0);assert.equal(h.engine.allowance(legacy).usageComplete,false);assert.equal(stopped.canRetry,true);
+  await h.intake.retry(item.id,{note:'Use the retained evidence; missing usage is unknown.'},OWNER);assert.equal(h.codex.goals.length,2);assert.equal(h.codex.goals[1].input.tokenBudget,undefined);
 });
 
 test('manual model selection is catalog validated and concurrent retries cannot duplicate execution', async t=>{
@@ -385,12 +339,12 @@ test('unknown provider cleanup and active children block a second native executi
   });
 });
 
-test('automatic capacity recovery waits, uses only the explicit pool and stops at its cumulative attempt limit', async t=>{
+test('automatic capacity recovery waits, uses only the explicit pool and stops on unchanged failures', async t=>{
   const h=await fixture(t),item=create(h,{recovery:{autoRetry:true,maxAttempts:2,backoffSeconds:1,allowedFallbackModels:['synthetic-fallback']}});
   await capacityFailure(h,item,{input:100,output:20,total:120});assert.equal(current(h,item).status,'retry_wait');assert.ok(Date.parse(current(h,item).nextRetryAt!)>Date.now());
   await h.engine.tick();assert.equal(h.codex.goals.length,1);
   const due=()=>{const value=current(h,item);value.nextRetryAt=new Date(Date.now()-1).toISOString();h.engine.store.put('intake',value);};
-  due();await pump(h,()=>h.codex.goals.length===2,'the first automatic fresh execution');assert.equal(h.codex.goals[1].input.role.model,'synthetic-primary');assert.equal(h.codex.goals[1].input.tokenBudget,9880);
+  due();await pump(h,()=>h.codex.goals.length===2,'the first automatic fresh execution');assert.equal(h.codex.goals[1].input.role.model,'synthetic-primary');assert.equal(h.codex.goals[1].input.tokenBudget,undefined);
   await capacityFailure(h,item,{input:50,output:10,total:60});assert.equal(current(h,item).status,'retry_wait');due();await pump(h,()=>h.codex.goals.length===3,'the allowed fallback execution');assert.equal(h.codex.goals[2].input.role.model,'synthetic-fallback');
   await capacityFailure(h,item);assert.equal(current(h,item).status,'failed');assert.equal(current(h,item).nextRetryAt,undefined);assert.equal(current(h,item).recoveryHistory?.filter(value=>value.trigger==='automatic'&&value.newRunId).length,2);
   await h.engine.tick();assert.equal(h.codex.goals.length,3);assert.ok(current(h,item).recoveryHistory?.every(value=>!value.refreshConfiguration&&!value.previousPolicy&&!value.newPolicy));assert.equal(current(h,item).policy.maxTotalTokens,10000);assert.equal(current(h,item).policy.maxRounds,4);
@@ -426,7 +380,7 @@ test('execution time merges parallel active windows and excludes stopped idle ti
   const value=current(h,item);value.createdAt=new Date(now-10000000).toISOString();delete value.executionTimeMeter;h.engine.store.put('intake',value);
   const timed=current(h,item);assert.equal(timed.executionTime?.usedSeconds,70);assert.ok(timed.executionTime!.totalElapsedSeconds>=10000);
   const legacy=structuredClone(native);delete legacy.stages[0].attempts[0].endedAt;h.engine.store.put('run',legacy);assert.equal(current(h,item).executionTime?.usedSeconds,70);h.engine.store.put('run',native);
-  const recovered=await h.intake.retry(item.id,{note:'Continue using the remaining active-time allowance.',model:'synthetic-primary',policy:{maxElapsedSeconds:3600}},OWNER);assert.ok(h.codex.goals[1].input.timeoutSeconds>=3529&&h.codex.goals[1].input.timeoutSeconds<=3530);assert.equal(recovered.createdAt,value.createdAt);assert.equal(recovered.executionTimeMeter,'active-windows-v1');
+  const recovered=await h.intake.retry(item.id,{note:'Continue using the remaining active-time allowance.',model:'synthetic-primary',policy:{maxElapsedSeconds:3600}},OWNER);assert.equal(h.codex.goals[1].input.timeoutSeconds,undefined);assert.equal(recovered.createdAt,value.createdAt);assert.equal(recovered.executionTimeMeter,'active-windows-v1');
   assert.ok(h.engine.store.events({runId:recovered.routerRunId}).some(event=>event.type==='goal.execution_time_meter_migrated'));
 });
 
@@ -444,8 +398,8 @@ test('retrying the same failed child counts ten and five second attempts without
   assert.ok(current(h,item).executionTime!.usedSeconds>=10&&current(h,item).executionTime!.usedSeconds<11,'A new attempt must not reopen the previous run-wide interval.');
   h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>h.engine.run(child.id).status==='completed','the focused retry result');
   const completed=h.engine.run(child.id);completed.stages[0].attempts[1].startedAt=new Date(anchor-5000).toISOString();completed.stages[0].attempts[1].endedAt=completed.endedAt=new Date(anchor).toISOString();h.engine.store.put('run',completed);
-  const timed=current(h,item);assert.equal(timed.executionTime?.usedSeconds,15);assert.equal(timed.executionTime?.remainingSeconds,285);assert.ok(timed.executionTime!.totalElapsedSeconds>=1815);assert.equal(completed.stages[0].attempts.length,2);
-  await h.intake.retry(item.id,{note:'Continue with the retained fifteen seconds of actual execution.',model:'synthetic-primary'},OWNER);assert.equal(h.codex.goals[1].input.timeoutSeconds,285);
+  const timed=current(h,item);assert.equal(timed.executionTime?.usedSeconds,15);assert.equal(timed.executionTime?.remainingSeconds,undefined);assert.ok(timed.executionTime!.totalElapsedSeconds>=1815);assert.equal(completed.stages[0].attempts.length,2);
+  await h.intake.retry(item.id,{note:'Continue with the retained fifteen seconds of actual execution.',model:'synthetic-primary'},OWNER);assert.equal(h.codex.goals[1].input.timeoutSeconds,undefined);
 });
 
 test('manual review and linked-pipeline waits do not extend completed worker execution windows', async t=>{
@@ -524,28 +478,13 @@ test('stop supersedes pending continuation even from an already stopped or faile
   });
 });
 
-test('manual recovery extends action rounds only explicitly and never resets consumed actions',async t=>{
-  const h=await fixture(t),item=create(h,{maxRounds:2});
-  for(let index=0;index<2;index++){
-    const observed=h.codex.goals[0].input.onTool('intake.route',decision('dispatch',[task(h.flows[index],`Accepted synthetic action ${index+1}.`)]));
-    await pump(h,()=>h.codex.tasks.length===index+1,'an original accepted action');h.codex.tasks[index].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','the accepted original result');await observed;
-  }
-  await h.codex.goals[0].input.onTool('intake.route',decision('stop'));await pump(h,()=>current(h,item).canRetry===true,'the first stopped supervisor');
-  const originalSnapshot=structuredClone(h.engine.run(item.routerRunId).snapshot),oldDispatches=current(h,item).rounds.filter(round=>round.decision?.action==='dispatch').length;
-  const sameBounds=await h.intake.retry(item.id,{note:'Continue without changing any action limit.',model:'synthetic-primary'},OWNER);
-  assert.equal(sameBounds.policy.maxRounds,2);assert.equal(sameBounds.rounds.filter(round=>round.decision?.action==='dispatch').length,oldDispatches);
-  await assert.rejects(h.codex.goals[1].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'A third distinct synthetic action.')])),code('GOAL_ROUND_LIMIT'));
-  await pump(h,()=>current(h,item).retryBlockedCode==='GOAL_ROUND_LIMIT','the unchanged round-limit stop');assert.equal(h.codex.tasks.length,2);
-  assert.equal(current(h,item).recoveryRecommendation?.policy.maxRounds,3);
-  await assert.rejects(h.intake.retry(item.id,{note:'',model:'synthetic-primary',policy:{maxRounds:3}},OWNER),code('RECOVERY_NOTE_REQUIRED'));
-  await assert.rejects(h.intake.retry(item.id,{note:'Do not shrink the action allowance.',model:'synthetic-primary',policy:{maxRounds:1}},OWNER),code('INVALID_POLICY_EXTENSION'));
-  for(const maxRounds of [0,11])await assert.rejects(h.intake.retry(item.id,{note:'Reject an invalid action allowance.',model:'synthetic-primary',policy:{maxRounds}},OWNER),code('INVALID_GOAL_POLICY'));
-  const note='Approve one additional cumulative action round.',expanded=await h.intake.retry(item.id,{note,model:'synthetic-primary',policy:{maxRounds:3}},OWNER);
-  assert.equal(expanded.policy.maxRounds,3);assert.equal(expanded.rounds.filter(round=>round.decision?.action==='dispatch').length,2);
-  const record=expanded.recoveryHistory!.at(-1)!;assert.equal(record.previousPolicy?.maxRounds,2);assert.equal(record.newPolicy?.maxRounds,3);
-  const audit=h.engine.store.events({runId:expanded.routerRunId}).find(event=>event.type==='goal.policy_extended')!;assert.equal(audit.message,note);assert.deepEqual([(audit.data as {previous:Intake['policy']}).previous.maxRounds,(audit.data as {current:Intake['policy']}).current.maxRounds],[2,3]);
-  const third=h.codex.goals[2].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'A third distinct synthetic action.')]));await pump(h,()=>h.codex.tasks.length===3,'the newly authorized third action');h.codex.tasks[2].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','the third accepted result');await third;
-  assert.equal(current(h,item).rounds.filter(round=>round.decision?.action==='dispatch').length,3);assert.deepEqual(h.engine.run(item.routerRunId).snapshot,originalSnapshot);
+test('manual goal continuation preserves action history without an action-round extension',async t=>{
+  const h=await fixture(t),item=create(h,{maxRounds:1});
+  const observed=h.codex.goals[0].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'The first useful action.')]));await pump(h,()=>h.codex.tasks.length===1,'the original action');h.codex.tasks[0].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','accepted result');await observed;
+  await h.codex.goals[0].input.onTool('intake.route',decision('stop'));await pump(h,()=>current(h,item).canRetry===true,'the stopped supervisor');const original=structuredClone(h.engine.run(item.routerRunId).snapshot);
+  await h.intake.retry(item.id,{note:'Continue with the next distinct action.',model:'synthetic-primary'},OWNER);
+  const second=h.codex.goals[1].input.onTool('intake.route',decision('dispatch',[task(h.flows[1],'A second distinct action beyond old round metadata.')]));await pump(h,()=>h.codex.tasks.length===2,'the next action');h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','the next accepted result');await second;
+  assert.equal(current(h,item).rounds.filter(round=>round.decision?.action==='dispatch').length,2);assert.equal(current(h,item).policy.maxRounds,1);assert.equal(current(h,item).limitRevisions,undefined);assert.deepEqual(h.engine.run(item.routerRunId).snapshot,original);
 });
 
 test('recovered completion uses the latest dispatch despite later stop or clarification decisions',async t=>{
@@ -599,22 +538,20 @@ test('a blocked native supervisor preserves manual delivery and deployment obser
   }finally{observation.resolve({status:'completed',summary:'Synthetic observation teardown.',runId:314});await immediate();}
 });
 
-test('handoff preservation never suppresses explicit cancellation, capacity or execution limits',async t=>{
-  for(const mode of ['cancel','native_budget','capacity','handoff_budget','worker_timeout'] as const)await t.test(mode,async sub=>{
-    const h=await fixture(sub),delivery=deliveryFlow(h),item=create(h),first=h.codex.goals[0];
-    const delegated=first.input.onTool('intake.route',decision('dispatch',[task(delivery),task(h.flows[0])]));void delegated.catch(()=>{});
-    await pump(h,()=>current(h,item).targetRunIds.length===2&&h.codex.tasks.length===1,'work that must still obey stop conditions');
+test('handoff preserves long-running and high-usage work while explicit stop and real provider failures still cancel',async t=>{
+  for(const mode of ['cancel','native_budget','capacity','high_usage','long_running'] as const)await t.test(mode,async sub=>{
+    const h=await fixture(sub),delivery=deliveryFlow(h),item=create(h,{maxTotalTokens:1000,maxElapsedSeconds:30}),first=h.codex.goals[0];
+    const delegated=first.input.onTool('intake.route',decision('dispatch',[task(delivery),task(h.flows[0])]));void delegated.catch(()=>{});await pump(h,()=>current(h,item).targetRunIds.length===2&&h.codex.tasks.length===1,'pending delegated work');
     if(mode==='capacity')first.input.onEvent({type:'error',message:CAPACITY,ref:first.ref,data:{code:'model_at_capacity'}});
-    first.completion.resolve({status:mode==='native_budget'?'budgetLimited':'blocked',summary:mode==='capacity'?CAPACITY:'A synthetic native handoff or limit.'});
+    first.completion.resolve({status:mode==='native_budget'?'budgetLimited':'blocked',summary:mode==='capacity'?CAPACITY:'An actual provider handoff.'});
     if(mode==='native_budget'||mode==='capacity'){
-      await pump(h,()=>current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='cancelled'),'required native-failure cleanup');
-      assert.equal(current(h,item).status,mode==='capacity'?'failed':'stopped');
+      await pump(h,()=>current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='cancelled'),'actual provider failure cleanup');assert.equal(current(h,item).status,mode==='capacity'?'failed':'stopped');
     }else{
       await pump(h,()=>current(h,item).status==='clarification','the pending handoff');assert.equal(h.codex.tasks[0].aborted,false);
-      if(mode==='cancel')h.intake.cancel(item.id,'Explicitly stop the pending handoff.',OWNER);
-      if(mode==='handoff_budget')h.codex.tasks[0].input.onEvent({type:'usage',message:'Actual reported synthetic usage exceeds the goal limit.',usage:{input:10000,output:1,total:10001}});
-      if(mode==='worker_timeout'){const worker=h.engine.run(current(h,item).targetRunIds[1]);worker.stages[0].attempts[0].startedAt=new Date(Date.now()-301000).toISOString();h.engine.store.put('run',worker);}
-      await pump(h,()=>current(h,item).status==='stopped'&&current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='cancelled'),'explicit or bounded handoff cleanup');
+      if(mode==='high_usage')h.codex.tasks[0].input.onEvent({type:'usage',message:'Large actual usage.',usage:{input:9000000,output:1,total:9000001}});
+      if(mode==='long_running'){const worker=h.engine.run(current(h,item).targetRunIds[1]);worker.stages[0].attempts[0].startedAt=new Date(Date.now()-86400000).toISOString();h.engine.store.put('run',worker);}
+      await h.engine.tick();await immediate();assert.equal(current(h,item).status,'clarification');assert.equal(h.codex.tasks[0].aborted,false);
+      h.intake.cancel(item.id,'Explicitly stop the pending handoff.',OWNER);await pump(h,()=>current(h,item).status==='stopped'&&current(h,item).targetRunIds.every(id=>h.engine.run(id).status==='cancelled'),'explicit Stop');
     }
     await delegated;assert.equal(h.codex.tasks[0].aborted,true);assert.equal(h.codex.goals.length,1);
   });
@@ -722,7 +659,7 @@ test('one-decision planning spends no model calls during manual/CI waits and pre
   observation.resolve({status: 'completed', summary: 'Synthetic CI is accepted.', runId: 314});
   await pump(h, () => h.planner.calls.length === 2, 'the next event-driven decision');
   assert.deepEqual(h.planner.calls[1].input.observations.map(value => value.status), ['completed', 'completed']);
-  assert.equal(h.planner.calls[1].input.remaining.tokens, 9970);
+  assert.equal(h.planner.calls[1].input.remaining,undefined);
   h.planner.calls[1].completion.resolve({decision: decision('complete'), usage: {input: 20, output: 5, total: 25}});
   await pump(h, () => current(h, item).status === 'completed', 'accepted planner completion');
   const ids = current(h, item).supervisorRunIds!;
@@ -774,52 +711,30 @@ test('planner retries reuse an owned failed stage without replaying its successf
   assert.equal(h.planner.calls.length, 2); assert.deepEqual(h.engine.run(peerId), peer); assert.deepEqual(h.engine.run(failedId).stages[0], prepared);
   h.codex.tasks[3].completion.resolve({output: OUTPUT});
   await pump(h, () => h.planner.calls.length === 3, 'retry outcome observations');
-  assert.equal(h.planner.calls[2].input.remaining.rounds, 1); assert.equal(h.engine.run(failedId).stages[1].attempts.length, 2);
+  assert.equal(h.planner.calls[2].input.remaining,undefined); assert.equal(h.engine.run(failedId).stages[1].attempts.length, 2);
   h.planner.calls[2].completion.resolve({decision: decision('complete')});
   await pump(h, () => current(h, item).status === 'completed', 'completion after the targeted retry');
   assert.deepEqual(current(h, item).rounds.map(round => round.decision?.action), ['dispatch', 'retry', 'complete']);
 });
 
-test('planner stage retries reject unowned work and cumulative action-round exhaustion', async t => {
-  for (const mode of ['unowned', 'round-limit'] as const) await t.test(mode, async sub => {
-    const h = await plannerFixture(sub);
-    let unowned: Run | undefined;
-    if (mode === 'unowned') {
-      unowned = h.engine.startRun({projectId: h.project.id, pipelineId: h.flows[1].id, goal: 'An unrelated synthetic action.', baseline: 'Synthetic.', idempotencyKey: randomUUID()}, OWNER);
-      await pump(h, () => h.codex.tasks.length === 1, 'unrelated work'); h.codex.tasks[0].completion.reject(new Error('Unrelated synthetic failure.'));
-      await pump(h, () => h.engine.run(unowned!.id).status === 'failed', 'unrelated failure');
-    }
-    const offset = h.codex.tasks.length, item = create(h, {maxRounds: mode === 'unowned' ? 3 : 1});
-    h.planner.calls[0].completion.resolve({decision: decision('dispatch', [task(h.flows[0])])});
-    await pump(h, () => h.codex.tasks.length === offset + 1, 'owned work'); h.codex.tasks[offset].completion.reject(new Error('Owned synthetic failure.'));
-    await pump(h, () => h.planner.calls.length === 2, 'owned failure observation');
-    h.planner.calls[1].completion.resolve({decision: {...decision('stop'), action: 'retry', retry: {runId: unowned?.id ?? current(h, item).targetRunIds[0], stageId: mode === 'unowned' ? 'verify' : 'inspect', note: 'A bounded synthetic retry request.'}}});
-    await pump(h, () => current(h, item).status === (mode === 'unowned' ? 'failed' : 'stopped'), 'rejected retry');
-    assert.equal(h.codex.tasks.length, offset + 1); assert.equal(current(h, item).rounds.length, 1);
-    if (mode === 'unowned') assert.match(current(h, item).error!, /only this goal/);
+test('planner retries reject unowned work but do not enforce historical action-round quotas',async t=>{
+  for(const mode of ['unowned','legacy-round'] as const)await t.test(mode,async sub=>{
+    const h=await plannerFixture(sub);let unowned:Run|undefined;
+    if(mode==='unowned'){unowned=h.engine.startRun({projectId:h.project.id,pipelineId:h.flows[1].id,goal:'Unrelated work.',baseline:'Synthetic.',idempotencyKey:randomUUID()},OWNER);await pump(h,()=>h.codex.tasks.length===1,'unrelated action');h.codex.tasks[0].completion.reject(new Error('Unrelated failure.'));await pump(h,()=>h.engine.run(unowned!.id).status==='failed','unrelated failure');}
+    const offset=h.codex.tasks.length,item=create(h,{maxRounds:1});h.planner.calls[0].completion.resolve({decision:decision('dispatch',[task(h.flows[0])])});await pump(h,()=>h.codex.tasks.length===offset+1,'owned work');h.codex.tasks[offset].completion.reject(new Error('Actual owned failure.'));await pump(h,()=>h.planner.calls.length===2,'failure observation');
+    h.planner.calls[1].completion.resolve({decision:{...decision('stop'),action:'retry',retry:{runId:unowned?.id??current(h,item).targetRunIds[0],stageId:mode==='unowned'?'verify':'inspect',note:'Inspect the actual failed step.'}}});
+    if(mode==='unowned'){await pump(h,()=>current(h,item).status==='failed','scope rejection');assert.equal(h.codex.tasks.length,offset+1);assert.match(current(h,item).error!,/only this goal/);}
+    else{await pump(h,()=>h.codex.tasks.length===offset+2,'retry beyond old round quota');h.codex.tasks[offset+1].completion.resolve({output:OUTPUT});await pump(h,()=>h.planner.calls.length===3,'accepted retry observation');h.planner.calls[2].completion.resolve({decision:decision('complete')});await pump(h,()=>current(h,item).status==='completed','accepted completion');}
   });
 });
 
-test('pipeline limits stop coordination before another paid decision and preserve explicit recovery', async t=>{
-  const h=await plannerFixture(t),initial=h.flows[0],flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,policy:{...initial.policy,tokenBudget:100,maxAttempts:1}},OWNER),item=create(h,{maxRounds:3});
-  h.planner.calls[0].completion.resolve({decision:decision('dispatch',[task(flow)])});await pump(h,()=>h.codex.tasks.length===1,'the limited worker');
-  h.codex.tasks[0].input.onEvent({type:'usage',message:'Synthetic known usage exhausts the original run allowance.',usage:{input:120,output:5,total:125}});h.codex.tasks[0].completion.reject(new Error('The synthetic allowance is exhausted.'));
-  await pump(h,()=>current(h,item).status==='stopped','the preflighted child boundary');
-  const targetId=current(h,item).targetRunIds[0],frozen=structuredClone(h.engine.run(targetId).snapshot);
-  assert.equal(h.planner.calls.length,1);assert.equal(current(h,item).canRetry,false);
-  assert.equal(current(h,item).retryBlockedCode,'RUN_TOKEN_BUDGET');assert.deepEqual(current(h,item).retryBlockedScope,{kind:'run',id:targetId});
-  await assert.rejects(h.intake.retry(item.id,{},OWNER),code('RECOVERY_NOT_READY'));
-  h.engine.changeLimits(targetId,0,{tokenBudget:300},'Authorize a finite additional token allowance.',OWNER);
-  assert.equal(current(h,item).retryBlockedCode,'STAGE_ATTEMPT_LIMIT');assert.equal(h.planner.calls.length,1);
-  h.engine.changeLimits(targetId,1,{maxAttempts:2},'Authorize one additional attempt without resetting consumption.',OWNER);
-  await h.intake.retry(item.id,{},OWNER);await pump(h,()=>h.planner.calls.length===2,'the approved continuation decision');
-  const observed=h.planner.calls[1].input.observations[0];
-  assert.deepEqual(observed.limits,{tokenBudget:300,usedTokens:125,remainingTokens:175,maxAttempts:2});assert.equal(observed.stages[0].attemptCount,1);
-  h.planner.calls[1].completion.resolve({decision:{...decision('stop'),action:'retry',retry:{runId:targetId,stageId:'inspect',note:'Use the explicitly extended allowance for one focused retry.'}}});
-  await pump(h,()=>h.codex.tasks.length===2,'the authorized focused retry');assert.equal(h.codex.tasks[1].input.tokenBudget,175);
-  h.codex.tasks[1].input.onEvent({type:'usage',message:'Actual synthetic retry usage.',usage:{input:25,output:5,total:30}});h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>h.planner.calls.length===3,'the retained cumulative quota');
-  assert.deepEqual(h.planner.calls[2].input.observations[0].limits,{tokenBudget:300,usedTokens:155,remainingTokens:145,maxAttempts:2});assert.equal(h.planner.calls[2].input.observations[0].stages[0].attemptCount,2);assert.deepEqual(h.engine.run(targetId).snapshot,frozen);
-  h.planner.calls[2].completion.resolve({decision:decision('complete')});await pump(h,()=>current(h,item).status==='completed','the limit-aware completion');
+test('pipeline quota history does not prevent a coordinator from retrying actual failed work',async t=>{
+  const h=await plannerFixture(t),initial=h.flows[0],flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,policy:{...initial.policy,tokenBudget:100,maxAttempts:1}},OWNER),item=create(h,{maxRounds:1});
+  h.planner.calls[0].completion.resolve({decision:decision('dispatch',[task(flow)])});await pump(h,()=>h.codex.tasks.length===1,'the original worker');h.codex.tasks[0].input.onEvent({type:'usage',message:'Actual usage above historical quota.',usage:{input:1200000,output:5,total:1200005}});h.codex.tasks[0].completion.reject(new Error('An actual verification failed.'));
+  await pump(h,()=>h.planner.calls.length===2,'actual failure observation');const targetId=current(h,item).targetRunIds[0],frozen=structuredClone(h.engine.run(targetId).snapshot);assert.equal(h.planner.calls[1].input.observations[0].limits,undefined);
+  h.planner.calls[1].completion.resolve({decision:{...decision('stop'),action:'retry',retry:{runId:targetId,stageId:'inspect',note:'Correct the actual finding using retained work.'}}});await pump(h,()=>h.codex.tasks.length===2,'the focused retry');assert.equal(h.codex.tasks[1].input.tokenBudget,undefined);
+  h.codex.tasks[1].completion.resolve({output:OUTPUT});await pump(h,()=>h.planner.calls.length===3,'the accepted retry');assert.deepEqual(h.engine.run(targetId).snapshot,frozen);assert.equal(h.engine.run(targetId).limitRevisions,undefined);
+  h.planner.calls[2].completion.resolve({decision:decision('complete')});await pump(h,()=>current(h,item).status==='completed','accepted completion');
 });
 
 test('planner restart preserves pending work and old native records until explicit continuation', async t => {
@@ -873,7 +788,7 @@ test('planner transport uncertainty cannot recover into a new run until the exac
   }
   h.engine.store.put('multica-execution', record); assert.equal(current(h, item).canRetry, true);
   await h.intake.retry(item.id, {note: 'The exact previous task is now authoritatively terminal.', model: 'synthetic-primary'}, OWNER);
-  assert.equal(h.planner.calls.length, 2); assert.equal(h.planner.calls[1].input.remaining.tokens, 9940); assert.deepEqual(h.engine.run(item.routerRunId), before);
+  assert.equal(h.planner.calls.length, 2); assert.equal(h.planner.calls[1].input.remaining,undefined); assert.deepEqual(h.engine.run(item.routerRunId), before);
 });
 
 
@@ -890,7 +805,7 @@ test('account-aware coordination uses account availability beyond historical tok
   await pump(h,()=>current(h,item).targetRunIds.length===1&&h.engine.run(current(h,item).targetRunIds[0]).status==='waiting','account-aware human delivery');
   const child=current(h,item).targetRunIds[0];h.engine.completeManual(child,'delivery',OUTPUT,OWNER);
   await pump(h,()=>h.planner.calls.length===2,'next decision despite historical token counter');
-  assert.equal(current(h,item).policy.maxTotalTokens,600000);assert.equal(current(h,item).limitRevisions,undefined);
+  assert.equal(current(h,item).policy.maxTotalTokens,undefined);assert.equal(current(h,item).limitRevisions,undefined);
   assert.equal(h.planner.calls[1].input.observations[0].resourceMode,'account');assert.equal(h.planner.calls[1].input.observations[0].limits,undefined);
   h.planner.calls[1].completion.resolve({decision:decision('complete'),usage:{input:20,output:1,total:21}});
   await pump(h,()=>current(h,item).status==='completed','account-aware accepted completion');
@@ -1008,7 +923,7 @@ test('a stopped native answer and an unconfirmed connected task cannot acquire a
 });
 
 
-test('new outcomes enable bounded smart retry while stored legacy policies remain unchanged',async t=>{
+test('new outcomes enable evidence-driven smart retry while stored legacy policies remain unchanged',async t=>{
   const h=await fixture(t),item=h.intake.create(h.project.id,{request:'Inspect the independently authored synthetic input.',idempotencyKey:'new-smart-default'},OWNER);
   assert.equal(item.policy.smartRetry,true);
   const stored=h.engine.store.get<Intake>('intake',item.id)!;delete stored.policy.smartRetry;h.engine.store.put('intake',stored);
@@ -1016,10 +931,10 @@ test('new outcomes enable bounded smart retry while stored legacy policies remai
 });
 
 
-test('smart retry caps combined automatic recoveries while explicit legacy policy remains independent',async t=>{
-  const h=await fixture(t),item=create(h,{smartRetry:true,recovery:{autoRetry:true,maxAttempts:5,backoffSeconds:1,allowedFallbackModels:[]}});
-  const stored=h.engine.store.get<Intake>('intake',item.id)!;stored.workRecoveryHistory=[0,1].map(n=>({id:'synthetic-prior-retry-'+n,trigger:'automatic',phase:'completed',runId:'synthetic-prior-run',stageId:'work',routerRunId:item.routerRunId,controlRevision:0,startedAt:item.createdAt,deadlineAt:item.createdAt,nextAt:item.createdAt,checks:1,code:'RECOVERY_COMPLETED',retriedAt:item.createdAt,endedAt:item.createdAt}));h.engine.store.put('intake',stored);
-  await capacityFailure(h,item);assert.equal(current(h,item).status,'failed');assert.equal(current(h,item).nextRetryAt,undefined);assert.equal(h.codex.goals.length,1);
+test('prior unrelated recovery counts do not consume an automatic execution quota',async t=>{
+  const h=await fixture(t),item=create(h,{smartRetry:true,recovery:{autoRetry:true,maxAttempts:1,backoffSeconds:1,allowedFallbackModels:[]}});
+  const stored=h.engine.store.get<Intake>('intake',item.id)!;stored.workRecoveryHistory=Array.from({length:8},(_,n)=>({id:'synthetic-prior-retry-'+n,trigger:'automatic' as const,phase:'completed' as const,runId:'synthetic-prior-run',stageId:'work',routerRunId:item.routerRunId,controlRevision:0,startedAt:item.createdAt,deadlineAt:item.createdAt,nextAt:item.createdAt,checks:1,code:'RECOVERY_COMPLETED',retriedAt:item.createdAt,endedAt:item.createdAt}));h.engine.store.put('intake',stored);
+  await capacityFailure(h,item);assert.equal(current(h,item).status,'retry_wait');assert.ok(current(h,item).nextRetryAt);assert.equal(h.codex.goals.length,1);
 });
 
 test('explicit work recovery replaces scheduled capacity retry before a later handoff',async t=>{
@@ -1027,4 +942,28 @@ test('explicit work recovery replaces scheduled capacity retry before a later ha
   h.intake.continueWork(item.id,OWNER);await immediate();
   const value=current(h,item);assert.equal(value.recoveryHistory?.find(row=>row.status==='scheduled'),undefined);assert.equal(value.nextRetryAt,undefined);
   assert.notEqual(value.status,'retry_wait');
+});
+
+test('capacity recovery ignores changing transport IDs and reopens only after useful progress or owner guidance',async t=>{
+  const h=await fixture(t),item=create(h,{recovery:{autoRetry:true,maxAttempts:1,backoffSeconds:1,allowedFallbackModels:[]}});
+  const due=()=>{const value=current(h,item);value.nextRetryAt=new Date(Date.now()-1).toISOString();h.engine.store.put('intake',value);};
+  await capacityFailure(h,item,undefined,CAPACITY+' request_id=req-one');due();await pump(h,()=>h.codex.goals.length===2,'the first transient retry');
+  await capacityFailure(h,item,undefined,CAPACITY+' request_id=req-two');assert.equal(current(h,item).status,'failed');assert.equal(current(h,item).nextRetryAt,undefined);
+  assert.equal(current(h,item).recoveryHistory?.at(-1)?.recoveryBasis?.cause,'model_capacity');
+  await h.intake.retry(item.id,{note:'Owner verified that the provider recovered and requests another attempt.'},OWNER);assert.equal(h.codex.goals.length,3);
+  await capacityFailure(h,item,undefined,CAPACITY+' request_id=req-three');assert.equal(current(h,item).status,'retry_wait');due();await pump(h,()=>h.codex.goals.length===4,'the owner-authorized recovery scope');
+  const observed=h.codex.goals[3].input.onTool('intake.route',decision('dispatch',[task(h.flows[0],'Produce a newly verified actual result.')]));await pump(h,()=>h.codex.tasks.length===1,'new useful work');h.codex.tasks[0].completion.resolve({output:OUTPUT});await pump(h,()=>current(h,item).status==='routing','new accepted progress');await observed;
+  await capacityFailure(h,item,undefined,CAPACITY+' request_id=req-four');assert.equal(current(h,item).status,'retry_wait');due();await pump(h,()=>h.codex.goals.length===5,'a recovery supported by new accepted progress');
+  await capacityFailure(h,item,undefined,CAPACITY+' request_id=req-five');assert.equal(current(h,item).status,'failed');assert.equal(current(h,item).nextRetryAt,undefined);
+});
+
+test('coordinator dispatch and retry cannot replay unchanged failed work while owner guidance remains available',async t=>{
+  const h=await fixture(t),item=create(h),goal=h.codex.goals[0],tasks=[task(h.flows[0],'Inspect this exact unchanged synthetic input.')];
+  const first=goal.input.onTool('intake.route',decision('dispatch',tasks));await pump(h,()=>h.codex.tasks.length===1,'the original action');h.codex.tasks[0].completion.reject(new Error(CAPACITY+' request_id=req-one'));await pump(h,()=>current(h,item).status==='routing','the actual failed action');await first;
+  await assert.rejects(goal.input.onTool('intake.route',decision('dispatch',tasks)),code('STAGNATION'));assert.equal(h.codex.tasks.length,1);
+  const target=current(h,item).targetRunIds[0],retry={...decision('stop'),action:'retry',retry:{runId:target,stageId:'inspect',note:'Recheck this exact transient provider failure.'}};
+  const second=goal.input.onTool('intake.route',retry);await pump(h,()=>h.codex.tasks.length===2,'the scoped retry');h.codex.tasks[1].completion.reject(new Error(CAPACITY+' request_id=req-two'));await pump(h,()=>current(h,item).status==='routing','the same failed cause');await second;
+  const rounds=current(h,item).rounds.length;await assert.rejects(goal.input.onTool('intake.route',retry),code('STAGNATION'));assert.equal(current(h,item).rounds.length,rounds,'A rejected retry cannot append an accepted action decision.');assert.equal(h.codex.tasks.length,2);
+  h.engine.retry(target,'inspect','Owner verified the external issue is resolved; inspect the retained input.',OWNER);await pump(h,()=>h.codex.tasks.length===3,'the guided retry');h.codex.tasks[2].completion.resolve({output:OUTPUT});await pump(h,()=>h.engine.run(target).status==='completed','the actual repaired result');
+  await goal.input.onTool('intake.route',decision('complete'));goal.completion.resolve({status:'complete',summary:'Verified retained work is accepted.'});await pump(h,()=>current(h,item).status==='completed','accepted completion after guidance');
 });

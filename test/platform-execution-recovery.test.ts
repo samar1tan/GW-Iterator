@@ -98,13 +98,14 @@ test('early Stop bounds an hour-long observation to the first cancellation windo
   assert.equal(h.current().cleanupConfirmed,false);assert.equal(h.current().issueId,'synthetic-issue');assert.equal(h.current().taskId,'synthetic-task');assert.equal(h.cancellations().length,1);later.resolve();
 });
 
-test('the original total observation deadline wins when it precedes the cancellation window',async t=>{
+test('legacy execution deadlines do not shorten an explicit cancellation confirmation window',async t=>{
   const h=await fixture(t),stop=new AbortController(),first=deferred();h.state.gates.set('/api/issues/synthetic-issue/task-runs',first);
   t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse(at)});const started=Date.now();
   const pending=h.observe(h.record,{...h.input,timeoutSeconds:1,signal:stop.signal},{provider:'multica',issueId:h.record.issueId!,externalId:h.task.id});const rejected=assert.rejects(pending);
   await new Promise(resolve=>setImmediate(resolve));t.mock.timers.tick(19000);stop.abort();first.resolve();await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(h.cancellations().length,1);t.mock.timers.tick(2000);await rejected;
-  assert.equal(Date.now()-started,21000);assert.equal(h.current().cleanupConfirmed,false);assert.equal(h.current().taskId,'synthetic-task');
+  assert.equal(h.cancellations().length,1);t.mock.timers.tick(2000);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.current().cleanupConfirmed,false);t.mock.timers.tick(18000);await rejected;
+  assert.equal(Date.now()-started,39000);assert.equal(h.current().cleanupConfirmed,false);assert.equal(h.current().taskId,'synthetic-task');
 });
 
 test('early Stop also bounds a pending daemon proof and rejects its late response',async t=>{

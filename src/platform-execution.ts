@@ -1,7 +1,7 @@
 import {CONVERSATION_DATA_RULE} from './intake-context.ts';
+import {budgetTokens} from './contracts.ts';
 import {randomUUID} from 'node:crypto';
 import type {ExecutionRef,Project,RoleProfile,TaskOutput,Usage,Run,Intake} from './contracts.ts';
-import {budgetTokens} from './contracts.ts';
 import type {AgentExecutionInput,AgentExecutor,CodexExecution,AdapterEvent} from './adapters/types.ts';
 import type {GoalPlanner,GoalPlannerInput} from './goal-planner.ts';
 import {validatePlannerDecision,plannerExecutionContext} from './goal-planner.ts';
@@ -18,7 +18,7 @@ export type ReconcileOptions={signal?:AbortSignal;cancelIfRunning?:boolean};
 type ReconcileResult=ExecutionRecord&{canRetry:boolean};
 type Reconciliation={controller:AbortController;cancelIfRunning:boolean;promise:Promise<ReconcileResult>};
 type RemoteProject={id:string;providerProjectId:string;workspace:string;sourceCommit:string;verification?:ExecutionRecord['verification']};
-type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds:number;tokenBudget:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review';accountStageId?:string};
+type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds?:number;tokenBudget?:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review';accountStageId?:string};
 const at=()=>new Date().toISOString();
 const wait=(ms:number,signal?:AbortSignal)=>new Promise<void>((resolve,reject)=>{
   checkSignal(signal);
@@ -104,17 +104,17 @@ export class PlatformExecution {
     const previous=this.platform.engine.store.list<ExecutionRecord>('multica-execution').find(row=>row.runId===request.runId&&row.stageId===request.stageId&&!row.cleanupConfirmed);
     demand(!previous,'EXTERNAL_RECONCILIATION_REQUIRED','Inspect the previous external execution before starting this stage again.',409);
     const space=await this.executionProject(request),basis=await this.platform.agent(request.project,request.role,false);
-    const lease=request.onTool&&this.controls?this.controls.issue(request.role.tools,request.onTool,request.timeoutSeconds+60):undefined;
+    const lease=request.onTool&&this.controls?this.controls.issue(request.role.tools,request.onTool):undefined;
     let agent=basis;
     if(lease||space.verification){
       const prior=isObject(basis.mcp_config)&&isObject(basis.mcp_config.mcpServers)?basis.mcp_config.mcpServers:{};
-      try{agent=await this.platform.client.createAgent({name:basis.name+' · '+request.attemptId.slice(0,8),runtime_id:basis.runtime_id,description:basis.description+'\nExecution '+request.attemptId,instructions:(basis.instructions??'')+(space.verification?'\nThis task verifies an independent copy of the actual prepared source. Run checks in this copy. Keep included source files, deletions and untracked prepared source unchanged; ignored build/cache output may be written here and disposable scratch belongs in .gwi-verification/. Report actual checks and pending browser/CI requirements in the final JSON observations. Reference source artifacts only; scratch artifacts are disposed after this task. Source protection is write confinement, not filesystem read isolation; network access is enabled without a domain allowlist.':''),model:basis.model,thinking_level:basis.thinking_level,service_tier:'default',visibility:'private',permission_mode:'private',max_concurrent_tasks:1,custom_args:space.verification?['-c','default_permissions="gwi-workspace"','-c','approval_policy="never"']:basis.custom_args,skill_ids:basis.skills?.map(skill=>skill.id)??request.role.multica?.skillIds??[],mcp_config:{mcpServers:{...prior,...lease?.config.mcpServers}}});
+      try{agent=await this.platform.client.createAgent({name:basis.name+' · '+request.attemptId.slice(0,8),runtime_id:basis.runtime_id,description:basis.description+'\nExecution '+request.attemptId,instructions:(basis.instructions??'')+(space.verification?'\nThis task verifies an independent copy of the actual prepared source. Run checks in this copy. Keep included source files, deletions and untracked prepared source unchanged; ignored build/cache output may be written here and disposable scratch belongs in .gwi-verification/. Report actual checks and pending browser/CI requirements in the final JSON observations. Reference source artifacts only; scratch artifacts are disposed after this task. Source protection is write confinement, not filesystem read isolation; network access is enabled without a domain allowlist.':''),model:basis.model,thinking_level:basis.thinking_level,service_tier:'default',visibility:'private',permission_mode:'private',custom_args:space.verification?['-c','default_permissions="gwi-workspace"','-c','approval_policy="never"']:basis.custom_args,skill_ids:basis.skills?.map(skill=>skill.id)??request.role.multica?.skillIds??[],mcp_config:{mcpServers:{...prior,...lease?.config.mcpServers}}});
         await this.platform.client.setAgentSkills(agent.id,basis.skills?.map(skill=>skill.id)??request.role.multica?.skillIds??[]);
         for(const server of await this.platform.client.listAgentMcpServers(basis.id))if(server.enabled!==false)await this.platform.client.addAgentMcpServer(agent.id,server.id);
       }catch(error){lease?.revoke();throw error;}
     }
     if(request.signal.aborted||this.closing){lease?.revoke();throw new AppError('EXECUTION_CANCELLED','Execution was cancelled before assignment.',409);}
-    const record:ExecutionRecord={id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:at(),updatedAt:at(),agentId:agent.id,runtimeId:agent.runtime_id,daemon:this.platform.executionIdentity(),...(space.verification?{verification:space.verification}:{}),timeout:{configuredSeconds:request.timeoutSeconds,observationDeadlineSeconds:request.timeoutSeconds,runtimeMaxSeconds:this.platform.executionLimits().maxTaskSeconds}};
+    const record:ExecutionRecord={id:request.attemptId,projectId:request.project.id,runId:request.runId,stageId:request.stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:at(),updatedAt:at(),agentId:agent.id,runtimeId:agent.runtime_id,daemon:this.platform.executionIdentity(),...(space.verification?{verification:space.verification}:{})};
     let issue,assignmentIntent=false;
     try{
       const canonicalStage=request.accountStageId??(this.platform.engine.store.get<Run>('run',request.runId)?.executionKind?'supervise':request.stageId);
@@ -132,8 +132,8 @@ export class PlatformExecution {
     const completion=this.observe(record,request,ref).finally(()=>{lease?.revoke();this.completions.delete(completion);});this.completions.add(completion);return{ref,completion};
   }
   private async observe(record:ExecutionRecord,request:Request,ref:ExecutionRef):Promise<{text:string;usage?:Usage}>{
-    const deadline=Date.now()+request.timeoutSeconds*1000,total=new AbortController(),cancellation=new AbortController(),signal=AbortSignal.any([total.signal,cancellation.signal]);
-    const totalTimer=setTimeout(()=>total.abort(),request.timeoutSeconds*1000+20000);totalTimer.unref();let cancelDeadline:number|undefined,cancelTimer:ReturnType<typeof setTimeout>|undefined;
+    const cancellation=new AbortController(),signal=cancellation.signal;
+    let cancelDeadline:number|undefined,cancelTimer:ReturnType<typeof setTimeout>|undefined;
     const beginCancellation=()=>{if(cancelDeadline!==undefined)return;cancelDeadline=Date.now()+20000;cancelTimer=setTimeout(()=>cancellation.abort(),20000);cancelTimer.unref();};
     request.signal.addEventListener('abort',beginCancellation,{once:true});if(request.signal.aborted)beginCancellation();
     let sequence=0,lastStatus='',cancelRequested=false,messageFailureReported=false;let messages:MulticaTaskMessage[]=[];
@@ -156,15 +156,14 @@ export class PlatformExecution {
           if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent,signal);await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);}
           throw new AppError(record.cleanupConfirmed?'MULTICA_TASK_FAILED':'EXTERNAL_RECONCILIATION_REQUIRED',task.error??task.failure_reason??'The external task did not deliver a verified result.',409);
         }
-        if(!cancelRequested&&(request.signal.aborted||Date.now()>=deadline||(record.usage&&budgetTokens(record.usage)>request.tokenBudget))){
+        if(!cancelRequested&&request.signal.aborted){
           beginCancellation();cancelRequested=true;record.status='cancel_requested';this.platform.engine.store.put('multica-execution',record);const acknowledged=await this.platform.client.cancelTask(record.issueId!,task.id,{signal});this.taskScope(record,acknowledged);demand(acknowledged.id===task.id,'EXTERNAL_TASK_SCOPE','Cancellation acknowledged a different task.',409);record.cancelAcknowledgedAt=at();this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'multica.cancel_requested',message:'External cancellation requested; awaiting authoritative execution state.',ref});
         }
         if(!cancelRequested)await readMessages(task);
       }
-      if(cancelDeadline!==undefined&&Date.now()>=Math.min(deadline+20000,cancelDeadline))throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','External cancellation still needs reconciliation.',409);
-      if(!task&&Date.now()>deadline)throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','Queued work needs external reconciliation before another dispatch.',409);
+      if(cancelDeadline!==undefined&&Date.now()>=cancelDeadline)throw new AppError('EXTERNAL_RECONCILIATION_REQUIRED','External cancellation still needs reconciliation.',409);
       await wait(2000,signal);
-    }}finally{request.signal.removeEventListener('abort',beginCancellation);clearTimeout(totalTimer);if(cancelTimer)clearTimeout(cancelTimer);}
+    }}finally{request.signal.removeEventListener('abort',beginCancellation);if(cancelTimer)clearTimeout(cancelTimer);}
   }
   private async startAgent(input:AgentExecutionInput):Promise<CodexExecution>{
     const result=await this.launch({...input,prompt:input.prompt+'\n\nReturn only one final JSON object: {"outcome":"done|revise|blocked|no_change","summary":"concise actual result","artifacts":[{"label":"meaningful name","path":"optional relative artifact path","url":"optional actual URL"}],"observations":["actual check or unresolved finding"]}. Do not claim a check that was not performed.'});
@@ -178,7 +177,7 @@ export class PlatformExecution {
     if(context.status!=='ready')throw new AppError('KNOWLEDGE_CONTEXT_REQUIRED','Required coordinator guidance needs attention before model work.',409,{contextId:context.id,gaps:context.gaps});
     const access=input.knowledgeAccess??service.access(context.scope,context.id);
     const prompt='Make exactly one project coordination decision from actual evidence. Do not implement, poll CI, or wait for humans; the platform owns waiting. Reuse accepted work. For an informational question before delegated action, answer directly with no tasks; answer cannot certify changes, tests or publication. Complete only from verified accepted outcomes. Use the scoped knowledge tool to refine or translate a query within this ordinary task, and read exact frozen locators when needed. No-match evidence must remain uncertain. Do not convert token diagnostics into subscription allowance or invent task charges. '+'\n'+context.context+'\nReturn only JSON {"action":"answer|dispatch|retry|complete|clarify|stop","rationale":"concise reason","expectedGain":"useful result","tasks":[{"pipelineId":"actual workflow ID","goal":"bounded instruction"}],"response":"only for answer: evidence-based answer, at most 16000 characters","question":"only for clarify","retry":{"runId":"owned run ID","stageId":"failed stage ID","note":"what changes"}}. tasks must be empty except for dispatch. Never invent identifiers.';
-    const result=await this.launch({project:input.project,role:{...role,sandbox:'read-only',tools:role.tools.filter(tool=>tool==='context.read'||tool==='knowledge.search')},runId:input.executionId,stageId:'decision-'+(input.rounds.length+1),accountStageId:'supervise',attemptId,prompt,signal:input.signal,timeoutSeconds:Math.min(300,input.remaining.seconds),tokenBudget:input.remaining.tokens,onEvent:input.onEvent,onTool:async(tool,args)=>{
+    const result=await this.launch({project:input.project,role:{...role,sandbox:'read-only',tools:role.tools.filter(tool=>tool==='context.read'||tool==='knowledge.search')},runId:input.executionId,stageId:'decision-'+(input.rounds.length+1),accountStageId:'supervise',attemptId,prompt,signal:input.signal,onEvent:input.onEvent,onTool:async(tool,args)=>{
       if(tool==='context.read')return knowledgeContextSummary(context);
       demand(tool==='knowledge.search','TOOL_NOT_ALLOWED','The coordinator lease only reads its frozen knowledge.',403);
       if(args.read)return access.read(args.read as KnowledgeLocator);

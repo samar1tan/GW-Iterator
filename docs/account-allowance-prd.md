@@ -1,10 +1,10 @@
 # Account-aware execution allowance
 
-This iteration replaces raw token budgets as the ordinary user's execution allowance. It supersedes token-increment recommendations in the [human workbench](human-workbench-prd.md); previous attempts, configuration snapshots and consumption remain historical evidence.
+Account availability is an external execution boundary. The [stage execution contract](stage-execution-prd.md) removes all GWI numeric execution quotas, including expert token caps and extension recommendations; previous attempts, configuration snapshots and consumption remain historical evidence.
 
 ## Outcome
 
-A person can decide whether to start, continue, wait or reduce the scope using the connected Codex account's remaining allowance and recent comparable executions. They do not estimate a token count or repeatedly refill a software-defined quota. GWI balances Codex's flexible approach with bounded attempts, time, verified external state and delivery checks.
+A person can decide whether to start, continue, wait or reduce the scope using the connected Codex account's remaining allowance and recent comparable executions. They do not estimate a token count or refill a software-defined quota. GWI preserves Codex's flexible approach with verified external state, human control and delivery checks.
 
 ## Sources and interpretation
 
@@ -19,8 +19,8 @@ A person can decide whether to start, continue, wait or reduce the scope using t
 1. Normal starts and continuations use account-aware allowance. Show the current limiting account window, reset time, observation age and applicable execution trend. An explicit historical token cap remains readable as technical history; it must not force the normal user to top up arbitrary numbers.
 2. Check allowance again before a paid dispatch. Known exhausted windows stop new model work and offer refresh/wait with the provider's reset time. Manual work and unchanged human/CI waits do not require model allowance.
 3. Healthy allowance with insufficient comparable history can fund one already-requested bounded execution and collect evidence. Do not fabricate a task-count prediction. Close-to-exhaustion trends request a concrete one-step continuation decision or suggest waiting/reducing scope; display the evidence and uncertainty first.
-4. Missing/unsupported/stale account data is explicitly unavailable. It cannot silently authorize an automatic loop or be rendered as zero usage/unlimited capacity. Permit a deliberate bounded owner continuation when the external task is known ended; preserve attempts/time bounds and record that the account check was unavailable.
-5. Technical token counters remain diagnostics and finite executor safeguards. They are not the user-facing allowance unit or a subscription-cost exchange rate. Preserve legacy APIs and explicit expert token caps; newly authorized ordinary work uses an auditable account-aware policy instead of repeatedly raising those values.
+4. Missing/unsupported/stale account data is explicitly unavailable. It cannot silently authorize an automatic loop or be rendered as zero usage/unlimited capacity. Permit a deliberate owner continuation when the external task is known ended; preserve the remaining boundaries and record that the account check was unavailable.
+5. Technical token counters remain diagnostics. They are not an execution quota, the user-facing allowance unit or a subscription-cost exchange rate. Legacy quota fields remain readable inert metadata; continued work uses auditable account availability without token refills.
 6. Decisions and one-step approvals are tied to current account observation, execution generation and recovery identity. Stop, changed account/window, another continuation or unresolved external execution invalidates a stale approval. Parallel work shares the account view; do not promise the same estimated remainder independently to each worker.
 7. Refresh without paid work and cache ordinary reads. Record before/after observations around real GWI executions. Continue collecting task duration/outcome and diagnostic usage when account deltas are unavailable. Do not run paid probes merely to manufacture initial history.
 

@@ -4,7 +4,7 @@ import {api,uid} from '../api';
 import {Button,ErrorNotice,Field,Notice} from '../components';
 import {Icon} from '../Icons';
 import {useCopy} from './copy';
-import {RunLimits} from './RunLimits';
+import {HistoricalExecutionPolicy} from './ExecutionHistory';
 import {AccountAllowance,accountStepNeedsApproval,accountStepAuthorization} from './AccountAllowance';
 import {useTextDraft} from './useTextDraft';
 import {recordWorkStart,submittedDraftKey} from './workStart';
@@ -49,15 +49,15 @@ export function StageRecovery({run:observedRun,stageId,onChanged,onGoal}:{run:Ru
     void api<RunRecovery>(path,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}).then(result=>{if(!controller.signal.aborted){setValue(result);setReadError(null);}}).catch(error=>{if(!controller.signal.aborted)setReadError(error);}).finally(()=>{if(!controller.signal.aborted)setReading(false);});
     return()=>controller.abort();
   },[path,basis,read]);
-  const account=value?.account,accountApproval=!!value&&(value.accountAcknowledgementRequired===true||accountStepNeedsApproval(account)),boundApproval=value?.action==='approve'&&!!value.recommendation&&Object.keys(value.recommendation.limits).length>0;
-  const paused=!!run.pausedAt||value?.code==='RUN_PAUSED',needsApproval=!paused&&(accountApproval||boundApproval),waiting=!paused&&(value?.action==='wait'||account?.status==='exhausted');
+  const account=value?.account,accountApproval=!!value&&(value.accountAcknowledgementRequired===true||accountStepNeedsApproval(account));
+  const paused=!!run.pausedAt||value?.code==='RUN_PAUSED',needsApproval=!paused&&accountApproval,waiting=!paused&&(value?.action==='wait'||account?.status==='exhausted');
   const stage=run.snapshot.pipeline.stages.find(item=>item.id===stageId),requiresAccount=stage?.executor==='codex'||(stage?.executor==='pipeline'&&!!account);
   const refreshAccount=async()=>{await api('/api/account-allowance',{method:'POST',body:{refresh:true,projectId:run.projectId,runId:run.id,stageId}});setRead(value=>value+1);};
   const refreshObservation=async()=>{setObservationError(null);try{await onChanged();setRead(value=>value+1);}catch(error){if(mounted.current)setObservationError(error);}};
   const submit=async()=>{
     if(working.current||pendingReceipt||run.cancelRequested||run.status==='cancelled')return;working.current=true;setBusy('continue');setError(null);setObservationError(null);
     const intent=JSON.stringify({note:note.trim(),attemptId:attempt?.id,recoveryKey:needsApproval?value?.recoveryKey:undefined}),submission=submittedDraftKey(intent,storedKey,uid);setStoredKey(JSON.stringify(submission));
-    const input:ResolveRunInput={stageId,attemptId:attempt?.id,controlRevision:run.controlRevision??0,idempotencyKey:submission.key,...(note.trim()?{note:note.trim()}:{}),...(needsApproval?{recoveryKey:value?.recoveryKey,...(boundApproval?{approveRecommendation:true}:{}),...accountStepAuthorization(account,accountApproval)}:{})};
+    const input:ResolveRunInput={stageId,attemptId:attempt?.id,controlRevision:run.controlRevision??0,idempotencyKey:submission.key,...(note.trim()?{note:note.trim()}:{}),...(needsApproval?{recoveryKey:value?.recoveryKey,...accountStepAuthorization(account,accountApproval)}:{})};
     try{
       const result=await api<RunResolution>(`/api/runs/${encodeURIComponent(run.id)}/resolve`,{method:'POST',body:input});
       if(!mounted.current)return;
@@ -76,17 +76,11 @@ export function StageRecovery({run:observedRun,stageId,onChanged,onGoal}:{run:Ru
     {value&&value.action!=='none'&&<p className="pf-resolution-reason">{p(paused?'resolutionPausedHelp':waiting?(account?.status==='exhausted'?'resolutionAccountWait':'resolutionBusyWait'):needsApproval?'resolutionApproveHelp':value.action==='reconcile'?'resolutionCheckAndRetry':state?.allowanceHold&&account?.action==='continue'?'resolutionHealthyHold':'resolutionRetryHelp')}</p>}
     {!!readError&&<div className="pf-resolution-observation"><span>{p('resolutionReadUnavailable')}</span><Button tone="quiet" onClick={()=>setRead(value=>value+1)}><Icon name="refresh"/>{p('refresh')}</Button><details><summary>{p('technical')}</summary><ErrorNotice error={readError}/></details></div>}
     {!!error&&<Notice tone="warning"><p>{p('resolutionRequestUnconfirmed')}</p><details><summary>{p('technical')}</summary><ErrorNotice error={error}/></details></Notice>}
-    {boundApproval&&value?.recommendation&&<RunRecommendationSummary recommendation={value.recommendation}/>}
     <div className="actions pf-resolution-actions"><Button tone="primary" disabled={!!busy||value?.action==='none'} onClick={()=>void (paused?resumePaused():submit())}><Icon name={waiting?'refresh':needsApproval?'check':'play'}/>{p(busy==='resume'?'resolutionResuming':busy==='continue'?'resolutionPreparing':paused?'resume':waiting?'workCheckAgain':needsApproval?'resolutionApprove':state?.allowanceHold?'resolutionContinue':'continueStage')}</Button><Button disabled={!!busy} onClick={()=>void decline()}>{p(busy==='decline'?'resolutionDeclining':needsApproval?'resolutionReject':'resolutionNoRetry')}</Button>{reading&&!value&&!readError&&<span className="hint">{p('resolutionCheckingBackground')}</span>}</div>
     <Field label={p('resolutionNote')}><textarea rows={2} maxLength={20000} disabled={!!busy} value={note} onChange={event=>setNote(event.target.value)} placeholder={p('resolutionNotePlaceholder')} aria-keyshortcuts="Enter Meta+Enter Control+Enter" onCompositionStart={()=>{composing.current=true;}} onCompositionEnd={()=>{composing.current=false;}} onKeyDown={event=>{const action=requestEnterAction(event.nativeEvent,composing.current);if(action==='native')return;event.preventDefault();if(action==='submit')void (paused?resumePaused():submit());}}/></Field>
     {value?.action==='blocked'&&value.scope.kind==='goal'&&onGoal&&<Button tone="quiet" onClick={()=>onGoal(value.scope.id)}>{p('continueGoal')}<Icon name="arrow-right"/></Button>}
     {requiresAccount&&account&&<AccountAllowance context={{projectId:run.projectId,runId:run.id,stageId}} assessment={account} onRefresh={refreshAccount}/>}
-    {value&&<details className="pf-recovery-details"><summary>{p('recoveryAdvanced')}</summary><div className="form-stack">{value.reason&&<p className="hint">{value.reason}</p>}{requiresAccount&&<dl className="metadata-list"><div><dt>{p('tokenDiagnostics')}</dt><dd>{value.allowance.usageComplete?number(value.allowance.usedTokens):p('partial')}</dd></div></dl>}<RunLimits run={run} disabled={!!busy||value.action==='reconcile'||value.action==='wait'} onChanged={async()=>{await onChanged();setRead(value=>value+1);}}/></div></details>}
+    {value&&<details className="pf-recovery-details"><summary>{p('recoveryAdvanced')}</summary><div className="form-stack">{value.reason&&<p className="hint">{value.reason}</p>}{requiresAccount&&<dl className="metadata-list"><div><dt>{p('tokenDiagnostics')}</dt><dd>{value.allowance.usageComplete?number(value.allowance.usedTokens):p('partial')}</dd></div></dl>}<HistoricalExecutionPolicy policy={run.snapshot.pipeline.policy}/></div></details>}
   </section>;
 }
 export function canPerformStageRecovery(action:RunRecovery['action'],accountBlocked:boolean){return action==='reconcile'||(['retry','approve'].includes(action)&&!accountBlocked);}
-export function RunRecommendationSummary({recommendation}:{recommendation:NonNullable<RunRecovery['recommendation']>}) {
-  const {p,number}=useCopy(),basis=recommendation.basis;
-  const labels={maxAttempts:'attempts',timeoutSeconds:'seconds',maxIterations:'iterations',concurrency:'concurrency'} as const;
-  return <div className="pf-recovery-recommendation"><strong>{p('executionBounds')}</strong><ul>{Object.entries(recommendation.limits).filter(([key])=>key!=='tokenBudget').map(([key,next])=><li key={key}>{p('allowanceChange',{name:p(labels[key as keyof typeof labels]),before:number(basis.previousPolicy[key as keyof typeof labels]),after:number(next)})}</li>)}</ul>{recommendation.limits.tokenBudget!==undefined&&<><p>{p('resolutionExpertLimit')}</p><details><summary>{p('tokenDiagnostics')}</summary><span>{number(basis.previousPolicy.tokenBudget)} → {number(recommendation.limits.tokenBudget)}</span></details></>}</div>;
-}

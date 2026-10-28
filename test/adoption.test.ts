@@ -76,7 +76,7 @@ test('read-only source collection produces a reviewed proposal and ordinary Engi
   const item = await h.service.create(input(h.workspace), OWNER), call = h.codex.calls[0];
   assert.equal(item.status, 'scanning'); assert.equal(h.engine.store.list('project').length, 0);
   assert.equal(call.input.role.sandbox, 'read-only'); assert.deepEqual(call.input.role.skills, []); assert.deepEqual(call.input.role.tools, ['project.bootstrap']);
-  assert.equal(call.input.workspace, h.workspace); assert.equal(call.input.timeoutSeconds, 300); assert.equal(call.input.tokenBudget, 160000);
+  assert.equal(call.input.workspace, h.workspace); assert.equal(Object.hasOwn(call.input, 'timeoutSeconds'), false); assert.equal(Object.hasOwn(call.input, 'tokenBudget'), false);
   for (const excluded of ['EXCLUDED_SYNTHETIC_FOREIGN_SOURCE', 'EXCLUDED_SYNTHETIC_NESTED_REPOSITORY', 'EXCLUDED_SYNTHETIC_CREDENTIAL_DOCUMENT', 'EXCLUDED_SYNTHETIC_ENVIRONMENT', 'EXCLUDED_SYNTHETIC_PACKAGE_SETTING']) assert.equal(call.input.prompt.includes(excluded), false);
   assert.ok(item.sources.some(source => source.path === 'package.json' && source.transformation === 'package-metadata'));
   assert.ok(item.omissions.some(source => source.path === 'docs/linked')); assert.ok(item.omissions.some(source => source.path === 'docs/nested'));
@@ -129,7 +129,7 @@ test('invalid source kind gives one actionable correction and repaired kinds der
     assert.ok(error instanceof AppError); assert.equal(error.code, 'INVALID_ADOPTION_SOURCES');
     const details = error.details as Record<string, unknown>; assert.equal(details.path, 'README.md'); assert.equal(details.field, 'kind');
     assert.deepEqual(details.allowedKinds, ['document', 'artifact']); assert.ok((details.allowedRoles as string[]).includes('development')); assert.ok((details.allowedPaths as string[]).includes('docs/usage.md'));
-    const feedback = JSON.parse(error.message) as {correctionsRemaining: number; instruction: string}; assert.equal(feedback.correctionsRemaining, 1); assert.match(feedback.instruction, /once more before returning blocked/); return true;
+    const feedback = JSON.parse(error.message) as {instruction: string}; assert.equal(Object.hasOwn(feedback, 'correctionsRemaining'), false); assert.match(feedback.instruction, /Correct the invalid fields/); return true;
   });
   const repaired = proposal() as unknown as Record<string, unknown>, sources = repaired.knowledgeSources as Record<string, unknown>[];
   delete sources[0].kind; sources[1].kind = 'artifact'; sources.push({path: '.github/workflows/check.yml', roles: ['operations']});
@@ -160,14 +160,26 @@ test('scanned evidence cannot register unsupported Knowledge inputs and a correc
   });
 });
 
-test('proposal corrections stop after two calls and a failed scan retains its actual blocked output', async t => {
+test('adoption accepts successive corrected proposals without an attempt quota', async t => {
+  const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), call = h.codex.calls[0];
+  for (const kind of ['file', 'metadata', 'unknown', 'other']) {
+    const wrong = proposal() as unknown as Record<string, unknown>; (wrong.knowledgeSources as Record<string, unknown>[])[0].kind = kind;
+    await assert.rejects(call.input.onTool('project.bootstrap', {proposal: wrong, sources: ['README.md', 'docs/usage.md']}), code('INVALID_ADOPTION_SOURCES'));
+  }
+  await call.input.onTool('project.bootstrap', {proposal: proposal(), sources: ['README.md', 'docs/usage.md']});
+  call.finish(); const ready = await waitStatus(h, item, 'proposed');
+  assert.ok(ready.proposal); assert.equal(ready.events.filter(event => event.type === 'adoption.proposal_rejected').length, 4);
+  assert.equal(h.engine.store.list('project').length, 0);
+});
+
+test('adoption stops unchanged invalid proposals while preserving validation evidence', async t => {
   const h = await fixture(t), item = await h.service.create(input(h.workspace), OWNER), call = h.codex.calls[0];
   const wrong = proposal() as unknown as Record<string, unknown>; (wrong.knowledgeSources as Record<string, unknown>[])[0].kind = 'file';
-  for (let index = 0; index < 2; index++) await assert.rejects(call.input.onTool('project.bootstrap', {proposal: wrong, sources: ['README.md', 'docs/usage.md']}), code('INVALID_ADOPTION_SOURCES'));
-  await assert.rejects(call.input.onTool('project.bootstrap', {proposal: proposal(), sources: ['README.md', 'docs/usage.md']}), code('ADOPTION_PROPOSAL_ATTEMPTS'));
-  call.finish({...OUTPUT, outcome: 'blocked', summary: 'Synthetic setup remains blocked by invalid source kinds.'});
-  const failed = await waitStatus(h, item, 'failed'); assert.equal(failed.output?.outcome, 'blocked'); assert.match(failed.output!.summary, /invalid source kinds/);
-  assert.equal(failed.proposal, undefined); assert.equal(failed.events.filter(event => event.type === 'adoption.proposal_rejected').length, 2); assert.equal(h.engine.store.list('project').length, 0);
+  await assert.rejects(call.input.onTool('project.bootstrap', {proposal: wrong, sources: ['README.md', 'docs/usage.md']}), code('INVALID_ADOPTION_SOURCES'));
+  await assert.rejects(call.input.onTool('project.bootstrap', {proposal: wrong, sources: ['README.md', 'docs/usage.md']}), code('ADOPTION_NO_PROGRESS'));
+  const failed = h.service.get(item.id, OWNER); assert.equal(failed.status, 'failed'); assert.match(failed.error!, /unchanged rejected proposal/);
+  assert.equal(call.input.signal.aborted, true); assert.equal(failed.proposal, undefined); assert.equal(h.engine.store.list('project').length, 0);
+  call.finish({...OUTPUT, outcome: 'blocked', summary: 'Synthetic setup needs new evidence.'});
 });
 
 test('changed evidence is rejected before a project is created', async t => {
@@ -187,6 +199,13 @@ test('scan starts deduplicate concurrent keys and reject broad workspaces or pro
   await assert.rejects(h.service.create(input(homedir()), OWNER), code('WORKSPACE_TOO_BROAD'));
   await assert.rejects(h.service.create(input(path.parse(h.workspace).root), OWNER), code('WORKSPACE_TOO_BROAD'));
   await assert.rejects(h.service.create(input(h.workspace), {...OWNER, projectId: 'scoped-project'}), code('OWNER_REQUIRED'));
+});
+
+test('independent project scans have no global execution concurrency quota',async t=>{
+  const h=await fixture(t),workspaces=await Promise.all(Array.from({length:5},async(_,index)=>{const workspace=path.join(h.directory,'parallel-project-'+index);await mkdir(workspace);await writeFile(path.join(workspace,'README.md'),'Independently authored synthetic project evidence.');return workspace;}));
+  const scans=await Promise.all(workspaces.map(workspace=>h.service.create(input(workspace),OWNER)));
+  assert.equal(new Set(scans.map(scan=>scan.id)).size,5);assert.equal(h.codex.calls.length,5);
+  for(const call of h.codex.calls)call.finish({...OUTPUT,outcome:'blocked',summary:'Synthetic owner review remains pending.'});
 });
 
 test('interrupted and adapter-failed scans remain inspectable and are never silently restarted', async t => {

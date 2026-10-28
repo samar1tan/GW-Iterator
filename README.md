@@ -2,7 +2,7 @@
 
 # GW-Iterator
 
-GW-Iterator (GWI) is a local workbench for advancing project work through configurable teams, pipelines and feedback loops. It uses [Multica](https://github.com/multica-ai/multica) for agent execution and keeps project context, dependencies, review, limits and delivery evidence in one interface.
+GW-Iterator (GWI) is a local workbench for advancing project work through configurable teams, pipelines and feedback loops. It uses [Multica](https://github.com/multica-ai/multica) for agent execution and keeps project context, dependencies, review, supervision and delivery evidence in one interface.
 
 Choose a project, describe an outcome or run a saved pipeline, then follow the steps and activity. Inspect actual changes, return a finding to its owner, and review delivery from evidence. The interface supports English and Simplified Chinese.
 
@@ -59,6 +59,8 @@ The [setup guide](docs/multica-setup.md) covers prerequisites, native permission
 Starts and continuations use Codex account availability and recent comparable task trends, without asking for a token estimate. Shared-account observations are ranges, not exact task charges; absent history stays explicit.
 
 GWI waits for human and CI results without repeatedly invoking the model. Execution and outcome completion remain separate. A prepared change does not establish publication: a delivery step must perform and record the required integration or release.
+
+Stages define responsibility, results, checks and handoffs. GWI does not impose fixed concurrency, attempt, iteration, action-round, model-time or token quotas. Guide, pause or stop work through its controls; permissions, project scope, human decisions, real provider availability and verified progress remain [execution boundaries](docs/stage-execution-prd.md). Historical quota values remain readable without constraining continued work.
 
 Agent work starts in isolated checkouts of committed source. Development does not silently import the original working directory's dirty files, ignored state or installed dependencies. Review can use a disposable verification copy of the actual prepared changes, including eligible untracked source. Inspect the recorded input, diff and check results before accepting work; the original working directory is not silently overwritten.
 

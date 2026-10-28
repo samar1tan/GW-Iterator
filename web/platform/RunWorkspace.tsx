@@ -5,6 +5,7 @@ import {api,safeURL} from '../api';
 import {Button,Empty,ErrorNotice,Field,Modal,NativeGoalInfo,Notice,Status} from '../components';
 import {Icon} from '../Icons';
 import {useCopy} from './copy';
+import {HistoricalExecutionPolicy} from './ExecutionHistory';
 import {requestSummary} from './requestSummary';
 import {PipelineCanvas} from './PipelineCanvas';
 import {PipelineSteps} from './PipelineSteps';
@@ -40,7 +41,7 @@ export function RunWorkspace({run:observedRun,events,stageId,onSelect,onRun,onGo
       {selected?<StageContext key={selected.id} events={events} observedAt={observedAt} observationFailed={observationFailed} anchorId={resultId} stage={selected} run={run} multicaSteer={multicaSteer} onRun={onRun} onGoal={onGoal} onChanged={onChanged}/>:<aside className="pf-inspector"><Empty>{p(stageId?'missingStage':'selectRunStage')}</Empty></aside>}
       <ActivityTimeline events={events} active={active.has(run.status)} runId={run.id} stages={run.snapshot.pipeline.stages} onStage={select}/>
     </div>
-    <details className="pf-run-technical"><summary>{p('frozen')}</summary><pre className="json-output">{JSON.stringify(run.snapshot,null,2)}</pre></details>{control&&<RunControl run={run} action={control} onClose={()=>setControl(null)} onChanged={onChanged}/ >}
+    <details className="pf-run-technical"><summary>{p('frozen')}</summary><HistoricalExecutionPolicy policy={run.snapshot.pipeline.policy}/>{run.approvedPolicy&&<HistoricalExecutionPolicy policy={run.approvedPolicy}/ >}{!!run.limitRevisions?.length&&<details><summary>{p('historicalPolicyChanges')}</summary><pre className="json-output">{JSON.stringify(run.limitRevisions,null,2)}</pre></details>}<pre className="json-output">{JSON.stringify(run.snapshot,null,2)}</pre></details>{control&&<RunControl run={run} action={control} onClose={()=>setControl(null)} onChanged={onChanged}/ >}
   </div>;
 }
 function StageContext({anchorId,stage,run,onRun,onGoal,onChanged,multicaSteer,events,observedAt,observationFailed}:{events:AuditEvent[];observedAt?:number;observationFailed?:boolean;anchorId:string;stage:Stage;run:Run;onRun:(id:string)=>void;onGoal?:(id:string)=>void;onChanged:()=>Promise<void>;multicaSteer:boolean}) {
@@ -51,7 +52,7 @@ function StageContext({anchorId,stage,run,onRun,onGoal,onChanged,multicaSteer,ev
   const failedScope=!!state&&(['failed','interrupted','cancelled'].includes(state.status)||!!state.allowanceHold);
   const action=async(kind:'review'|'steer',body:unknown)=>{setBusy(true);setError(null);try{const receipt=await api<{status?:string}>(`/api/runs/${encodeURIComponent(run.id)}/stages/${encodeURIComponent(stage.id)}/${kind}`,{method:'POST',body});clearNote(note);setDone(p(kind==='steer'?receipt.status==='delivered'?'guidanceDelivered':receipt.status==='pending'?'guidanceSubmitted':'guidanceRequested':'requested'));await onChanged();}catch(value){setError(value);}finally{setBusy(false);}};
   return <aside id={anchorId} tabIndex={-1} className="pf-inspector pf-stage-context" aria-label={stage.name}><div className="pf-inspector-title"><div><span className="pf-eyebrow">{p(state?.status==='queued'&&attempt?.output?'previousResult':'stageResult')}</span><h2>{stage.name}</h2></div>{state&&<Status value={state.status}/>}</div><div className="pf-owner-card"><span className="pf-person-avatar">{role?.name.slice(0,1)??''}</span><div><span>{p('capturedRole')}</span><strong>{role?.name??stage.roleId}</strong><span>{stage.executor==='codex'?<>{role?.model??p('defaultModel')} · {role?EFFORT_LABELS[role.effort]:''}</>:p(stage.executor==='manual'?'humanTask':stage.executor==='github'?'ciTask':'childTask')}</span></div></div>
-    <ErrorNotice error={error}/>{done&&<Notice tone="success">{done}</Notice>}{attempt?.error&&!state?.allowanceHold&&!sameMessage(attempt.error,attempt.output?.summary)&&(failedScope?<details className="pf-stage-error-details"><summary>{p('technical')}</summary><p className="pre-wrap">{attempt.error}</p></details>:<ErrorNotice error={governanceError(attempt.error,attempt.failureCode)}/>)}
+    <ErrorNotice error={error}/>{done&&<Notice tone="success">{done}</Notice>}{attempt?.error&&!state?.allowanceHold&&!sameMessage(attempt.error,attempt.output?.summary)&&(failedScope&&attempt.failureCode!=='RUNTIME_EXECUTION_POLICY_REQUIRED'?<details className="pf-stage-error-details"><summary>{p('technical')}</summary><p className="pre-wrap">{attempt.error}</p></details>:<ErrorNotice error={governanceError(attempt.error,attempt.failureCode)}/>)}
     {failedScope&&!run.executionKind&&<StageRecovery run={run} stageId={stage.id} onGoal={onGoal} onChanged={onChanged}/ >}
     {!state?.allowanceHold&&<ExecutionActivity run={run} stageId={stage.id} events={events} observedAt={observedAt} observationFailed={observationFailed}/ >}
     {attempt?.knowledgeContextId&&<ContextPanel runId={run.id} stageId={stage.id} attemptId={attempt.id}/>}

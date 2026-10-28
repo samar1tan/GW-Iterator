@@ -54,12 +54,12 @@ test('uncertain native task startup retains its observation and blocks replaceme
 test('unconfirmed silent startup is never inferred free from the absence of a native reference',async t=>{
   const h=await fixture(t);h.control.mode='silent-unknown';const run=h.start();await until(()=>h.engine.run(run.id).status==='failed');
   assert.equal(h.engine.run(run.id).stages[0].attempts[0].ref,undefined);assert.equal(h.samples()[0].finishedAt,undefined);assert.equal(h.engine.recovery(run.id,'work').action,'reconcile');
-  h.control.calls[0].onEvent(boundary('not_dispatched'));await until(()=>!!h.samples()[0].finishedAt);assert.equal(h.samples()[0].dispatched,false);assert.equal(h.samples()[0].status,'not_dispatched');assert.equal(h.engine.allowance(run.id).remainingTokens,1000);
+  h.control.calls[0].onEvent(boundary('not_dispatched'));await until(()=>!!h.samples()[0].finishedAt);assert.equal(h.samples()[0].dispatched,false);assert.equal(h.samples()[0].status,'not_dispatched');assert.equal(h.engine.allowance(run.id).remainingTokens,undefined);
 });
 
 test('explicit native preparation rejection settles without charging a sample or trapping a technical token safeguard',async t=>{
   const h=await fixture(t);h.control.mode='preparation';const run=h.start();await until(()=>h.engine.run(run.id).status==='failed'&&!!h.samples()[0]?.finishedAt);
-  const attempt=h.engine.run(run.id).stages[0].attempts[0];assert.equal(attempt.nativeDispatchState,'not_dispatched');assert.equal(attempt.nativeCleanupConfirmed,true);assert.equal(h.samples()[0].dispatched,false);assert.equal(h.engine.allowance(run.id).remainingTokens,1000);assert.equal(h.engine.recovery(run.id,'work').action,'retry');
+  const attempt=h.engine.run(run.id).stages[0].attempts[0];assert.equal(attempt.nativeDispatchState,'not_dispatched');assert.equal(attempt.nativeCleanupConfirmed,true);assert.equal(h.samples()[0].dispatched,false);assert.equal(h.engine.allowance(run.id).remainingTokens,undefined);assert.equal(h.engine.recovery(run.id,'work').action,'retry');
 });
 
 test('a native startup rejection with authoritative terminal proof retains actual dispatched usage',async t=>{

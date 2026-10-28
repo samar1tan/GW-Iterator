@@ -39,8 +39,20 @@ test('HTTP MCP advertises only frozen authorized tools and rejects calls after r
   assert.equal(accepted.status, 200); assert.deepEqual(invoked, [{tool: 'context.read', args: {}}]);
   lease.revoke(); assert.equal((await h.rpc(authorization, 'tools/list')).status, 401);
   assert.equal((await h.rpc(undefined, 'tools/list')).status, 401); assert.equal((await h.rpc('Bearer synthetic-invalid-capability', 'tools/list')).status, 401);
-  const expired = h.controls.issue(['context.read'], async () => ({accepted: false}), -1);
+  assert.throws(()=>h.controls.issue(['context.read'],async()=>({accepted:false}),-1),error=>error instanceof AppError&&error.code==='INVALID_CAPABILITY_LIFETIME');
+  const expired = h.controls.issue(['context.read'], async () => ({accepted: false}), 1);
+  const observed=Date.now();t.mock.method(Date,'now',()=>observed+2000);
   assert.equal((await h.rpc(expired.config.mcpServers.gwi.headers.Authorization, 'tools/call', {name: 'gwi_context_read', arguments: {}})).status, 401);
+});
+
+test('execution-scoped MCP stays authorized across long work and revocation remains authoritative',async t=>{
+  const h=await fixture(t),lease=h.controls.issue(['context.read'],async()=>({projectId:'synthetic-project'}));
+  const authorization=lease.config.mcpServers.gwi.headers.Authorization,observed=Date.now();
+  t.mock.method(Date,'now',()=>observed+30*24*60*60*1000);
+  const accepted=await h.rpc(authorization,'tools/call',{name:'gwi_context_read',arguments:{}});
+  assert.equal(accepted.status,200);assert.notEqual(accepted.body.result?.isError,true);
+  assert.deepEqual(JSON.parse(accepted.body.result!.content![0].text),{projectId:'synthetic-project'});
+  lease.revoke();assert.equal((await h.rpc(authorization,'tools/list')).status,401);
 });
 
 test('MCP annotations describe actual read, mutation, external dispatch and idempotency behavior', async t => {

@@ -156,7 +156,7 @@ export class MulticaClient {
     if (row.workspace_id !== undefined && row.workspace_id !== this.#connection.workspaceId)
       throw new MulticaApiError('WORKSPACE_MISMATCH', 'Multica returned a resource from another workspace.');
   }
-  async #request(method: string, path: string, body?: unknown, options: MulticaRequestOptions = {}, authenticated = true): Promise<unknown> {
+  async #requestResponse(method: string, path: string, body?: unknown, options: MulticaRequestOptions = {}, authenticated = true): Promise<{data:unknown;headers:Headers}> {
     const timeout = AbortSignal.timeout(this.#timeout);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     const headers: Record<string, string> = {Accept: 'application/json'};
@@ -191,13 +191,16 @@ export class MulticaClient {
         const message = typeof row.error === 'string' ? this.#redact(row.error) : 'Multica request failed.';
         throw new MulticaApiError(code, message, {status: response.status, method, path});
       }
-      return data;
+      return {data,headers:new Headers(response.headers)};
     } catch (error) {
       if (error instanceof MulticaApiError) throw error;
       if (options.signal?.aborted) throw new MulticaApiError('ABORTED', 'Multica request was aborted.', {method, path});
       if (timeout.aborted) throw new MulticaApiError('TIMEOUT', 'Multica request timed out.', {method, path});
       throw new MulticaApiError('TRANSPORT_ERROR', 'Could not reach Multica.', {method, path});
     }
+  }
+  async #request(method:string,path:string,body?:unknown,options:MulticaRequestOptions={},authenticated=true):Promise<unknown>{
+    return (await this.#requestResponse(method,path,body,options,authenticated)).data;
   }
   #project = (value: unknown): MulticaProject => {
     const row = object(value, 'project'); this.#scope(row);
@@ -331,7 +334,21 @@ export class MulticaClient {
     if (!task) throw new MulticaApiError('TASK_NOT_FOUND', 'The Multica task is not present in this issue history.', {status: 404});
     return task;
   }
-  async listAgentTasks(agentId: string, o?: MulticaRequestOptions) {return array(await this.#request('GET', '/api/agents/' + id(agentId) + '/tasks', undefined, o), this.#task);}
+  async listAgentTasks(agentId:string,o:MulticaRequestOptions={}):Promise<MulticaTask[]>{
+    const path='/api/agents/'+id(agentId)+'/tasks',deadline=AbortSignal.timeout(this.#timeout),signal=o.signal?AbortSignal.any([o.signal,deadline]):deadline;
+    const tasks:MulticaTask[]=[],seenTasks=new Set<string>(),seenCursors=new Set<string>();let cursor:string|undefined;
+    try{for(;;){
+      const response=await this.#requestResponse('GET',path+(cursor?'?before='+encodeURIComponent(cursor):''),undefined,{signal});
+      const page=array(response.data,this.#task),next=response.headers.get('X-Agent-Tasks-Next-Cursor');
+      for(const task of page){if(seenTasks.has(task.id))throw new MulticaApiError('PAGINATION_INCOMPLETE','Multica repeated a task while checking complete agent history.');seenTasks.add(task.id);tasks.push(task);}
+      if(next===null)return tasks;
+      if(!next.trim()||next.length>4096||/[\u0000-\u001f]/.test(next)||!page.length||seenCursors.has(next))throw new MulticaApiError('PAGINATION_INCOMPLETE','Multica agent history pagination did not advance safely.');
+      seenCursors.add(next);cursor=next;
+    }}catch(error){
+      if(!o.signal?.aborted&&deadline.aborted)throw new MulticaApiError('PAGINATION_INCOMPLETE','Complete Multica agent history could not be verified before the observation deadline.');
+      throw error;
+    }
+  }
   async rerunIssue(issueId: string, taskId?: string, o?: MulticaRequestOptions) {return this.#task(await this.#request('POST', '/api/issues/' + id(issueId) + '/rerun', taskId ? {task_id: taskId} : {}, o));}
   async cancelTask(issueId: string, taskId: string, o?: MulticaRequestOptions) {return this.#task(await this.#request('POST', '/api/issues/' + id(issueId) + '/tasks/' + id(taskId) + '/cancel', {}, o));}
   async appendTaskInstruction(issueId: string, taskId: string, content: string, clientRequestId: string, o?: MulticaRequestOptions): Promise<MulticaTaskSupplement> {
