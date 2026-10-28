@@ -29,7 +29,7 @@ async function fixture(t:TestContext){
   const run=(id:string,resourceMode:'account'|'tokens'='account'):Run=>{const at=new Date(state.now).toISOString(),value:Run={id,projectId:project.id,pipelineId:pipeline.id,goal:'Inspect synthetic admission only.',baseline:'Synthetic source.',resourceMode,trigger:{kind:'human',actor:OWNER.name},status:'running',iteration:1,mode:'once',createdAt:at,updatedAt:at,dependsOnRunIds:[],idempotencyKey:id,inputHash:id,approvedPolicy:structuredClone(pipeline.policy),snapshot:{project:structuredClone(project),pipeline:structuredClone(pipeline),pipelines:[structuredClone(pipeline)],knowledge:[]},stages:[{stageId:'work',status:'running',attempts:[{id:id+'-attempt',number:1,iteration:1,status:'running',startedAt:at}]}]};store.put('run',value);return value;};
   const history=async()=>{for(let index=0;index<3;index++){const execution=await service.begin(target);state.now+=1000;state.used+=4;await service.finish(execution.id,{status:'completed',dispatched:true});state.now+=1000;}};
   t.after(async()=>{await engine.close();await rm(directory,{recursive:true,force:true});});
-  return{engine,store,service,state,target,run,history,project,pipeline};
+  return{engine,store,service,state,target,run,history,project,pipeline,reader};
 }
 
 test('concurrent admission reserves one shared account view before admitting another execution',async t=>{
@@ -83,4 +83,56 @@ test('manual-only work starts and completes without consulting even a known exha
   const initial=h.engine.createPipeline({projectId:h.project.id,roleId:'development',name:'Synthetic manual owner review'},OWNER),flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'accept',name:'Record synthetic manual evidence',roleId:'development',executor:'manual',ownerGate:true,dependsOn:[],prompt:'Inspect the synthetic evidence.',review:false}]},OWNER),run=h.engine.startRun({projectId:h.project.id,pipelineId:flow.id,goal:'Accept synthetic manual work.',baseline:'Synthetic source.',idempotencyKey:'synthetic-manual-no-account'},OWNER);
   await h.engine.tick();assert.equal(h.engine.run(run.id).status,'waiting');assert.equal(h.state.reads,reads);
   h.engine.completeManual(run.id,'accept',{outcome:'done',summary:'Synthetic owner acceptance recorded.',artifacts:[],observations:[]},OWNER);assert.equal(h.engine.run(run.id).status,'completed');assert.equal(h.state.reads,reads);assert.equal(h.store.list('account-allowance-execution').length,0);
+});
+
+test('changing healthy provider readings do not create a false admission hold or a second preflight read',async t=>{
+  const h=await fixture(t),run=h.run('synthetic-changing-healthy'),read=h.reader.readAccountAllowance.bind(h.reader);h.state.used=68;
+  h.reader.readAccountAllowance=async()=>{const observation=await read();h.state.used++;return observation;};
+  const execution=await h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model');
+  assert.ok(execution);assert.equal(h.state.reads,1);assert.equal(execution.before.windows[0].remainingPercent,32);assert.equal(h.engine.run(run.id).stages[0].allowanceHold,undefined);
+  assert.equal(h.store.list('account-allowance-execution').length,1);await h.engine.finishAccountExecution(execution.id,{status:'not_dispatched',dispatched:false});
+});
+
+test('Stop and changed attempts during a fresh account read prevent admission before ledger reservation',async t=>{
+  for(const change of ['stop','attempt']as const)await t.test(change,async sub=>{
+    const h=await fixture(sub),run=h.run('synthetic-pending-'+change),read=h.reader.readAccountAllowance.bind(h.reader);
+    let release!:()=>void,began!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve;}),checking=new Promise<void>(resolve=>{began=resolve;});
+    h.reader.readAccountAllowance=async()=>{const observation=await read();began();await pending;return observation;};
+    const admission=h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model'),rejected=assert.rejects(admission,code('ACCOUNT_EXECUTION_CANCELLED'));await checking;
+    if(change==='stop')await h.engine.cancel(run.id,'Stop synthetic pending admission.',OWNER);
+    else{const current=h.engine.run(run.id);current.stages[0].attempts[0].id='synthetic-replacement-attempt';h.store.put('run',current);}
+    release();await rejected;assert.equal(h.store.list('account-allowance-execution').length,0);
+  });
+});
+
+test('caution admission keeps exact, unrevoked and single-use owner permits',async t=>{
+  for(const condition of ['missing','changed-key','changed-snapshot','revoked','used','valid']as const)await t.test(condition,async sub=>{
+    const h=await fixture(sub),run=h.run('synthetic-caution-'+condition);h.state.used=98;
+    const assessment=await h.service.assess(h.target,{refresh:true});assert.equal(assessment.action,'owner-step');
+    if(condition!=='missing'){
+      const permit=await h.engine.approveAccountStep(h.target,assessment.key,OWNER);
+      if(condition==='changed-key')permit.assessmentKey='synthetic-wrong-assessment';
+      if(condition==='changed-snapshot')permit.accountSnapshotId='synthetic-wrong-account';
+      if(condition==='revoked')permit.revoked=true;
+      if(condition==='used')permit.used=true;
+      run.accountApprovals=[permit];h.store.put('run',run);
+    }
+    if(condition==='valid'){
+      const execution=await h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model');assert.ok(execution);assert.equal(h.engine.run(run.id).accountApprovals?.[0].used,true);
+      await assert.rejects(h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model'),code('ACCOUNT_STEP_APPROVAL_REQUIRED'));
+      assert.equal(h.store.list('account-allowance-execution').length,1);await h.engine.finishAccountExecution(execution.id,{status:'not_dispatched',dispatched:false});
+    }else{
+      await assert.rejects(h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model'),code('ACCOUNT_STEP_APPROVAL_REQUIRED'));assert.equal(h.store.list('account-allowance-execution').length,0);
+    }
+  });
+});
+
+test('a freshly checked unavailable reading still requires and accepts one exact owner decision',async t=>{
+  const h=await fixture(t),run=h.run('synthetic-unavailable-owner-step'),read=h.reader.readAccountAllowance.bind(h.reader);
+  h.reader.readAccountAllowance=async()=>{const observation=await read();return normalizeAccountObservation({...observation,observedAt:new Date(h.state.now-90000).toISOString(),expiresAt:new Date(h.state.now-30000).toISOString()},h.state.now);};
+  await assert.rejects(h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model'),code('ACCOUNT_STEP_APPROVAL_REQUIRED'));
+  const assessment=await h.service.assess(h.target,{refresh:true});assert.equal(assessment.status,'unavailable');assert.equal(assessment.account.reason,'STALE_OBSERVATION');
+  run.accountApprovals=[await h.engine.approveAccountStep(h.target,assessment.key,OWNER)];h.store.put('run',run);const reads=h.state.reads;
+  const execution=await h.engine.beginAccountExecution(run.id,'work','synthetic-resolved-model');assert.ok(execution);assert.equal(h.state.reads,reads+1);assert.equal(execution.before.status,'unavailable');assert.equal(h.engine.run(run.id).accountApprovals?.[0].used,true);
+  await h.engine.finishAccountExecution(execution.id,{status:'not_dispatched',dispatched:false});
 });

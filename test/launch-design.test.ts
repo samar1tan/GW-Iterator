@@ -47,7 +47,7 @@ test('launch presents task and true execution structure with a separately associ
     assert.ok(ordinary.includes('<meter'));assert.ok(ordinary.includes('48%'));assert.ok(!ordinary.includes(locale==='en'?'no samples yet':'尚无执行样本'));
     const expired={...account,account:{...account.account,expiresAt:new Date(now-1).toISOString()}};
     const stale=render(locale,AccountAllowanceView,{assessment:expired,now});
-    assert.ok(!stale.includes('<meter'));assert.ok(stale.split('<details')[0].includes(locale==='en'?'observation is stale':'观测已过期'));assert.equal(canRequestAccountStep(expired,now),false);
+    assert.ok(!stale.includes('<meter'));assert.ok(!stale.split('<details')[0].includes(locale==='en'?'stale':'过期'));assert.ok(!stale.split('<details')[0].includes('warning'));assert.equal(canRequestAccountStep(expired,now),true,'Requesting fresh admission does not authorize a paid dispatch.');
     const unknownAccount={...account,status:'unavailable',action:'owner-step',account:{...account.account,status:'unavailable',windows:[]}};
     const unavailable=render(locale,AccountAllowanceView,{assessment:unknownAccount,now});
     assert.ok(unavailable.split('<details')[0].includes(locale==='en'?'Approve this execution':'批准'));assert.ok(!unavailable.includes('<details class="pf-account-details" open'));assert.equal(canRequestAccountStep(unknownAccount,now),true);

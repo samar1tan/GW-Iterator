@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import type {AllowanceAssessment,AccountAllowanceWindow} from '../../src/account-allowance-types';
 import {EFFORT_LABELS} from '../../src/contracts';
 import {api} from '../api';
@@ -7,31 +7,36 @@ import {Icon} from '../Icons';
 import {useCopy} from './copy';
 
 export type AccountAllowanceContext={projectId:string;pipelineId?:string;runId?:string;stageId?:string;intakeId?:string;model?:string};
-export function canRequestAccountStep(value:AllowanceAssessment|null|undefined,now=Date.now()):boolean {
+export function canRequestAccountStep(value:AllowanceAssessment|null|undefined,_now=Date.now()):boolean {
   if(!value||value.status==='exhausted'||value.action==='wait'||(value.account.status==='available'&&!value.account.windows.length))return false;
   if(value.status==='unavailable'&&value.action==='owner-step')return true;
-  const expires=Date.parse(value.account.expiresAt);
-  return Number.isFinite(expires)&&expires>now;
+  // This enables a request for fresh server-side admission, never a paid dispatch.
+  return Number.isFinite(Date.parse(value.account.expiresAt));
 }
 export function accountStepNeedsApproval(value:AllowanceAssessment|null|undefined):boolean{return value?.action==='owner-step';}
-export function accountStepAuthorization(value:AllowanceAssessment|null|undefined,required=accountStepNeedsApproval(value)):{approveAccountStep?:true;accountAssessmentKey?:string}{return value&&required&&canRequestAccountStep(value)?{approveAccountStep:true,accountAssessmentKey:value.key}:{};}
+export function accountStepAuthorization(value:AllowanceAssessment|null|undefined,required=accountStepNeedsApproval(value)):{approveAccountStep?:true;accountAssessmentKey?:string}{return value&&value.action==='owner-step'&&required&&canRequestAccountStep(value)?{approveAccountStep:true,accountAssessmentKey:value.key}:{};}
 export function accountAllowancePath(context:AccountAllowanceContext){const params=new URLSearchParams();for(const[key,value]of Object.entries(context))if(value)params.set(key,value);return `/api/account-allowance?${params.toString()}`;}
 
 export function AccountAllowance({context,assessment,onAssessment,onRefresh}:{context:AccountAllowanceContext;assessment?:AllowanceAssessment;onAssessment?:(value:AllowanceAssessment|null)=>void;onRefresh?:()=>Promise<void>}) {
-  const [local,setLocal]=useState<AllowanceAssessment|null>(null), [error,setError]=useState<unknown>(null), [busy,setBusy]=useState(false), [now,setNow]=useState(Date.now);
+  const [local,setLocal]=useState<AllowanceAssessment|null>(null), [error,setError]=useState<unknown>(null), [busy,setBusy]=useState(false), [now,setNow]=useState(Date.now),[refreshCycle,setRefreshCycle]=useState(0);
   const path=accountAllowancePath(context), controlled=assessment!==undefined, current=assessment??local;
+  const callbacks=useRef({onAssessment,onRefresh});callbacks.current={onAssessment,onRefresh};
   useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),15000);return()=>clearInterval(timer);},[]);
   useEffect(()=>{
     if(controlled)return;const controller=new AbortController();setLocal(null);onAssessment?.(null);setError(null);
     void api<AllowanceAssessment>(path,{signal:controller.signal}).then(value=>{if(!controller.signal.aborted){setLocal(value);onAssessment?.(value);}}).catch(error=>{if(!controller.signal.aborted)setError(error);});return()=>controller.abort();
   },[path,controlled]);
   useEffect(()=>{
-    if(controlled||!current)return;const expires=Date.parse(current.account.expiresAt);if(!Number.isFinite(expires))return;
-    const controller=new AbortController();const timer=setTimeout(()=>{void api<AllowanceAssessment>(path,{signal:controller.signal}).then(value=>{if(!controller.signal.aborted){setLocal(value);onAssessment?.(value);setError(null);}}).catch(error=>{if(!controller.signal.aborted)setError(error);});},Math.max(1000,expires-Date.now()));
+    if(!current)return;const expires=Date.parse(current.account.expiresAt);if(!Number.isFinite(expires))return;
+    const controller=new AbortController();const timer=setTimeout(()=>{
+      if(document.visibilityState==='hidden'){setRefreshCycle(value=>value+1);return;}
+      const work=controlled&&callbacks.current.onRefresh?callbacks.current.onRefresh():api<AllowanceAssessment>(path,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}).then(value=>{if(!controller.signal.aborted){setLocal(value);callbacks.current.onAssessment?.(value);}});
+      void work.then(()=>{if(!controller.signal.aborted)setError(null);}).catch(error=>{if(!controller.signal.aborted)setError(error);}).finally(()=>{if(!controller.signal.aborted)setRefreshCycle(value=>value+1);});
+    },Math.max(15000,expires-Date.now()-10000));
     return()=>{controller.abort();clearTimeout(timer);};
-  },[path,controlled,current?.key,current?.account.expiresAt]);
+  },[path,controlled,current?.key,current?.account.expiresAt,refreshCycle]);
   const refresh=async()=>{
-    if(busy)return;setBusy(true);setError(null);if(!controlled)onAssessment?.(null);
+    if(busy)return;setBusy(true);setError(null);
     try{if(onRefresh)await onRefresh();else{const value=await api<AllowanceAssessment>('/api/account-allowance',{method:'POST',body:{refresh:true,...context}});setLocal(value);onAssessment?.(value);}setNow(Date.now());}catch(error){setError(error);}finally{setBusy(false);}
   };
   return <AccountAllowanceView assessment={current} busy={busy} error={error} now={now} onRefresh={()=>void refresh()}/>;
@@ -44,20 +49,19 @@ export function AccountAllowanceView({assessment,busy=false,error=null,now=Date.
   const range=(value:number)=>new Intl.NumberFormat(locale,{maximumSignificantDigits:3}).format(value);
   const stale=!!assessment&&(!Number.isFinite(Date.parse(assessment.account.expiresAt))||Date.parse(assessment.account.expiresAt)<=now);
   const missingWindows=assessment?.account.status==='available'&&!assessment.account.windows.length;
-  const status=error||stale||missingWindows?'unavailable':assessment?.status;
+  const status=missingWindows||(!assessment&&error)?'unavailable':assessment?.status;
   const readiness=error?'accountReadFailed':stale?'accountStale':missingWindows?'accountWindowMissing':status==='ready'?'accountCompactReady':status==='learning'?(assessment?.trend.sampleCount===0?'accountCompactLearningEmpty':'accountCompactLearning'):status==='caution'?'accountCompactCaution':status==='exhausted'?'accountCompactExhausted':status==='unavailable'?'accountCompactUnavailable':'accountLoading';
   const reasonKeys={SHARED_ACCOUNT_ACTIVITY:'accountShared',NO_SAMPLES:'accountNoSamples',INSUFFICIENT_SAMPLES:'accountInsufficientSamples',OVERLAPPING_EXECUTIONS:'accountOverlapping',ACCOUNT_CHANGED:'accountChanged',WINDOW_RESET:'accountWindowReset',WINDOW_MISSING:'accountWindowMissing',STALE_OBSERVATION:'accountStale',OBSERVATION_UNAVAILABLE:'accountUnavailable',ZERO_DELTA_UNCERTAIN:'accountZeroUncertain',MODEL_UNRESOLVED:'accountModelUnresolved',CLOCK_CHANGED:'accountClockChanged',ACTIVE_ESTIMATE_UNAVAILABLE:'accountActiveEstimateUnavailable',LIMITED_REMAINING_ACCOUNT_WINDOW:'accountLimitedWindow'} as const;
   const windows=assessment?.account.windows??[],trend=assessment?.trend;
   const sourceReasonKeys={ACCOUNT_ALLOWANCE_UNSUPPORTED:'accountSourceUnsupported',ACCOUNT_ALLOWANCE_READ_FAILED:'accountReadFailed',ACCOUNT_ALLOWANCE_MALFORMED:'accountMalformed',ACCOUNT_IDENTITY_UNAVAILABLE:'accountIdentityUnavailable',ACCOUNT_WINDOWS_MISSING:'accountWindowMissing',ACCOUNT_WINDOW_EXPIRED:'accountObservationExpired',ACCOUNT_CHANGED:'accountChanged',STALE_OBSERVATION:'accountStale',ACCOUNT_LIMIT_REACHED:'accountProviderLimit'}as const;
   const sourceReason=assessment?.account.reason;
-  const attention=status==='caution'||status==='unavailable'||status==='exhausted';
+  const attention=!stale&&(status==='caution'||status==='unavailable'||status==='exhausted');
   const zeroUncertain=!!trend&&(trend.reasons.includes('ZERO_DELTA_UNCERTAIN')||trend.windows.some(window=>window.lowPercent===0&&window.highPercent===0));
   const confirmed=!!assessment&&!error&&!stale&&!missingWindows&&assessment.account.status==='available'&&status!=='unavailable';
   return <section className={`pf-account-allowance account-${status??'loading'}`} aria-label={p('accountAllowance')}><header><div title={p(!status?'accountLoading':attention?readiness:'accountCompactReady')}><Icon name={attention?'warning':status?'check-circle':'clock'}/><h3>Codex</h3></div>{onRefresh&&<Button tone="quiet" disabled={busy} onClick={onRefresh} aria-label={p(busy?'accountRefreshing':'refresh')} title={p(busy?'accountRefreshing':'refresh')}><Icon name="refresh"/></Button>}</header>
     {windows.length>0&&<ul className="pf-account-windows">{windows.map(window=><li key={`${window.bucketId}-${window.slot}-${window.windowDurationMins}`}><strong>{windowLabel(window,p,format)}</strong><span>{p(confirmed?'accountRemaining':'accountLastRemaining',{percent:percent(window.remainingPercent)})}</span>{confirmed&&<meter min={0} max={100} value={window.remainingPercent} aria-label={windowLabel(window,p,format)+': '+p('accountRemaining',{percent:percent(window.remainingPercent)})}/>}</li>)}</ul>}
     {(attention||!assessment)&&<p className="pf-account-readiness" role="status">{p(readiness)}</p>}
     {attention&&!error&&!stale&&sourceReason&&sourceReason in sourceReasonKeys&&<p className="pf-account-reason">{p(sourceReasonKeys[sourceReason as keyof typeof sourceReasonKeys])}</p>}
-    {zeroUncertain&&<p className="pf-account-trend-summary">{p('accountEstimateUncertain')}</p>}
     {confirmed&&trend&&trend.comparableCount>0&&!zeroUncertain&&trend.windows.length>0&&<ul className="pf-account-range-summary">{trend.windows.map(window=><li key={`${window.bucketId}-${window.slot}-${window.windowDurationMins}`}>{p(trend.reasons.includes('ZERO_DELTA_UNCERTAIN')?'accountUncertaintySummary':'accountRangeSummary',{window:windowLabel(window,p,format),low:range(window.lowPercent),high:range(window.highPercent)})}</li>)}</ul>}
     {(!!assessment||!!error)&&<details className="pf-account-details"><summary>{p('accountDetails')}</summary><div className="pf-account-evidence">
       <ErrorNotice error={error}/>{sourceReason&&sourceReason in sourceReasonKeys&&<p>{p(sourceReasonKeys[sourceReason as keyof typeof sourceReasonKeys])}</p>}{stale&&<p>{p('accountStale')}</p>}{missingWindows&&<p>{p('accountWindowMissing')}</p>}{windows.length>0&&(stale||assessment?.account.status==='unavailable')&&<p>{p('accountUnconfirmedWindows')}</p>}

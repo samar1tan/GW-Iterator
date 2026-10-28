@@ -83,3 +83,12 @@ test('coordinator and selected step expose the same bounded activity instead of 
     assert.ok(!unavailable.includes('pf-execution-activity is-moving'));assert.ok(unavailable.includes(locale==='en'?'Execution state needs an update':'暂时无法确认最新执行状态'));
   }
 });
+
+test('a changed allowance observation is not presented as an approval request',()=>{
+  const now=start+5000,held=structuredClone(run);held.stages[0].status='waiting';
+  for(const [code,operation]of [['ACCOUNT_ALLOWANCE_CHANGED','accountCheck'],['ACCOUNT_STEP_APPROVAL_REQUIRED','approval'],['ACCOUNT_EXHAUSTED','accountWait']] as const){
+    held.stages[0].allowanceHold={code};
+    assert.equal(executionFeedback(held,'inspect',[],{now})?.operation,operation);
+    assert.equal(executionFeedback(held,'inspect',[],{now})?.moving,false);
+  }
+});

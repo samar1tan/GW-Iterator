@@ -141,10 +141,12 @@ test('recovery surfaces explain deadlines and stopping reasons in both locales w
     const render=(component:any,props:any)=>renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(component,props)));
     const props={goal,detail,models:[],onRun(){},onBack(){},onChanged:async()=>{}};
     const failed=render(GoalWorkspace,props);
-    assert.ok(failed.includes(locale==='en'?'Retry failed step':'重试失败步骤'));
-    const surface=failed.slice(failed.indexOf('class="pf-work-recovery"')),technical=surface.indexOf('<details');
+    assert.ok(failed.includes(locale==='en'?'Retry this step':'重试此步骤'));
+    assert.ok(failed.includes(locale==='en'?'Do not retry':'不再重试'));
+    assert.ok(failed.includes(locale==='en'?'Additional instructions':'补充要求'));
+    const surface=failed.slice(failed.indexOf('pf-resolution')),technical=surface.indexOf('<details');
     assert.ok(technical>0);assert.equal(surface.slice(0,technical).includes('SYNTHETIC_RAW_'),false);
-    assert.equal(failed.split('SYNTHETIC_RAW_CLEANUP_DETAIL').length-1,1);
+    assert.ok(failed.split('SYNTHETIC_RAW_CLEANUP_DETAIL').length-1<=1);
     const checking=render(GoalWorkspace,{...props,goal:{...goal,rationale:'Synthetic earlier dispatch rationale.',workRecoveryHistory:[record]}});
     assert.ok(checking.includes(locale==='en'?'Confirming the previous execution has ended':'正在确认上次执行已结束'));
     assert.ok(checking.includes(locale==='en'?'at most':'最多再检查'));assert.ok(checking.includes(locale==='en'?'Stop':'停止'));

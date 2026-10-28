@@ -620,3 +620,20 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 }
 
 .pf-conversation-followups .button > span, .pf-conversation-context .button > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Put a waiting decision before diagnostics without adding another panel layer. */
+.pf-resolution { display:grid; gap:12px; padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.pf-resolution h3,.pf-resolution p { margin:0; }
+.pf-resolution textarea { min-height:68px; max-height:180px; resize:vertical; }
+.pf-resolution-actions { align-items:center; flex-wrap:wrap; }
+.pf-resolution-actions .hint { font-size:12px; color:var(--muted); }
+.pf-resolution-reason { font-size:13px; color:var(--muted); line-height:1.5; }
+.pf-resolution-observation { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+.pf-resolution-observation details { width:100%; }
+.pf-resolution .pf-account-allowance { background:transparent; border:0; border-top:1px solid var(--line); border-radius:0; padding:12px 0 0; margin:0; }
+
+.pf-goal-step-resolution { margin:0 0 20px; max-width:900px; }
+.pf-goal-step-resolution > h2 { margin:0 0 10px; font-size:15px; }
+.pf-recovery-decision { margin:14px 0; }
+
+.pf-stage-context > .pf-resolution { padding:0; border:0; border-radius:0; background:transparent; }

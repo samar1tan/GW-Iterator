@@ -38,7 +38,8 @@ export class WorkRecovery {
     if(!run.executionKind&&run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.executor!=='codex')return false;
     return attempt.failureCode==='STAGE_TIMEOUT'||isNativeCapacityFailure(attempt.error??goal.lastFailure?.message);
   }
-  begin(id:string,trigger:'manual'|'automatic'):Intake{
+  begin(id:string,trigger:'manual'|'automatic',note?:string):Intake{
+    demand(note===undefined||typeof note==='string'&&note.trim().length>0&&note.length<=2000,'INVALID_RECOVERY_NOTE','Keep additional recovery instructions within 2,000 characters.');
     const goal=this.context.get(id);if(workRecoveryPending(goal))return goal;
     demand(goal.status!=='completed','GOAL_COMPLETED','This task is already complete.',409);
     demand(goal.status!=='clarification','CLARIFICATION_REPLY_REQUIRED','Reply to the current question before continuing.',409);
@@ -47,7 +48,7 @@ export class WorkRecovery {
     const {run,stage}=this.target(goal);demand(stage&&(['failed','interrupted','cancelled'].includes(stage.status)||run.executionKind&&stage.status==='completed'),'NO_FAILED_STAGE','There is no failed step ready to retry.',409);
     if(goal.status==='stopped'&&trigger==='manual')goal.status='failed';
     const now=Date.now(),record:WorkRecoveryRecord={id:randomUUID(),trigger,phase:'checking',runId:run.id,stageId:stage.stageId,attemptId:stage.attempts.at(-1)?.id,runControlRevision:run.controlRevision??0,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision??0,startedAt:new Date(now).toISOString(),deadlineAt:new Date(now+60000).toISOString(),nextAt:new Date(now).toISOString(),checks:0,code:'CONFIRMING_TERMINATION'};
-    goal.workRecoveryHistory??=[];goal.workRecoveryHistory.push(record);this.context.save(goal,'work.recovery_checking');return goal;
+    if(note)record.note=note.trim();goal.workRecoveryHistory??=[];goal.workRecoveryHistory.push(record);this.context.save(goal,'work.recovery_checking');return goal;
   }
   tick(){
     if(this.closed)return;
@@ -133,7 +134,7 @@ export class WorkRecovery {
     if(this.cleanup(goal)){this.finish(goal,'TERMINATION_UNCONFIRMED');return;}
     if(this.context.remaining(goal).seconds<=0||this.context.remaining(goal).tokens<1000){this.finish(goal,'GOAL_BOUNDARY');return;}
     record.phase='retrying';record.code='RETRYING_STEP';record.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');
-    try{this.context.engine.retry(run.id,stage.stageId,'Retry only this failed step within its existing limits. Inspect retained work and prior findings; preserve accepted upstream work.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',projectId:goal.projectId});}
+    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step within its existing limits. Inspect retained work and prior findings; preserve accepted upstream work.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',projectId:goal.projectId});}
     catch(error){this.finish(this.context.get(id),error instanceof Error&&'code'in error?String(error.code):'RETRY_FAILED',error instanceof Error?error.message:String(error));}
   }
   private async complete(goal:Intake,record:WorkRecoveryRecord){

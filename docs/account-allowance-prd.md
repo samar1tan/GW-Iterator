@@ -39,3 +39,7 @@ A person can decide whether to start, continue, wait or reduce the scope using t
 - Verify real local account display and both locales without executing a paid task. Replay independently authored samples for trend behavior; label synthetic evidence and do not install sample history into the user's project.
 
 The account schema is documented in the official [Codex app-server reference](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt). It does not establish a token-to-allowance conversion or task-specific attribution.
+
+## Fresh admission and quiet observation
+
+Use one freshly assessed account basis for admission and its execution-ledger entry. A changed healthy reading alone is not an approval requirement. Routine reading expiry refreshes in the background; fresh submission checks remain authoritative. See [work resolution requirements](work-resolution-prd.md) and [interaction](work-resolution-ued.md) for actionable waits and exact-scope continuation.

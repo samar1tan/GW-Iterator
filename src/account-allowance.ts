@@ -17,6 +17,7 @@ const iso=(value:number)=>new Date(value).toISOString();
 const validUsage=(value:unknown):value is Usage=>object(value)&&['input','output','total'].every(key=>Number.isSafeInteger(value[key])&&Number(value[key])>=0)&&(value.cachedInput===undefined||(Number.isSafeInteger(value.cachedInput)&&Number(value.cachedInput)>=0&&Number(value.cachedInput)<=Number(value.input)));
 type StoredExecution=AllowanceExecution&{after?:AccountAllowanceObservation;endedAt?:string;finishedAt?:string;startOrder?:number;endOrder?:number;durationSeconds?:number;status?:string;dispatched?:boolean;usage?:AllowanceFinish['usage']};
 type Delta={key:string;low:number;high:number};
+type FreshAssessment={observation:AccountAllowanceObservation;target:string;generation:number;fingerprint:string;at:number};
 
 /** Validate the narrow owner-facing observation; never retain provider extras or error payloads. */
 export function normalizeAccountObservation(value:unknown,now:number):AccountAllowanceObservation{
@@ -65,6 +66,7 @@ export class AccountAllowanceService{
   private cache?:{value:AccountAllowanceObservation;at:number};
   private reading?:Promise<AccountAllowanceObservation>;
   private finishing=new Map<string,Promise<void>>();
+  private freshAssessments=new WeakMap<AllowanceAssessment,FreshAssessment>();
   private readonly now:()=>number;
   private readonly store:Store;
   private readonly reader:{readAccountAllowance?:()=>Promise<AccountAllowanceObservation>};
@@ -137,10 +139,18 @@ export class AccountAllowanceService{
     }
     const code='ACCOUNT_ALLOWANCE_'+status.toUpperCase(),account=this.publicSnapshot(observation);
     const value={status,code,account,trend,action,...(selected?{target:selected}:{}),activeExecutions:active.filter(record=>!record.before.accountKey||record.before.accountKey===observation.accountKey).length};
-    return{...value,key:hash({accountId:account.id,target:selected??null,trend,status,action,generation:this.generation(),active:active.map(record=>record.id).sort()})};
+    const generation=this.generation(),assessment={...value,key:hash({accountId:account.id,target:selected??null,trend,status,action,generation,active:active.map(record=>record.id).sort()})};
+    if(options.refresh&&selected)this.freshAssessments.set(assessment,{observation:structuredClone(observation),target:targetKey(selected),generation,fingerprint:hash(assessment),at:this.time()});
+    return assessment;
   }
-  async begin(target:AllowanceTarget):Promise<AllowanceExecution>{
-    const selected=validateTarget(target),before=await this.observe(true);
+  async begin(target:AllowanceTarget,options:{assessment?:AllowanceAssessment}={}):Promise<AllowanceExecution>{
+    const selected=validateTarget(target);let before:AccountAllowanceObservation;
+    if(options.assessment){
+      const proof=this.freshAssessments.get(options.assessment),at=this.time();this.freshAssessments.delete(options.assessment);
+      if(!proof||proof.target!==targetKey(selected)||proof.fingerprint!==hash(options.assessment)||proof.generation!==this.generation()||this.cache?.value.id!==proof.observation.id||at<proof.at||at-proof.at>=ACCOUNT_ALLOWANCE_TTL_MS||proof.observation.status==='available'&&(at-epoch(proof.observation.observedAt)>=ACCOUNT_ALLOWANCE_TTL_MS||epoch(proof.observation.expiresAt)<=at||proof.observation.windows.some(window=>window.resetsAt*1000>proof.at&&window.resetsAt*1000<=at)))throw new AppError('ACCOUNT_ALLOWANCE_CHANGED','The checked account allowance changed or expired. Refresh this step.',409);
+      // Reuse only this service's fresh, single-use evidence under the engine's admission lock.
+      before=proof.observation;
+    }else before=await this.observe(true);
     if(before.exhausted)throw new AppError('ACCOUNT_ALLOWANCE_EXHAUSTED','The connected Codex account allowance is exhausted.',409);
     const execution:AllowanceExecution={id:randomUUID(),target:selected,before,startedAt:iso(this.time())};
     this.store.transaction(()=>{this.store.put(KIND,{...execution,startOrder:this.generation()+1});this.advance();});return structuredClone(execution);

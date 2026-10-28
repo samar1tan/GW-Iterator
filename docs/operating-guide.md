@@ -84,3 +84,11 @@ Replace `PROJECT_ID` with a local project identity. `gwi request METHOD /api/pat
 | `GWI_CODEX_MODEL` | Inherited model default; explicit role selections take precedence. |
 
 For a persistent native executable/default model, the private data directory can contain `runtime.json` with `codexBinary` and optional `defaultModel`. Use a real catalog model and an absolute executable path. Restart after changing runtime selections. Never publish that file, credentials, user sources, transcripts, audit exports or captures.
+
+## When work stops for a decision
+
+Use the affected step's **Retry this step / Do not retry** actions. If an actual account uncertainty or execution-bound change needs approval, the same location offers **Approve / Reject** with the relevant evidence. GWI checks the previous execution before retrying; separate status-refresh and retry decisions are unnecessary. Add instructions in the visible note field when the next attempt needs more direction. Accepted upstream results are retained.
+
+A refusal stops further work on that outcome and keeps its recorded results. A paused pipeline must be explicitly resumed; this does not erase its failed attempt. Completed outcomes expose history, not live retry controls. If external termination still cannot be confirmed, GWI retains the blocker and offers a bounded check instead of starting another copy.
+
+Account observations refresh quietly. An old healthy reading does not require a manual quota refresh or approval; execution checks the actual account again. Real exhaustion and an unavailable account remain explicit decisions. Technical token safeguards set in advanced configuration remain in effect unless a concrete change is approved.

@@ -753,6 +753,18 @@ test('pause lets current work finish, prevents new dispatch and resumes without 
   });
 });
 
+test('a worker failing after Pause can resume the scheduling boundary and then retry only its failed step',async t=>{
+  const h=await fixture(t),p=await project(h),flow=pipeline(h,p,[stage('prepare'),stage('verify',['prepare'])]),run=start(h,p,flow);
+  await pump(h,()=>h.codex.calls.length===1,'the accepted predecessor');h.codex.calls[0].finish(result('Prepared evidence is accepted.'));
+  await pump(h,()=>h.codex.calls.length===2,'the running step before Pause');const accepted=structuredClone(state(h.engine.run(run.id),'prepare'));
+  h.engine.pause(run.id,'Pause after the current check.',OWNER);h.codex.calls[1].completion.reject(new Error('The current check needs one retry.'));
+  await pump(h,()=>h.engine.run(run.id).status==='failed','the current failure while paused');const failed=h.engine.run(run.id),attempts=structuredClone(state(failed,'verify').attempts);assert.ok(failed.pausedAt);assert.equal(h.engine.recovery(run.id,'verify',OWNER).code,'RUN_PAUSED');
+  const resumed=h.engine.resume(run.id,OWNER);assert.equal(resumed.status,'failed');assert.equal(resumed.pausedAt,undefined);assert.equal(resumed.stopReason,failed.stopReason);assert.equal(resumed.endedAt,failed.endedAt);assert.deepEqual(state(resumed,'verify').attempts,attempts);assert.equal(h.codex.calls.length,2);
+  assert.equal(h.engine.recovery(run.id,'verify',OWNER).action,'retry');
+  const resolution=await h.engine.resolveWaiting(run.id,{stageId:'verify',attemptId:attempts.at(-1)!.id,controlRevision:resumed.controlRevision??0,idempotencyKey:'synthetic-after-pause-failure'},OWNER);assert.equal(resolution.status,'continued');
+  await pump(h,()=>h.codex.calls.length===3,'the focused retry after explicit Resume');assert.deepEqual(state(h.engine.run(run.id),'prepare'),accepted);assert.equal(h.engine.run(run.id).limitRevisions,undefined);h.codex.calls[2].finish();await pump(h,()=>h.engine.run(run.id).status==='completed','the accepted retried check');
+});
+
 test('Multica steering routes by provider and preserves pending versus delivered receipts without a native turn ID', async t => {
   const h = await fixture(t), p = await project(h), flow = pipeline(h, p, [stage('work')]);
   const completion = deferred<{output: TaskOutput}>(), supplements: {ref: ExecutionRef; text: string}[] = [], calls: AgentExecutionInput[] = [];
@@ -898,6 +910,15 @@ test('development server blocks synthetic private files through direct, raw, enc
   await localJSON('/api/runs/'+run.id+'/continue','POST',{stageId:'manual-check',recoveryKey:recovery.recoveryKey});
   await localJSON('/api/runs/'+run.id+'/stages/manual-check/complete','POST',{output:OUTPUT});
   assert.equal((await localJSON('/api/runs/'+run.id+'/recovery?stageId=manual-check')).code,'RUN_COMPLETED');
+  const resolutionRun=await localJSON('/api/runs','POST',{projectId:project.id,pipelineId:flow.id,goal:'Verify one-action resolution without a model.',idempotencyKey:randomUUID()}) as Run;
+  await localJSON('/api/runs/'+resolutionRun.id+'/stages/manual-check/complete','POST',{output:result('Synthetic retry is requested.','blocked')});
+  const failedResolutionRun=(await localJSON('/api/runs/'+resolutionRun.id)).run as Run;
+  const resolutionInput={stageId:'manual-check',attemptId:failedResolutionRun.stages[0].attempts.at(-1)!.id,controlRevision:failedResolutionRun.controlRevision??0,idempotencyKey:randomUUID()};
+  const resolution=await localJSON('/api/runs/'+resolutionRun.id+'/resolve','POST',resolutionInput);assert.equal(resolution.status,'continued');assert.equal(resolution.run.id,resolutionRun.id);
+  assert.deepEqual(await localJSON('/api/runs/'+resolutionRun.id+'/resolve','POST',resolutionInput),resolution);
+  await localJSON('/api/runs/'+resolutionRun.id+'/stages/manual-check/complete','POST',{output:result('Synthetic retry is declined.','blocked')});
+  const declined=await localJSON('/api/runs/'+resolutionRun.id+'/cancel','POST',{declineRetry:true,note:'Do not retry this synthetic work.'});assert.equal(declined.status,'cancelled');
+  assert.deepEqual(await localJSON('/api/runs/'+resolutionRun.id+'/cancel','POST',{declineRetry:true}),declined);
   const wrapper = await localJSON('/api/pipelines', 'POST', {projectId: project.id, roleId: flow.roleId, name: 'Synthetic manual-only parent'}) as Pipeline;
   await localJSON('/api/pipelines/'+wrapper.id, 'PUT', {expectedRevision: wrapper.revision, definition: {...wrapper, stages: [{id: 'manual-child', name: 'Await synthetic manual child', roleId: flow.roleId, executor: 'pipeline', dependsOn: [], prompt: 'Reuse the manual evidence flow.', review: false, options: {pipelineId: flow.id}}]}});
   const parent = await localJSON('/api/runs', 'POST', {projectId: project.id, pipelineId: wrapper.id, goal: 'Accept nested manual evidence.', idempotencyKey: randomUUID()}) as Run;
