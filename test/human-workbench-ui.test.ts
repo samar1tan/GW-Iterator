@@ -131,11 +131,12 @@ test('ordinary views render steps, real evidence and progressive recovery in bot
       assert.ok(retry.indexOf(locale==='en'?'Advanced settings':'高级设置')<retry.indexOf('type="number"'));
       const runProposal=render(createElement(RunRecommendationSummary,{usageComplete:true,recommendation:{limits:{tokenBudget:38000,maxAttempts:3},note:'Example scoped continuation',basis:{usedTokens:19000,reservedTokens:0,previousAttemptTokens:9000,attempts:2,previousPolicy:pipeline.policy,purpose:'one-failed-stage'}}}));
       assert.ok(!runProposal.includes('19,000'));
-      assert.ok(!runProposal.includes('20,000'));
-      assert.ok(!runProposal.includes('38,000'));
+      assert.ok(!runProposal.split('<details')[0].includes('20,000'),'Technical token values stay in the explicit continuation details.');
+      assert.ok(!runProposal.split('<details')[0].includes('38,000'));
+      assert.ok(runProposal.includes('38,000'),'An explicitly approved technical safeguard extension stays inspectable.');
       assert.ok(!runProposal.includes('9,000'));
       assert.ok(runProposal.includes('2 → 3'));
-      assert.ok(!runProposal.includes('<details'));
+      assert.ok(runProposal.includes('<details'));
       assert.ok(!runProposal.includes('<input'));
       const manualProposal=render(createElement(RunRecommendationSummary,{showTokenUse:false,usageComplete:true,recommendation:{limits:{maxAttempts:3},note:'Example manual retry',basis:{usedTokens:0,reservedTokens:0,attempts:2,previousPolicy:pipeline.policy,purpose:'one-failed-stage'}}}));
       assert.ok(!manualProposal.includes('20,000'));
@@ -208,7 +209,7 @@ test('account allowance uses returned window durations and observed ranges witho
     assert.deepEqual(accountStepAuthorization(account),{});
     assert.equal(canRequestAccountStep(exhausted,observed),false);
     assert.deepEqual(accountStepAuthorization({...exhausted,action:'owner-step'},true),{});
-    assert.equal(canRequestAccountStep(expired,observed),false);
+    assert.equal(canRequestAccountStep(expired,observed),true,'An expired healthy observation allows a request for fresh server admission.');
     assert.deepEqual(accountStepAuthorization(expired,true),{});
     assert.equal(canRequestAccountStep({...account,account:{...account.account,expiresAt:'invalid'}},observed),false);
     assert.equal(canRequestAccountStep({...account,account:{...account.account,windows:[]}},observed),false);
@@ -254,7 +255,9 @@ test('account allowance uses returned window durations and observed ranges witho
       assert.ok(unconfirmed.includes('62.5%'));
       assert.ok(unconfirmed.includes(locale==='en'?'current availability is unconfirmed':'目前尚不能确认可用额度'));
       const stale=render(createElement(AccountAllowanceView,{assessment:expired,now:observed}));
-      assert.ok(stale.includes(locale==='en'?'observation is stale':'观测已过期'));
+      assert.ok(!stale.split('<details')[0].includes(locale==='en'?'stale':'过期'));
+      assert.ok(stale.includes(locale==='en'?'checked again before execution':'执行前会自动核对'));
+      assert.ok(!stale.split('<details')[0].includes('warning'));
       const small=render(createElement(AccountAllowanceView,{assessment:{...account,account:{...account.account,windows:[{...account.account.windows[0],remainingPercent:.001,usedPercent:99.999}]}},now:observed}));
       assert.ok(small.includes('&lt;0.01%'));
       const zero=render(createElement(AccountAllowanceView,{assessment:{...observedTrend,trend:{...observedTrend.trend,windows:observedTrend.trend.windows.map(window=>({...window,lowPercent:0,highPercent:0}))}},now:observed}));

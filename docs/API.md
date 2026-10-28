@@ -174,3 +174,13 @@ Global summary and detail observations acknowledge their own receipts independen
 `POST /api/intakes/:id/resume` (local owner, empty body) records or reuses one pending work recovery and returns the Intake receipt immediately. It does not wait for cleanup or report a retry as completed. Observe `workRecoveryHistory` through the existing project/global detail refresh. Each record includes the exact run/stage/attempt, trigger, phase, cause code, counters, absolute confirmation deadline, next check and eventual retry/end timestamps. Earlier records remain immutable audit evidence except for their own lifecycle completion.
 
 New Intake policies set `smartRetry:true`; absence on an older stored policy does not opt it into unattended work. Confirmation and retry use the same backend path and preserve source/account/permission checks. Pending recovery can be cancelled through the existing task Stop endpoint. Retry never extends an execution policy; limit changes remain explicit existing owner operations.
+
+### Direct continuation and refusal
+
+`POST /api/runs/:id/resolve` accepts `stageId`, a stable `idempotencyKey`, optional `attemptId`/`controlRevision` and `note` (up to 20,000 characters). It checks current recovery, performs an exact external termination check when supported (5-second check, 15-second request deadline), and retries only the failed step when its existing authorization permits it. It does not automatically extend limits or replace an explicit token safeguard.
+
+The response is `{status:"continued", run}` with a durable receipt, or `{status:"needs_input", recovery}` without starting replacement work. An actual approval can include the exact returned `recoveryKey` and the existing `approveRecommendation`, `approveAccountStep`/`accountAssessmentKey` fields. Retry an uncertain request with the same key and body; reuse with different content is rejected. A later Stop or changed attempt supersedes an earlier continuation.
+
+`POST /api/runs/:id/cancel` accepts `declineRetry:true` for an explicit owner refusal after a failure as well as during a hold. It preserves attempts/results, records the refusal and stops the owning goal from dispatching replacement work. Completed work cannot be declined retroactively. Repeated refusal does not create another event or attempt.
+
+`POST /api/intakes/:id/resume` accepts an optional `note` of up to 2,000 characters. The recovery record retains it and delivers it to the failed step or resumed coordinator after termination checks. It does not authorize changed execution limits.

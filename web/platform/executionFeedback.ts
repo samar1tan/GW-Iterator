@@ -1,6 +1,6 @@
 import type {Attempt,AuditEvent,Run} from '../../src/contracts';
 
-export type ExecutionOperation='preparing'|'submitted'|'queued'|'working'|'command'|'tool'|'files'|'responding'|'output'|'commentary'|'reported'|'human'|'review'|'ci'|'approval'|'stopping'|'providerWait'|'paused'|'received';
+export type ExecutionOperation='preparing'|'submitted'|'queued'|'working'|'command'|'tool'|'files'|'responding'|'output'|'commentary'|'reported'|'human'|'review'|'ci'|'approval'|'accountCheck'|'accountWait'|'stopping'|'providerWait'|'paused'|'received';
 export type ExecutionSignal={operation:ExecutionOperation;at:string;text?:string;command?:string;tool?:string;lifecycle?:'active'|'queued'|'waiting'|'stopping'};
 const object=(value:unknown):Record<string,unknown>=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
 const metadata=(event:AuditEvent)=>{const outer=object(event.data);return{outer,detail:Object.keys(object(outer.detail)).length?object(outer.detail):outer};};
@@ -65,7 +65,7 @@ export function executionFeedback(run:Run,stageId:string,events:AuditEvent[],opt
   else if(lifecycle==='stopping')operation='stopping';
   if(terminal)operation='received';
   else if(run.cancelRequested)operation='stopping';
-  else if(stage.allowanceHold)operation='approval';
+  else if(stage.allowanceHold)operation=stage.allowanceHold.code==='ACCOUNT_STEP_APPROVAL_REQUIRED'?'approval':/EXHAUSTED|LIMIT_REACHED/.test(stage.allowanceHold.code)?'accountWait':'accountCheck';
   else if(stage.status==='review')operation='review';
   else if(stage.status==='waiting')operation=definition.executor==='manual'?'human':definition.executor==='github'?'ci':'providerWait';
   else if(stage.status==='queued')operation='queued';

@@ -78,6 +78,7 @@ export type Run = {
   pausedAt?:string;
   snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]; conversation?: IntakeConversation};
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
+  continuationDeclined?:{at:string;actor:string;note:string};
   recoveryOfRunId?:string;
   approvedPolicy?: RunPolicy;
   resourceMode?:'account'|'tokens';
@@ -87,7 +88,7 @@ export type Run = {
 export function runPolicy(run:Run):RunPolicy{return run.limitRevisions?.at(-1)?.policy??run.approvedPolicy??run.snapshot.pipeline.policy;}
 export type AccountStepApproval={stageId:string;assessmentKey:string;accountSnapshotId:string;at:string;actor:string;used?:boolean;revoked?:boolean};
 export type RunAllowance = {policy:RunPolicy;usedTokens:number;reservedTokens:number;remainingTokens:number;usageComplete:boolean};
-export type GoalAllowance = {id:string;usedTokens:number;reservedTokens:number;remainingTokens:number;remainingSeconds:number;remainingRounds:number;resourceMode?:'account'|'tokens'};
+export type GoalAllowance = {id:string;usedTokens:number;reservedTokens:number;remainingTokens:number;remainingSeconds:number;remainingRounds:number;resourceMode?:'account'|'tokens';status?:Intake['status']};
 export type RecoveryScope = {kind:'run'|'goal';id:string};
 export type RunRecovery = {
   runId:string;stageId?:string;recoveryKey:string;action:'retry'|'approve'|'reconcile'|'wait'|'blocked'|'none';
@@ -96,6 +97,10 @@ export type RunRecovery = {
   recommendation?:{limits:Partial<RunPolicy>;note:string;basis:{usedTokens:number;reservedTokens:number;previousAttemptTokens?:number;attempts:number;previousPolicy:RunPolicy;purpose:'one-failed-stage'}};goal?:GoalAllowance;
 };
 export type ContinueRunInput = {stageId:string;recoveryKey:string;note?:string;approveRecommendation?:boolean;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string};
+export type ResolveRunInput = Omit<ContinueRunInput,'recoveryKey'> & {
+  idempotencyKey:string;attemptId?:string;controlRevision?:number;recoveryKey?:string;
+};
+export type RunResolution = {status:'continued';run:Run}|{status:'needs_input';recovery:RunRecovery};
 export type AuditEvent = {seq: number; at: string; projectId: string | null; runId: string | null; stageId: string | null; type: string; actor: string; message: string; data?: unknown};
 export type Proposal = {id: string; projectId: string; pipelineId: string; runId?: string; baseRevision: number; definition: Pipeline; rationale: string; status: 'pending' | 'applied' | 'rejected'; createdAt: string};
 export type ModelInfo = {id: string; name: string; efforts: string[]; isDefault?: boolean};
@@ -123,6 +128,7 @@ export type Intake = {
   workRecoveryHistory?:WorkRecoveryRecord[];
 };
 export type WorkRecoveryRecord = {
+  note?:string;
   id:string;trigger:'manual'|'automatic';phase:'checking'|'backoff'|'retrying'|'resuming'|'completed'|'needs_input'|'cancelled';
   runId:string;stageId:string;attemptId?:string;routerRunId:string;controlRevision:number;runControlRevision?:number;
   startedAt:string;deadlineAt:string;nextAt:string;checks:number;code:string;error?:string;retriedAt?:string;endedAt?:string;

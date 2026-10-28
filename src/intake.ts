@@ -49,14 +49,15 @@ export class IntakeService {
     for(const row of goal.recoveryHistory??[])if(row.status==='scheduled'){row.status='cancelled';row.endedAt=at();row.error=reason;}
     this.scheduled.delete(goal.id);delete goal.nextRetryAt;
   }
-  continueWork(id:string,actor:Actor):Intake{
+  continueWork(id:string,actor:Actor,input:{note?:string}={}):Intake{
     const goal=this.get(id);this.engine.detail(goal.projectId,actor);demand(!actor.projectId,'OWNER_REQUIRED','Only the local owner may request task recovery.',403);
+    demand(input.note===undefined||text(input.note,2000),'INVALID_RECOVERY_NOTE','Keep additional recovery instructions within 2,000 characters.');
     if(goal.status==='retry_wait'){this.discardScheduled(goal,'Replaced by explicit work recovery.');goal.controlRevision=(goal.controlRevision??0)+1;goal.status='failed';this.save(goal);}
-    this.work.begin(id,'manual');this.work.tick();return this.decorate(this.get(id));
+    this.work.begin(id,'manual',input.note?.trim());this.work.tick();return this.decorate(this.get(id));
   }
   private async resumeWork(goal:Intake,record:WorkRecoveryRecord):Promise<void>{
     if(goal.status==='dispatched'){goal.status='failed';this.save(goal);}
-    await this.recover(goal.id,{note:'Resume coordination from retained outcomes after confirmed work recovery.'},{name:record.trigger==='automatic'?'smart-recovery':'local-owner',kind:record.trigger==='automatic'?'agent':'human'},record.trigger,undefined,undefined,undefined,record.id);
+    await this.recover(goal.id,{note:record.note??'Resume coordination from retained outcomes after confirmed work recovery.'},{name:record.trigger==='automatic'?'smart-recovery':'local-owner',kind:record.trigger==='automatic'?'agent':'human'},record.trigger,undefined,undefined,undefined,record.id);
     const current=this.get(goal.id),row=current.workRecoveryHistory?.find(row=>row.id===record.id);if(row){row.phase='completed';row.code='RECOVERY_COMPLETED';row.endedAt=at();this.save(current);}
   }
   private accountMode(item:Intake):boolean{return item.resourceMode==='account'||(!!this.engine.accountAllowances&&item.resourceMode!=='tokens');}
@@ -203,7 +204,7 @@ export class IntakeService {
   }
   private allowanceForItem(item:Intake):GoalAllowance{
     const sums=this.family(item).reduce((total,run)=>{const value=this.engine.allowance(run);return{usedTokens:total.usedTokens+value.usedTokens,reservedTokens:total.reservedTokens+value.reservedTokens};},{usedTokens:0,reservedTokens:0});
-    return{id:item.id,...sums,remainingTokens:Math.max(0,item.policy.maxTotalTokens-sums.usedTokens-sums.reservedTokens),remainingSeconds:Math.max(0,Math.floor(item.policy.maxElapsedSeconds-this.elapsed(item))),remainingRounds:Math.max(0,item.policy.maxRounds-this.actionRounds(item)),resourceMode:this.accountMode(item)?'account':'tokens'};
+    return{id:item.id,status:item.status,...sums,remainingTokens:Math.max(0,item.policy.maxTotalTokens-sums.usedTokens-sums.reservedTokens),remainingSeconds:Math.max(0,Math.floor(item.policy.maxElapsedSeconds-this.elapsed(item))),remainingRounds:Math.max(0,item.policy.maxRounds-this.actionRounds(item)),resourceMode:this.accountMode(item)?'account':'tokens'};
   }
   private allowanceForRun(runId:string):GoalAllowance|undefined{const item=this.engine.store.list<Intake>('intake').find(value=>this.family(this.normalize(value)).some(run=>run.id===runId));return item?this.allowanceForItem(item):undefined;}
   private remaining(item:Intake):{tokens:number;seconds:number}{const value=this.allowanceForItem(item);return{tokens:this.accountMode(item)?1000000:value.remainingTokens,seconds:value.remainingSeconds};}
@@ -391,6 +392,7 @@ export class IntakeService {
     const projected={...continuationView,policy:this.recoveryPolicy(item,input)},block=this.retryBlock(projected,true);
     if(input.policy&&block?.scope.kind==='run'&&['RUN_TOKEN_BUDGET','STAGE_ATTEMPT_LIMIT'].includes(block.code)&&JSON.stringify(projected.policy)!==JSON.stringify(item.policy)){
       const previousPolicy=structuredClone(item.policy);item.policy=projected.policy;item.limitRevisions??=[];
+      if(item.status==='stopped')item.status='failed';
       item.limitRevisions.push({revision:item.limitRevisions.length+1,previousPolicy,policy:structuredClone(item.policy),note:input.note??'Owner approved this finite outcome allowance; the failed pipeline still needs its own continuation.',actor:actor.name,at:at(),...(approval?{approvedRecommendation:approval}:{})});
       this.save(item);this.engine.store.event({projectId:item.projectId,runId:item.routerRunId,stageId:null,type:'goal.policy_approved',actor:actor.name,message:input.note??'Owner approved this finite outcome allowance; the failed pipeline remains a separate scope.',data:{intakeId:item.id,previous:previousPolicy,current:item.policy,...(approval?{approval}:{})}});return this.decorate(item);
     }
@@ -482,8 +484,14 @@ export class IntakeService {
     item.status='dispatched';this.save(item,'goal.dispatched');return new Promise(resolve=>{active.wake=resolve;this.reconcile();});
   }
   reconcile():void{
-    if(this.closed||this.reconciling)return;this.work.tick();this.reconciling=true;
-    try{for(const stored of this.engine.store.list<Intake>('intake').filter(value=>['routing','dispatched','retry_wait','clarification'].includes(value.status))){
+    if(this.closed||this.reconciling)return;this.reconciling=true;
+    try{
+      for(const stored of this.engine.store.list<Intake>('intake').filter(value=>['routing','dispatched','retry_wait','clarification'].includes(value.status))){
+        const item=this.normalize(stored),declined=this.family(item).find(run=>run.continuationDeclined)?.continuationDeclined;
+        if(declined)this.stop(item,declined.note);
+      }
+      this.work.tick();
+      for(const stored of this.engine.store.list<Intake>('intake').filter(value=>['routing','dispatched','retry_wait','clarification'].includes(value.status))){
       const item=this.normalize(stored);
       if(this.dispatching.has(item.id))continue;
       if(workRecoveryPending(item)){if(this.elapsed(item)>=item.policy.maxElapsedSeconds||this.tokenExhausted(item))this.stop(item,'Goal execution boundary reached.');continue;}

@@ -17,3 +17,7 @@ If the account view cannot support an estimate or contradicts a previous approva
 ## Evidence and attention
 
 Task details distinguish account observations from executor token diagnostics. Show that other Codex sessions share the account; do not repeat this caveat in every row. Hide irrelevant model/token information for manual work. Activity records concise allowance decisions; raw provider events remain in technical history. Preserve selection and scroll while observations update.
+
+## Quiet expiry and direct continuation
+
+Follow [actionable waiting](work-resolution-ued.md). Routine account observation expiry is handled quietly in the background. Retry/continue is a single requested action that checks external state before dispatch; only a real approval requirement interrupts it. Preserve the last reading and expose its age in details without styling it as a new alert.

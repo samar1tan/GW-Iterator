@@ -207,3 +207,5 @@ A project owner can archive an obsolete lesson and restore it from Knowledge. Ar
 Team must distinguish inherited template bindings from explicit role selections. When skills or MCP bindings are inherited, show their effective selections; the first explicit edit begins from those selections, not an empty list. Saving an unchanged role preserves unspecified-versus-empty behavior. A source-agent read failure is not evidence of empty capabilities.
 
 The default knowledge workflow proposes and reviews a reusable lesson; it does not promise that review alone writes Knowledge. Direct the owner to the existing Add lesson operation when the role lacks a write tool. Do not grant extra permissions or rewrite existing private workflow definitions to make the wording true.
+
+The [work-resolution requirements](work-resolution-prd.md) and [interaction](work-resolution-ued.md) supersede separate manual status-check/retry steps and prominent routine account-expiry warnings.

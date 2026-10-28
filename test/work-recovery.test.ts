@@ -122,3 +122,16 @@ test('completed delegated work resumes coordination without repeating any step',
   const goal=h.get();goal.status='failed';h.store.put('intake',goal);h.setActive(false);h.context.family=()=>[h.engine.run(run.id),h.engine.run(coordinator.id)];
   h.work.begin(h.goal.id,'manual');await h.drain();assert.equal(h.resumptions(),1);assert.deepEqual(h.engine.run(run.id),run);assert.equal(currentWorkRecovery(h.get())?.phase,'resuming');h.work.close();
 });
+
+test('human recovery instructions are retained and reach only the failed attempt',async t=>{
+  const h=await fixture(t),accepted=structuredClone(h.run.stages[0]);
+  const note='Keep the accepted input. Check the two remaining links before changing any source.';
+  const requested=h.work.begin(h.goal.id,'manual',note);
+  assert.equal(currentWorkRecovery(requested)?.note,note);
+  await h.drain();await h.drain();
+  const retried=h.engine.run(h.run.id);
+  assert.equal(retried.stages[1].status,'queued');
+  assert.equal(retried.stages[1].attempts[0].review?.note,note);
+  assert.deepEqual(retried.stages[0],accepted);
+  assert.throws(()=>h.work.begin(h.goal.id,'manual','x'.repeat(2001)),error=>(error as {code?:string}).code==='INVALID_RECOVERY_NOTE');
+});

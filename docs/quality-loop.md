@@ -28,3 +28,7 @@ Keep a short issue checklist linking each residual finding to its implementation
 6. Refresh affected delivery artifacts. Verify the deployed website and current app where they changed, then update the issue with the PR and evidence. Preserve paused exercises and independent benchmark gaps explicitly.
 
 After the walk-through, remove accumulated copy, duplicated explanations and obsolete controls before adding more UI. Capture a new reusable rule only when the observed failure adds something to this contract.
+
+## Waiting is a decision surface
+
+A blocked task needs its applicable action beside the state: approve/reject, retry/do not retry, manual result/review, resume or a named dependency. Show a usable instruction field when the next execution can consume it. Model-free checks belong behind the requested action; do not require a person to refresh, interpret a recommendation and find another retry entry. Routine observation expiry is background work, while genuine account exhaustion, changed scope and unconfirmed external termination remain authoritative. A confirmed receipt protects against older observations but must yield to a newer failure, Stop or completed outcome. Test rapid failure between polls and historical failed actions after goal completion.

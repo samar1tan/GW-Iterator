@@ -193,3 +193,36 @@ test('confirmed preparation-only work is not an actual execution sample and bad 
   h.now+=1000;await h.service.finish(execution.id,{status:'not_dispatched',dispatched:false});
   const value=await h.service.assess(TARGET);assert.equal(value.trend.sampleCount,0);assert.equal(value.activeExecutions,0);
 });
+
+test('a freshly assessed admission records the checked observation once and cannot be replayed',async t=>{
+  const h=await fixture(t),assessment=await h.service.assess(TARGET,{refresh:true}),reads=h.calls;
+  const execution=await h.service.begin({...TARGET,runId:'synthetic-run',attemptId:'synthetic-attempt'},{assessment});
+  assert.equal(h.calls,reads);assert.equal(execution.before.id,assessment.account.id);assert.equal(execution.before.observedAt,assessment.account.observedAt);assert.ok(execution.before.accountKey);
+  assert.equal(execution.target.runId,'synthetic-run');assert.equal(execution.target.attemptId,'synthetic-attempt');
+  await assert.rejects(h.service.begin(TARGET,{assessment}),error=>(error as {code?:string}).code==='ACCOUNT_ALLOWANCE_CHANGED');
+  assert.equal(h.calls,reads);assert.equal(h.store.list('account-allowance-execution').length,1);
+});
+
+test('admission rejects unissued, altered, stale and superseded assessment evidence without recording work',async t=>{
+  for(const failure of ['ordinary-read','clone','altered','target','expired','clock','account','ledger']as const)await t.test(failure,async sub=>{
+    const h=await fixture(sub);let assessment=await h.service.assess(TARGET,{refresh:failure!=='ordinary-read'}),target=TARGET;
+    if(failure==='clone')assessment=structuredClone(assessment);
+    if(failure==='altered'){assessment.action='continue';assessment.account.windows[0].remainingPercent=100;}
+    if(failure==='target')target={...TARGET,model:'synthetic-other-model'};
+    if(failure==='expired')h.now+=60000;
+    if(failure==='clock')h.now--;
+    if(failure==='account'){h.email='synthetic-changed@example.invalid';await h.service.assess(TARGET,{refresh:true});}
+    if(failure==='ledger')await h.service.begin(TARGET);
+    const count=h.store.list('account-allowance-execution').length,reads=h.calls;
+    await assert.rejects(h.service.begin(target,{assessment}),error=>(error as {code?:string}).code==='ACCOUNT_ALLOWANCE_CHANGED');
+    assert.equal(h.calls,reads);assert.equal(h.store.list('account-allowance-execution').length,count);
+  });
+});
+
+test('using issued admission evidence cannot bypass an exhausted observation or a window reset',async t=>{
+  const h=await fixture(t);h.used=100;const exhausted=await h.service.assess(TARGET,{refresh:true});
+  await assert.rejects(h.service.begin(TARGET,{assessment:exhausted}),error=>(error as {code?:string}).code==='ACCOUNT_ALLOWANCE_EXHAUSTED');
+  h.used=20;h.reset=h.now/1000+1;const beforeReset=await h.service.assess(TARGET,{refresh:true});h.now+=1001;
+  await assert.rejects(h.service.begin(TARGET,{assessment:beforeReset}),error=>(error as {code?:string}).code==='ACCOUNT_ALLOWANCE_CHANGED');
+  assert.equal(h.store.list('account-allowance-execution').length,0);
+});

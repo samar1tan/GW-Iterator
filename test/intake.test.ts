@@ -9,7 +9,7 @@ import type {TestContext} from 'node:test';
 import {Engine} from '../src/engine.ts';
 import {IntakeService, isNativeCapacityFailure} from '../src/intake.ts';
 import {Store} from '../src/store.ts';
-import {AccountAllowanceService} from '../src/account-allowance.ts';
+import {AccountAllowanceService,normalizeAccountObservation} from '../src/account-allowance.ts';
 import type {AccountAllowanceObservation} from '../src/account-allowance-types.ts';
 import {AppError} from '../src/validation.ts';
 import type {Actor, ExecutionRef, Intake, IntakeDecision, Pipeline, Run, TaskOutput, Usage} from '../src/contracts.ts';
@@ -323,7 +323,7 @@ test('separate outcome and pipeline ceilings can be approved without a deadlock 
   await pump(h,()=>current(h,item).status==='stopped','the two known-ended ceilings');
   const before=current(h,item),targetId=before.targetRunIds[0];assert.equal(before.retryBlockedScope?.kind,'goal');
   const approved=await h.intake.retry(item.id,{approveRecommendation:true,recoveryKey:before.recoveryKey},OWNER);
-  assert.equal(h.codex.goals.length,1);assert.equal(approved.status,'stopped');assert.equal(approved.limitRevisions?.length,1);
+  assert.equal(h.codex.goals.length,1);assert.equal(approved.status,'failed','Explicitly reauthorized outcome bounds reopen only the owner decision; the child still waits for its separate approval.');assert.equal(approved.limitRevisions?.length,1);
   assert.equal(approved.retryBlockedCode,'RUN_TOKEN_BUDGET');assert.deepEqual(approved.retryBlockedScope,{kind:'run',id:targetId});
   const recovery=h.engine.recovery(targetId,'inspect',OWNER);assert.equal(recovery.action,'approve');
   h.engine.continueRun(targetId,{stageId:'inspect',recoveryKey:recovery.recoveryKey,approveRecommendation:true},OWNER);
@@ -635,6 +635,40 @@ class SyntheticDecisionPlanner implements GoalPlanner {
     return {ref, completion: completion.promise.then(value => {record.status = 'completed'; record.cleanupConfirmed = true; this.engine.store.put('multica-execution', record); return{...value,usage:value.usage??reported??{input:0,output:0,total:0}};})};
   }
 }
+
+test('an owner declining a failed owned action stops its goal before waking either coordinator path',async t=>{
+  for(const provider of ['native','connected'] as const)await t.test(provider,async sub=>{
+    const h=await fixture(sub),planner=provider==='connected'?new SyntheticDecisionPlanner(h.engine):undefined;h.engine.goalPlanner=planner;const item=create(h);
+    let observation:Promise<unknown>|undefined;
+    if(planner)planner.calls[0].completion.resolve({decision:decision('dispatch',[task(h.flows[0])])});
+    else observation=h.codex.goals[0].input.onTool('intake.route',decision('dispatch',[task(h.flows[0])]));
+    await pump(h,()=>h.codex.tasks.length===1,'the owned worker before refusal');
+    const targetId=current(h,item).targetRunIds[0],unrelated=create(h),nativeCalls=h.codex.goals.length,plannerCalls=planner?.calls.length??0;
+    // Hold observation until the owner action, rather than race the synthetic model's response.
+    const observationBoundary=sub.mock.method(h.intake,'reconcile',()=>{});
+    h.codex.tasks[0].completion.reject(new Error('The synthetic action needs owner retry input.'));
+    await pump(h,()=>h.engine.run(targetId).status==='failed','the actual failed worker');
+    const attempts=structuredClone(h.engine.run(targetId).stages[0].attempts);observationBoundary.mock.restore();
+    await h.engine.cancel(targetId,'Do not retry this owned action.',OWNER,{declineRetry:true});
+    await pump(h,()=>current(h,item).status==='stopped','the owner refusal without a new model decision');
+    if(observation)assert.deepEqual(await observation,{stopped:true});
+    assert.equal(current(h,item).outcome,'Do not retry this owned action.');assert.equal(h.engine.run(targetId).continuationDeclined?.actor,OWNER.name);assert.deepEqual(h.engine.run(targetId).stages[0].attempts,attempts);
+    for(let n=0;n<5;n++){await h.engine.tick();await immediate();}
+    assert.equal(h.codex.tasks.length,1);assert.equal(h.codex.goals.length,nativeCalls);if(planner)assert.equal(planner.calls.length,plannerCalls);
+    assert.equal(current(h,unrelated).status,'routing');assert.equal(h.engine.store.events({runId:item.routerRunId}).filter(event=>event.type==='goal.observed').length,0);
+  });
+});
+
+test('rejecting an account-held owned step stops coordination without replacement work',async t=>{
+  const h=await fixture(t),item=create(h),goal=h.codex.goals[0];
+  h.engine.accountAllowances=new AccountAllowanceService(h.engine.store,{readAccountAllowance:async()=>normalizeAccountObservation({status:'unavailable',reason:'Synthetic account evidence is unavailable.'},Date.now())});
+  const observation=goal.input.onTool('intake.route',decision('dispatch',[task(h.flows[0])]));
+  await pump(h,()=>!!current(h,item).targetRunIds[0]&&!!h.engine.run(current(h,item).targetRunIds[0]).stages[0].allowanceHold,'the actual account-held child');
+  const runId=current(h,item).targetRunIds[0],attempt=structuredClone(h.engine.run(runId).stages[0].attempts[0]);assert.equal(h.codex.tasks.length,0);
+  await h.engine.cancel(runId,'Reject this uncertain step.',OWNER,{declineRetry:true});
+  await pump(h,()=>current(h,item).status==='stopped','the rejected account-held action');assert.deepEqual(await observation,{stopped:true});
+  assert.equal(h.engine.run(runId).continuationDeclined?.note,'Reject this uncertain step.');assert.deepEqual(h.engine.run(runId).stages[0].attempts[0],attempt);assert.equal(h.codex.tasks.length,0);assert.equal(h.codex.goals.length,1);
+});
 async function plannerFixture(t: TestContext) {
   const h = await fixture(t), planner = new SyntheticDecisionPlanner(h.engine);
   h.engine.goalPlanner = planner;
