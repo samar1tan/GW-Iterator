@@ -109,8 +109,10 @@ export class PlatformExecution {
     const wantsBrowser=request.role.tools.includes('browser.use');
     demand(!wantsBrowser||this.browsers&&this.controls,'BROWSER_RUNTIME_REQUIRED','Connect the hosted browser runtime before assigning browser work.',409);
     const browser=wantsBrowser?await this.browsers!.prepare({projectId:request.project.id,runId:request.runId,stageId:request.stageId,attemptId:request.attemptId,workspace:space.workspace,origins:request.role.browser?.origins??[]},request.signal,value=>{
+      const prior=this.platform.engine.store.get<BrowserObservation>('browser-session',value.id);
       this.platform.engine.store.put('browser-session',value);
-      request.onEvent({type:'browser.observed',message:value.error??'Browser '+(value.action??value.status),data:value});
+      const stateChanged=prior?.status!==value.status,actionChanged=prior?.operationId!==value.operationId,errorChanged=!!value.error&&prior?.error!==value.error;
+      if(stateChanged||actionChanged||errorChanged)request.onEvent({type:actionChanged?'browser.action':'browser.observed',message:stateChanged?'Browser '+value.status:actionChanged?'Browser '+value.action:value.error!,data:value});
     }):undefined;
     const lease=(request.onTool||browser)&&this.controls?this.controls.issue(request.role.tools,async(tool,args)=>{
       if(tool==='browser.use'){demand(browser,'TOOL_NOT_ALLOWED','This execution has no browser capability.',403);return browser.invoke(args);}

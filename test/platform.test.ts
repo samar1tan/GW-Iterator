@@ -104,15 +104,17 @@ type Fixture=Awaited<ReturnType<typeof fixture>>;
 
 test('hosted browser forwarding uses the frozen role and isolated execution workspace, and revokes on stop',async t=>{
   const scopes:BrowserScope[]=[],calls:unknown[]=[],leases:{closed:boolean}[]=[];
+  let observeSession:((value:BrowserObservation)=>void)|undefined,latest:BrowserObservation|undefined;
   const runtime={prepare:async(scope:BrowserScope,signal:AbortSignal,observe:(value:BrowserObservation)=>void)=>{
     scopes.push(structuredClone(scope));const state={closed:false};leases.push(state);
-    const record:BrowserObservation={id:scope.attemptId,...scope,status:'ready',cleanupConfirmed:false,operations:0,blockedRequests:0,updatedAt:new Date().toISOString()};observe(record);
+    const record:BrowserObservation={id:scope.attemptId,...scope,status:'ready',cleanupConfirmed:false,operations:0,blockedRequests:0,updatedAt:new Date().toISOString()};observeSession=observe;latest=record;observe(record);
     const close=async()=>{state.closed=true;observe({...record,status:'closed',cleanupConfirmed:true});};signal.addEventListener('abort',()=>void close(),{once:true});
     return{invoke:async(args:unknown)=>{assert.equal(state.closed,false);calls.push(args);return{content:[{type:'text',text:'{"observed":"synthetic-page"}'}]};},close,observation:()=>record};
   },close:async()=>{for(const lease of leases)lease.closed=true;}} as unknown as BrowserRuntime;
   const h=await fixture(t,runtime);h.state.taskListGate=h.taskGate.promise;
-  const controller=new AbortController(),input=h.input({signal:controller.signal}),role:RoleProfile={...input.role,sandbox:'read-only',tools:['context.read','browser.use'],browser:{origins:['http://127.0.0.1:45678']}};
+  const events:unknown[]=[],controller=new AbortController(),input=h.input({signal:controller.signal,onEvent:event=>events.push(event)}),role:RoleProfile={...input.role,sandbox:'read-only',tools:['context.read','browser.use'],browser:{origins:['http://127.0.0.1:45678']}};
   const started=await h.execution.agent.start({...input,role});
+  const recorded=events.length;observeSession!({...latest!,blockedRequests:1});observeSession!({...latest!,blockedRequests:2});assert.equal(events.length,recorded,'Background request counters must not narrate another completed action.');
   assert.equal(scopes.length,1);assert.deepEqual(scopes[0].origins,role.browser!.origins);assert.notEqual(scopes[0].workspace,input.workspace);assert.equal(scopes[0].attemptId,input.attemptId);
   const worker=h.state.agents.get(started.ref.agentId!)!;assert.ok(worker.custom_args?.includes('default_permissions="gwi-readonly"'));assert.match(worker.instructions!,/gwi_browser_use/);
   role.browser!.origins[0]='http://127.0.0.1:45679';assert.deepEqual(scopes[0].origins,['http://127.0.0.1:45678']);
