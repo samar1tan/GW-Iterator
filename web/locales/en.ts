@@ -1,4 +1,8 @@
 export const en = {
+  invalidBrowserOrigins:'Enter exact HTTP origins with 127.0.0.1 or [::1] and a local port, without a path or trailing slash.',
+
+  toolBrowserUse:'Test a local website in Chrome',browserOrigins:'Allowed browser test origins',browserOriginsRequired:'Set a local test origin before assigning browser work.',browserOriginsHelp:'One exact HTTP origin per line, for example http://127.0.0.1:4320. Use a separate test server; GWI and runtime control ports are blocked.',browserFutureRuns:'New runs use these origins. Chrome uses an isolated session; code permissions stay unchanged.',
+
   runtimeExecutionUpdateRequired:'The connected runtime needs an update. Finish or explicitly stop and reconcile its tasks, then refresh the stopped dedicated runtime.',
   knowledgeReviewInputError:'Check the review choice, versions, evidence and note.',templateRequirementsInputError:'Check the template’s declared access and tools.',
 

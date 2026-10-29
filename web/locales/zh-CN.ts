@@ -1,6 +1,10 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  invalidBrowserOrigins:'请填写使用 127.0.0.1 或 [::1] 和本地端口的完整 HTTP 来源，不包含路径或末尾斜杠。',
+
+  toolBrowserUse:'用 Chrome 验证本地网站',browserOrigins:'允许访问的浏览器测试地址',browserOriginsRequired:'请先设置本地测试地址，再分派浏览器任务。',browserOriginsHelp:'每行填写一个完整 HTTP 来源，例如 http://127.0.0.1:4320。请使用独立测试服务；GWI 及运行时控制端口不可访问。',browserFutureRuns:'这些地址用于新运行。Chrome 使用独立会话，代码执行权限保持不变。',
+
   runtimeExecutionUpdateRequired:'已连接的运行时需要更新。请先完成，或明确停止并核对其中的任务，再刷新已停止的专用运行时。',
   knowledgeReviewInputError:'请核对审阅选择、版本、证据和备注。',templateRequirementsInputError:'请检查模板声明的访问范围和工具。',
 

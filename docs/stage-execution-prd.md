@@ -19,6 +19,8 @@ This revision supersedes numeric execution limits in earlier product, recovery a
 
 Preserve project/workspace scope, native permissions and approvals, source protection, private local state, credential handling, revision pinning, dependencies, human review and delivery gates, allowed models/tools, idempotency, authoritative external execution identity, explicit pause/stop/cancel, outcome verification and stagnation escalation. No permission or required check may be weakened to continue work.
 
+Browser journeys use the explicit role capability and hosted session described in [Browser verification in protected executions](browser-runtime-prd.md). Host browser access is separate from native command permissions and must not be inferred from a passing command/filesystem probe.
+
 ## Historical and API compatibility
 
 New definitions and starts do not require or emit numeric execution quotas. Existing stored policy values, approved extensions, counters and frozen snapshots remain readable historical evidence, but must not constrain newly dispatched or continued work, including work resumed after restart. Do not rewrite private project files or old attempts. Old API quota fields may be accepted as deprecated inert metadata with valid shapes; they must not enable enforcement. Remove quota-extension recommendations, approval gates and ordinary/advanced quota editors. A pending continuation based only on a removed quota can proceed after the remaining real boundaries are freshly checked.

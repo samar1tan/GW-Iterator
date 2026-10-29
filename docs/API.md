@@ -2,6 +2,16 @@
 
 UI and agents use the same versioned objects from `src/contracts.ts`. The server binds to `127.0.0.1`; default port is 4318. Actual configuration, knowledge and event data are private local state.
 
+## Hosted browser capability
+
+A role may explicitly include `browser.use` in `tools` and set `browser:{origins:["http://127.0.0.1:4320"]}`. Origins are exact HTTP origins with a literal `127.0.0.1` or `[::1]` address and a port from 1024 to 65535. Local bindings remain in the frozen role revision and are excluded from portable templates. Missing bindings fail before model dispatch. GWI, Multica and runtime control ports are rejected across loopback aliases.
+
+Connected Multica executions receive `gwi_browser_use` through their existing authenticated `/mcp/control` lease. Arguments are `{action,url?,selector?,text?,key?,width?,height?,files?}`. Supported actions are `open`, `snapshot`, `click`, `fill`, `press`, `resize`, `upload`, `drop`, `paste`, `screenshot` and `close`. Selectors are CSS. File paths are relative to that attempt's execution workspace; hidden/private targets, escapes, links to outside files and non-regular inputs are rejected. Transfers allow 10 MiB per file and 32 MiB total. Screenshot responses include actual MCP image content and a private host artifact path; viewport/image/DOM bounds protect transport, not model execution time or work counts. File drop/paste use synthetic browser events.
+
+The host retains Chrome's own sandbox and a separate context, without the user's profile. An authenticated local proxy validates HTTP requests and blocks redirects and downloads; WebSockets, service workers, direct WebRTC UDP and QUIC are disabled. Streaming HTTP remains available. Native command permissions are unchanged. `GET /api/runs/:id/executions` includes the latest `browser` observation, operation count, configured origins and browser cleanup confirmation when present. Browser cleanup and external worker termination are separate facts. Revocation/Stop closes browser authority immediately; late results cannot authorize another operation. Standalone native adapter calls fail with `BROWSER_REQUIRES_MULTICA` before a model turn. See [browser requirements](browser-runtime-prd.md).
+
+## Local object routes
+
 Current execution semantics follow [supervised stages without numeric quotas](stage-execution-prd.md). Deprecated policy fields remain readable historical metadata; no concurrency, attempt, iteration, action-round, model-time or token quota is enforced, including through legacy APIs and resumed snapshots. Account availability, scope, permissions, verification, human gates and explicit stop remain authoritative.
 
 Browser requests use a same-origin HttpOnly session established by `GET /api/session`. Agent clients send the bearer token from the private runtime token file. Never put a token in a URL. Mutations reject an unexpected Origin or Host. JSON errors use `{error:{code,message,details?}}` and preserve existing state.

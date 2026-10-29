@@ -16,6 +16,7 @@ import type {AgentExecutionInput, CodexAdapter} from '../src/adapters/types.ts';
 import {MulticaClient} from '../src/adapters/multica.ts';
 import type {MulticaAgent, MulticaIssue, MulticaProject, MulticaTask} from '../src/adapters/multica.ts';
 import {ControlMcp} from '../src/control-mcp.ts';
+import type {BrowserRuntime,BrowserScope,BrowserObservation} from '../src/browser-runtime.ts';
 import {Engine} from '../src/engine.ts';
 import {IntakeService} from '../src/intake.ts';
 import {Platform,probeVerificationScope,type VerificationProbeInput} from '../src/platform.ts';
@@ -33,7 +34,7 @@ function deferred<T>() {let resolve!: (value: T) => void; const promise = new Pr
 async function eventually(condition: () => boolean, label: string) {for (let index = 0; index < 300; index++) {if (condition()) return; await delay(10);} assert.fail(`Synthetic platform did not reach ${label}.`);}
 const code = (expected: string) => (error: unknown) => error instanceof AppError && error.code === expected;
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext,browsers?:BrowserRuntime) {
   const directory = await mkdtemp(path.join(tmpdir(), 'gwi-platform-test-')), workspace = path.join(directory, 'source'), stateDirectory = path.join(directory, 'state');
   await mkdir(workspace);
   await execute('git', ['-C', workspace, 'init', '--template=']);
@@ -93,13 +94,43 @@ async function fixture(t: TestContext) {
   const rootsFile = path.join(directory, 'synthetic-runtime-roots.json'); await writeFile(rootsFile, '{"roots":[]}\n');
   const guardBinary=path.join(directory,'synthetic-native-guard');await writeFile(guardBinary,'#!/bin/sh\nexit 1\n',{mode:0o700});await chmod(guardBinary,0o700);
   const client = new MulticaClient(connection), platform = new Platform(engine, connection, stateDirectory, 'synthetic-model', {runtimeId: 'synthetic-runtime', daemonId: 'synthetic-daemon', permissionEvidence: 'Synthetic permission fixture.', verified: true, executionPolicy:SUPERVISED_EXECUTION_POLICY,executionPatchSha256:MULTICA_EXECUTION_PATCH_SHA256,daemon:{healthUrl:connection.baseUrl+'/health',pid:process.pid,profile:'synthetic-profile',daemonId:'synthetic-daemon',cliCommit:MULTICA_SOURCE_REVISION,startedAt:'2026-01-01T00:00:00.000Z'}, permissions: {readOnly: {name: 'gwi-readonly', verified: true}, workspaceWrite: {name: 'gwi-workspace', verified: true,network:'enabled'}}, authorizedRootsFile: rootsFile,guardBinary,scratchHome:path.join(directory,'synthetic-codex-home')}, client,async input=>{state.scopeProbes.push(input);if(state.scopeProbeError)throw state.scopeProbeError;return{checkedAt:new Date().toISOString(),profile:'gwi-workspace',copyWrite:true,executionWriteDenied:true,projectWriteDenied:true,siblingWriteDenied:true,approvalPolicy:'never',modelTurnStarted:false,readIsolation:false,network:input.network,networkDomainRestriction:false};});
-  const execution = new PlatformExecution(platform, controls), project = await engine.createProject({name: 'Synthetic platform project', workspace}, OWNER);
+  const execution = new PlatformExecution(platform, controls,browsers), project = await engine.createProject({name: 'Synthetic platform project', workspace}, OWNER);
   const input = (extra: Partial<AgentExecutionInput> = {}): AgentExecutionInput => ({project: structuredClone(project), workspace, role: {...project.roles.find(role => role.id === 'development')!, model: 'synthetic-model', tools: ['context.read']}, runId: 'synthetic-run', stageId: 'work', attemptId: 'synthetic-attempt', prompt: 'Perform only the synthetic check.', timeoutSeconds: 5, tokenBudget: 1000, signal: new AbortController().signal, onEvent() {}, onTool: async () => ({projectId: project.id}), ...extra});
   t.after(async () => {taskGate.resolve(); state.taskListGate = undefined; await execution.close(); await engine.close(); controls!.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); await rm(directory, {recursive: true, force: true});});
   return {directory, state, connection, controls, client, engine, platform, execution, project, input, taskGate};
 }
 
 type Fixture=Awaited<ReturnType<typeof fixture>>;
+
+test('hosted browser forwarding uses the frozen role and isolated execution workspace, and revokes on stop',async t=>{
+  const scopes:BrowserScope[]=[],calls:unknown[]=[],leases:{closed:boolean}[]=[];
+  let observeSession:((value:BrowserObservation)=>void)|undefined,latest:BrowserObservation|undefined;
+  const runtime={prepare:async(scope:BrowserScope,signal:AbortSignal,observe:(value:BrowserObservation)=>void)=>{
+    scopes.push(structuredClone(scope));const state={closed:false};leases.push(state);
+    const record:BrowserObservation={id:scope.attemptId,...scope,status:'ready',cleanupConfirmed:false,operations:0,blockedRequests:0,updatedAt:new Date().toISOString()};observeSession=observe;latest=record;observe(record);
+    const close=async()=>{state.closed=true;observe({...record,status:'closed',cleanupConfirmed:true});};signal.addEventListener('abort',()=>void close(),{once:true});
+    return{invoke:async(args:unknown)=>{assert.equal(state.closed,false);calls.push(args);return{content:[{type:'text',text:'{"observed":"synthetic-page"}'}]};},close,observation:()=>record};
+  },close:async()=>{for(const lease of leases)lease.closed=true;}} as unknown as BrowserRuntime;
+  const h=await fixture(t,runtime);h.state.taskListGate=h.taskGate.promise;
+  const events:unknown[]=[],controller=new AbortController(),input=h.input({signal:controller.signal,onEvent:event=>events.push(event)}),role:RoleProfile={...input.role,sandbox:'read-only',tools:['context.read','browser.use'],browser:{origins:['http://127.0.0.1:45678']}};
+  const started=await h.execution.agent.start({...input,role});
+  const recorded=events.length;observeSession!({...latest!,blockedRequests:1});observeSession!({...latest!,blockedRequests:2});assert.equal(events.length,recorded,'Background request counters must not narrate another completed action.');
+  assert.equal(scopes.length,1);assert.deepEqual(scopes[0].origins,role.browser!.origins);assert.notEqual(scopes[0].workspace,input.workspace);assert.equal(scopes[0].attemptId,input.attemptId);
+  const worker=h.state.agents.get(started.ref.agentId!)!;assert.ok(worker.custom_args?.includes('default_permissions="gwi-readonly"'));assert.match(worker.instructions!,/gwi_browser_use/);
+  role.browser!.origins[0]='http://127.0.0.1:45679';assert.deepEqual(scopes[0].origins,['http://127.0.0.1:45678']);
+  const config=(worker.mcp_config as {mcpServers:{gwi:{url:string;headers:Record<string,string>}}}).mcpServers.gwi;
+  const rpc=()=>fetch(config.url,{method:'POST',headers:{...config.headers,'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'gwi_browser_use',arguments:{action:'snapshot'}}})});
+  assert.equal((await rpc()).status,200);assert.deepEqual(calls,[{action:'snapshot'}]);
+  controller.abort();assert.equal(leases[0].closed,true);assert.equal((await rpc()).status,401);
+  h.taskGate.resolve();await started.completion.catch(()=>{});assert.equal(h.execution.records(input.runId)[0].browser?.cleanupConfirmed,true);
+});
+
+test('browser tools without a hosted runtime fail before paid assignment; bindings change immutable role identity',async t=>{
+  const h=await fixture(t),input=h.input();
+  await assert.rejects(h.execution.agent.start({...input,role:{...input.role,tools:['browser.use'],browser:{origins:['http://127.0.0.1:45678']}}}),code('BROWSER_RUNTIME_REQUIRED'));assert.equal(h.state.issuePosts,0);
+  const role={...input.role,browser:{origins:['http://127.0.0.1:45678']}},first=await h.platform.agent(h.project,role,false),second=await h.platform.agent(h.project,{...role,browser:{origins:['http://127.0.0.1:45679']}},false);
+  assert.notEqual(first.id,second.id);assert.deepEqual(h.project.roles.find(item=>item.id===role.id)?.browser,undefined);
+});
 
 test('connected coordinator sends the shared frozen context and a genuine read-only knowledge lease that revokes after completion',async t=>{
   const h=await fixture(t);h.engine.goalPlanner=h.execution.planner;h.state.taskListGate=h.taskGate.promise;h.state.taskResult=()=>JSON.stringify({action:'answer',rationale:'The synthetic source was inspected.',expectedGain:'A bounded informational answer.',tasks:[],response:'The ACK_RECEIPT source remains available.'});

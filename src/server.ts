@@ -20,6 +20,7 @@ import {createGithubAdapter} from './adapters/github.ts';
 import {loadPlatform} from './platform.ts';
 import {PlatformExecution} from './platform-execution.ts';
 import {ControlMcp} from './control-mcp.ts';
+import {BrowserRuntime} from './browser-runtime.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
@@ -29,6 +30,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
 for(const name of ['dist','web','src','node_modules','public'])demand(dataDirectory!==path.join(root,name)&&!dataDirectory.startsWith(path.join(root,name)+path.sep),'UNSAFE_DATA_DIRECTORY','Keep private runtime data outside public source and asset directories.');
 const port=Number(process.env.GWI_PORT??4318);
+const origin=`http://127.0.0.1:${port}`;
 demand(Number.isInteger(port)&&port>=1024&&port<65536,'INVALID_PORT','Choose a local port between 1024 and 65535.');
 await mkdir(dataDirectory,{recursive:true,mode:0o700});
 const tokenFile=path.join(dataDirectory,'token');
@@ -43,7 +45,8 @@ engine.executionReadiness=requireWorkspaceReady;
 engine.accountAllowances=new AccountAllowanceService(engine.store,{readAccountAllowance:()=>engine.codex.readAccountAllowance!()});
 const controls=new ControlMcp(`http://127.0.0.1:${port}`);
 const platform=process.env.GWI_MULTICA_CONNECTION?await loadPlatform(engine,dataDirectory,process.env.GWI_MULTICA_CONNECTION,process.env.GWI_CODEX_MODEL??runtime.defaultModel):await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel)??await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica-runtime/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel);
-const execution=platform?new PlatformExecution(platform,controls):undefined;
+const browsers=new BrowserRuntime(path.join(dataDirectory,'browser'),[origin,...platform?.browserControlOrigins??[]]);
+const execution=platform?new PlatformExecution(platform,controls,browsers):undefined;
 if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.planner;engine.reconcileExternal=(runId,stageId,options)=>execution.reconcile(runId,stageId,options);}
 engine.accountModelResolver=async(project,role)=>platform?platform.effectiveRoleModel(project,role):role.model??process.env.GWI_CODEX_MODEL??runtime.defaultModel??(await engine.codex.info()).models.find(model=>model.isDefault)?.id??null;
 const intakeService=new IntakeService(engine);
@@ -51,7 +54,6 @@ const adoptionService=new AdoptionService(engine);adoptionService.recover();
 const templateService=new TemplateService(engine,platform?{saveRole:platform.saveRole.bind(platform)}:{});
 let integrationCache:{at:number;value:Promise<IntegrationInfo>}|null=null;
 function integrations():Promise<IntegrationInfo>{if(!integrationCache||Date.now()-integrationCache.at>30000)integrationCache={at:Date.now(),value:Promise.all([engine.codex.info(),engine.github.info(),platform?.connection()]).then(([codex,github,multica])=>({codex,github,...(multica?{multica}:{})}))};return integrationCache.value;}
-const origin=`http://127.0.0.1:${port}`;
 const allowedHosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`]);
 const sessionCookie=`gwi_session_${port}`;
 function secureEqual(candidate:string):boolean{const a=Buffer.from(candidate),b=Buffer.from(token);return a.length===b.length&&timingSafeEqual(a,b);}
@@ -206,5 +208,5 @@ const server=createServer(async(request,response)=>{
 });
 server.listen(port,'127.0.0.1',()=>{engine.start();console.log(`GW-Iterator listening at ${origin}`);});
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;server.close();await vite?.close();await adoptionService.close();await engine.close();controls.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;server.close();await browsers.close();await vite?.close();await adoptionService.close();await engine.close();controls.close();process.exit(0);}
 process.on('SIGINT',()=>void stop());process.on('SIGTERM',()=>void stop());

@@ -2,6 +2,8 @@
 
 The [stage execution contract](stage-execution-prd.md) supersedes numeric execution setup and quota-extension interactions.
 
+Hosted browser testing is an explicit role tool. In the role editor, selecting **Test a local website in Chrome** reveals **Allowed browser test origins**. Enter one exact loopback HTTP origin per line. The role summary retains the effective list. Invalid entries stay editable; cancelling the tool choice restores the last saved binding so a hidden invalid draft cannot block disabling the capability. Saving creates a future-run configuration revision and does not certify browser readiness. Reusable templates keep the tool requirement without copying local test addresses. See the [browser contract](browser-runtime-prd.md).
+
 - Stage and pipeline authoring focuses on responsibility, inputs, outputs, dependencies, checks, review and return paths. Remove concurrency, attempts, iterations, model duration and token quota fields from all ordinary and advanced editors, proposal previews and reusable templates.
 - Launch describes the requested outcome and inherited working basis without a quota summary or token input. Loop mode means follow useful new evidence until completion or a real boundary, not a fixed number of repetitions.
 - Running stages expose actual state and activity with guidance and Pause/Stop where supported. Long duration or high consumption alone does not create an error or continuation approval.
