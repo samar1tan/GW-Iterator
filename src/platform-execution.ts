@@ -10,6 +10,7 @@ import type {Platform,DaemonIdentity,VerificationScopeProof} from './platform.ts
 import type {ControlMcp} from './control-mcp.ts';
 import type {VerificationCheck} from './workspaces.ts';
 import {AppError,demand,isObject,validateOutput} from './validation.ts';
+import {plannerStageIdentity} from './execution-evidence.ts';
 import type {KnowledgeLocator} from './knowledge-context-types.ts';
 import {knowledgeContextSummary} from './knowledge-context.ts';
 import type {BrowserRuntime,BrowserObservation} from './browser-runtime.ts';
@@ -250,7 +251,7 @@ export class PlatformExecution {
   async reconcile(runId:string,stageId:string,options:ReconcileOptions={}):Promise<ReconcileResult>{
     checkSignal(options.signal);demand(!this.closing,'EXECUTION_CLOSING','The execution service is stopping.',409);
     const run=this.platform.engine.run(runId),item=stageId==='supervise'&&run.executionKind==='agent-goal'?this.platform.engine.store.list<Intake>('intake').find(value=>value.projectId===run.projectId&&(value.routerRunId===runId||value.supervisorRunIds?.includes(runId))):undefined;
-    const canonical=item?'decision-'+(item.rounds.find(round=>round.routerRunId===runId)?.number??item.rounds.length+1):stageId,key=JSON.stringify([runId,canonical]);
+    const canonical=item?plannerStageIdentity(item,runId,this.records(runId)):stageId;demand(canonical,'EXTERNAL_TASK_SCOPE','The coordinator execution identity is ambiguous. Inspect its retained records.',409);const key=JSON.stringify([runId,canonical]);
     const pending=this.reconciliations.get(key);if(pending){pending.cancelIfRunning||=options.cancelIfRunning===true;return observed(()=>pending.promise,options.signal);}
     const controller=new AbortController(),signal=options.signal?AbortSignal.any([controller.signal,options.signal]):controller.signal;
     const job:Reconciliation={controller,cancelIfRunning:options.cancelIfRunning===true,promise:Promise.resolve().then(()=>this.reconcileOwned(runId,stageId,signal,job)).finally(()=>{if(this.reconciliations.get(key)===job)this.reconciliations.delete(key);})};
@@ -262,7 +263,7 @@ export class PlatformExecution {
     const run=this.platform.engine.run(runId),attempt=run.stages[0]?.attempts.at(-1);
     if(stageId==='supervise'&&run.executionKind==='agent-goal'){
       const item=this.platform.engine.store.list<Intake>('intake').find(item=>item.projectId===run.projectId&&(item.routerRunId===runId||item.supervisorRunIds?.includes(runId)));demand(item,'EXECUTION_NOT_FOUND','This coordinator has no owning outcome.',404);
-      stageId='decision-'+(item.rounds.find(round=>round.routerRunId===runId)?.number??item.rounds.length+1);
+      const identity=plannerStageIdentity(item,runId,this.records(runId));demand(identity,'EXTERNAL_TASK_SCOPE','The coordinator execution identity is ambiguous. Inspect its retained records.',409);stageId=identity;
       if(!this.records(runId).length&&run.status==='failed'&&attempt?.status==='failed'&&attempt.provider==='multica'&&attempt.error&&!attempt.ref?.issueId&&!attempt.ref?.externalId&&!attempt.ref?.threadId){
         const record:ExecutionRecord={id:'preparation-'+runId,projectId:run.projectId,runId,stageId,status:'not_dispatched',cleanupConfirmed:true,createdAt:attempt.startedAt,updatedAt:at(),error:attempt.error};this.platform.engine.store.put('multica-execution',record);
         this.platform.engine.store.event({projectId:run.projectId,runId,stageId,type:'multica.preparation_reconciled',actor:'local-owner',message:'Local preparation ended before any external assignment intent. No worker was dispatched.'});

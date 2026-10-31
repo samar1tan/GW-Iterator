@@ -157,3 +157,23 @@ test('Stop revokes unconsumed browser authority before a later continuation with
   h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.tasks.length===1);
   assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);assert.equal(h.tasks[0].input.role.browser,undefined);assert.equal(h.engine.run(h.run.id).browserContinuations?.[0].id,revoked!.id);
 });
+
+async function historicalPreparation(h:Awaited<ReturnType<typeof fixture>>){
+  const current=h.store.get<Run>('run',h.goal.routerRunId)!,prior=structuredClone(current);prior.id='synthetic-rejected-coordinator';prior.status='failed';prior.stages[0].status='failed';const attempt=prior.stages[0].attempts[0];attempt.id='synthetic-rejected-attempt';attempt.status='failed';attempt.error='Synthetic preparation rejected before provider assignment.';delete attempt.nativeDispatchState;delete attempt.nativeDispatched;delete attempt.nativeCleanupConfirmed;h.store.put('run',prior);
+  const record={id:'synthetic-rejected-preparation',projectId:h.run.projectId,runId:prior.id,stageId:'decision-1',status:'not_dispatched',cleanupConfirmed:true};h.store.put('multica-execution',record);
+  const goal=h.store.get<Intake>('intake',h.goal.id)!;goal.supervisorRunIds=[prior.id,current.id];goal.rounds=[{number:1,routerRunId:current.id,targetRunIds:[h.run.id]}];h.store.put('intake',goal);return{prior,record};
+}
+
+test('a historical unaccepted coordinator preparation cannot block retained QA after later accepted rounds',async t=>{
+  const h=await fixture(t),{prior,record}=await historicalPreparation(h),before=structuredClone(h.run);let reconciliations=0;h.engine.reconcileExternal=async()=>{reconciliations++;return{status:'unknown',cleanupConfirmed:false};};
+  h.intake.continueWork(h.goal.id,OWNER,h.input);await h.pump(()=>h.tasks.length===1);assert.equal(reconciliations,0);assert.deepEqual(h.engine.run(prior.id),prior);assert.deepEqual(h.store.get('multica-execution',record.id),record);
+  const retried=h.engine.run(h.run.id);assert.deepEqual(retried.snapshot,before.snapshot);assert.deepEqual(retried.stages.slice(0,4),before.stages.slice(0,4));assert.deepEqual(retried.stages[4].attempts[0],before.stages[4].attempts[0]);assert.equal(h.coordinatorStarts(),0);
+  h.tasks[0].resolve({output:done});await h.pump(()=>h.tasks.length===2);assert.equal(h.engine.run(h.run.id).stages[5].status,'running');h.tasks[1].resolve({output:done});await h.pump(()=>h.engine.run(h.run.id).stages[5].status==='review');
+});
+
+test('ambiguous, foreign and unconfirmed historical preparation evidence still blocks retained QA',async t=>{
+  for(const mode of ['ambiguous','foreign','unconfirmed','invalid-stage'] as const)await t.test(mode,async sub=>{
+    const h=await fixture(sub),{record}=await historicalPreparation(h);if(mode==='ambiguous')h.store.put('multica-execution',{...record,id:'synthetic-extra-preparation',stageId:'decision-2'});else h.store.put('multica-execution',{...record,...(mode==='foreign'?{projectId:'synthetic-foreign-project'}:mode==='unconfirmed'?{cleanupConfirmed:false}:{stageId:'verify'})});
+    let checks=0;h.engine.reconcileExternal=async()=>{checks++;return{status:'unknown',cleanupConfirmed:false};};h.intake.continueWork(h.goal.id,OWNER,h.input);await h.pump(()=>checks===1);assert.equal(h.tasks.length,0);assert.equal(h.coordinatorStarts(),0);assert.deepEqual(h.engine.run(h.run.id),h.run);
+  });
+});
