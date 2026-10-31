@@ -348,9 +348,15 @@ export class Engine {
   private async resolutionCheck<T>(operation:()=>Promise<T>,signal:AbortSignal):Promise<T>{
     signal.throwIfAborted();return new Promise<T>((resolve,reject)=>{const abort=()=>reject(signal.reason);signal.addEventListener('abort',abort,{once:true});Promise.resolve().then(()=>{signal.throwIfAborted();return operation();}).then(resolve,reject).finally(()=>signal.removeEventListener('abort',abort));});
   }
+  private pendingAttachmentRecovery(run:Run,stageId:string){
+    const goalId=this.intake?.allowance?.(run.id)?.id,goal=goalId?this.store.get<Intake>('intake',goalId):undefined,record=goal?.workRecoveryHistory?.at(-1),attempt=run.stages.find(stage=>stage.stageId===stageId)?.attempts.at(-1);
+    if(!goal||['completed','stopped'].includes(goal.status)||!record?.attachments?.length||record.phase!=='needs_input'||record.routerRunId!==goal.routerRunId||record.controlRevision!==(goal.controlRevision??0)||record.runId!==run.id||record.stageId!==stageId||record.runControlRevision!==(run.controlRevision??0)||!attempt||record.attemptId!==attempt.id)return;
+    return record;
+  }
   private async prepareAccountContinuation(id:string,input:ContinueRunInput,actor:Actor,generation:number,prepared:{recovery?:RunRecovery;checkState?:()=>void;checkpoint?:(run:Run)=>void}={}):Promise<Run>{
     const checkGeneration=()=>{prepared.checkState?.();demand((this.run(id).controlRevision??0)===generation&&!this.run(id).cancelRequested,'RECOVERY_CANCELLED','This continuation was stopped while checking account availability.',409);};
     checkGeneration();
+    const pendingInput=this.pendingAttachmentRecovery(this.run(id),input.stageId);if(!input.note?.trim()&&pendingInput?.note)input={...input,note:pendingInput.note};
     if(!this.accountAllowances&&!this.accountMode(this.run(id))){
       const value=this.store.transaction(()=>{const value=this.continueRun(id,input,actor,{deferDispatch:true});prepared.checkpoint?.(value);return value;});
       void this.tick();return value;
@@ -632,7 +638,7 @@ export class Engine {
   }
   retry(id:string,stageId:string,note:string,actor:Actor,options:{deferDispatch?:boolean;browserContinuation?:BrowserContinuation;attachmentIds?:string[]}={}):Run{
     const run=this.run(id);this.scope(actor,run.projectId);
-    const attachments=this.attachments.pin(run.projectId,options.attachmentIds);
+    let attachments=this.attachments.pin(run.projectId,options.attachmentIds);
     const goal=this.intake?.allowance?.(id);
     demand(goal?.status!=='completed'&&goal?.status!=='stopped','GOAL_CLOSED','The supervising task is closed. Continue that task explicitly before retrying its earlier work.',409);
     demand(!run.cancelRequested&&run.status!=='cancelled','RECOVERY_CANCELLED','Further work in this pipeline was stopped.',409);
@@ -642,6 +648,12 @@ export class Engine {
     const state=run.stages.find(item=>item.stageId===stageId);
     demand(state&&(['failed','interrupted'].includes(state.status)||!!state.allowanceHold)&&![...this.active.values()].some(item=>item.runId===id),'INVALID_STAGE_STATE','Inspect active work before retrying.',409);
     demand(!this.unsettledOwnedExecution(id),'EXTERNAL_RECONCILIATION_REQUIRED','Confirm owned external and subordinate executions have ended before retrying.',409);
+    const pendingInput=this.pendingAttachmentRecovery(run,stageId);
+    if(pendingInput){
+      const recorded=new Set((state.attachmentHistory??[]).filter(row=>row.afterAttemptId===pendingInput.attemptId).flatMap(row=>row.attachments.map(item=>item.id))),unconsumed=pendingInput.attachments!.filter(item=>!recorded.has(item.id)),pinned=this.attachments.pin(run.projectId,unconsumed.map(item=>item.id));
+      demand(JSON.stringify(pinned)===JSON.stringify(unconsumed),'ATTACHMENT_CORRUPT','Accepted recovery input no longer matches its recorded manifest.',409);
+      attachments=this.attachments.pin(run.projectId,mergeAttachments(pinned,attachments).map(item=>item.id));
+    }
     const childId=state.childInputInvalidated?undefined:state.attempts.at(-1)?.ref?.childRunId;
     if(childId&&attachments.length)throw new AppError('ATTACHMENT_HANDOFF_UNAVAILABLE','A completed subordinate handoff cannot consume new input. Continue the affected subordinate work explicitly.',409);
     if(childId)demand(this.run(childId).status==='completed','CHILD_RETRY_REQUIRED','Retry failed work inside the existing subordinate pipeline, then resume this handoff.',409);

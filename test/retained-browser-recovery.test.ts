@@ -204,3 +204,36 @@ test('attachment continuation and current-browser authority share one durable re
   assert.deepEqual(h.intake.continueWork(h.goal.id,OWNER,input),receipt,'A lost response reconciles its accepted manifest without requiring the original to be uploaded again.');
   assert.equal(h.tasks.length,1);assert.equal(h.coordinatorStarts(),0);assert.equal(h.get().workRecoveryHistory?.length,1);
 });
+
+
+test('accepted attachment instructions survive account preflight and dispatch holds exactly once',async t=>{
+  for(const mode of ['preflight','dispatch'] as const)await t.test(mode,async sub=>{
+    const h=await fixture(sub),state=account(h,mode==='preflight'?98:20),begin=h.engine.beginAccountExecution.bind(h.engine);
+    if(mode==='dispatch')sub.mock.method(h.engine,'beginAccountExecution',async(runId:string,stageId:string,model?:string|null)=>{state.used=98;return begin(runId,stageId,model);});
+    const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-account-supplement',draft:'synthetic-accepted-recovery',name:'account-note.txt',bytes:Buffer.from('Accepted synthetic context across account approval.')},OWNER);
+    const receipt=h.intake.continueWork(h.goal.id,OWNER,{...h.input,attachmentIds:[item.id]});await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+    assert.equal(h.tasks.length,0);assert.deepEqual(receipt.workRecoveryHistory?.at(-1)?.attachments,[item]);
+    await approve(h);
+    const run=h.engine.run(h.run.id),stage=run.stages[4],attempt=stage.attempts.at(-1)!;
+    assert.equal(h.tasks.length,1);assert.deepEqual(attempt.attachments,[item]);assert.deepEqual(h.tasks[0].input.attachments,[item]);assert.match(h.tasks[0].input.prompt,/Attached input manifest:/);
+    assert.deepEqual(stage.attachmentHistory?.map(row=>row.attachments),[[item]]);assert.deepEqual(run.snapshot,h.run.snapshot);assert.deepEqual(run.stages.slice(0,4),h.run.stages.slice(0,4));
+  });
+});
+
+test('account approval retains accepted file instructions without needing a browser grant',async t=>{
+  const h=await fixture(t);account(h,98);const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-plain-supplement',draft:'synthetic-plain-recovery',name:'facts.txt',bytes:Buffer.from('Only independently authored facts.')},OWNER),input={...h.input,attachmentIds:[item.id],note:'Keep this exact accepted file instruction.'};delete input.browserProjectRevision;
+  h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+  const recovery=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER);
+  await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-plain-account-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);
+  await h.pump(()=>h.tasks.length===1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);assert.deepEqual(h.tasks[0].input.attachments,[item]);assert.ok(h.tasks[0].input.prompt.includes(input.note));
+});
+
+
+test('a superseding recovery does not borrow an older unconsumed file instruction at account approval',async t=>{
+  const h=await fixture(t);account(h,98);const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-superseded-file',draft:'synthetic-first-instruction',name:'older.txt',bytes:Buffer.from('Earlier independently authored context.')},OWNER);
+  h.intake.continueWork(h.goal.id,OWNER,{...h.input,attachmentIds:[item.id]});await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+  const input={...h.input,idempotencyKey:'synthetic-replacement-instruction',controlRevision:h.get().controlRevision,note:'Use only this fresh instruction; no earlier pending file.'};
+  h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');await approve(h);
+  assert.equal(h.tasks.length,1);assert.deepEqual(h.engine.run(h.run.id).stages[4].attempts.at(-1)?.attachments,undefined);assert.equal(h.tasks[0].input.prompt.includes('Attached input manifest:'),false);
+  assert.deepEqual(h.get().workRecoveryHistory?.[0].attachments,[item]);assert.equal(h.engine.run(h.run.id).stages[4].attachmentHistory,undefined);
+});
