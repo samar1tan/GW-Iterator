@@ -329,6 +329,37 @@ test('mutating prepared source in a verification task rejects its otherwise succ
   assert.equal(await readFile(path.join(copy.executionPath,'tracked.txt'),'utf8'),'Committed synthetic workspace.\n');assert.equal(await readFile(path.join(h.project.workspace,'tracked.txt'),'utf8'),'Committed synthetic workspace.\n');
 });
 
+test('private verification scratch may contain a nested repository without becoming prepared source',async t=>{
+  const h=await fixture(t);h.state.taskListGate=h.taskGate.promise;
+  const started=await h.execution.agent.start(h.input({executionPurpose:'review'})),copy=h.platform.workspaces.verification('synthetic-attempt');
+  const nested=path.join(copy.path,'.gwi-verification','synthetic-repository');await mkdir(nested,{recursive:true});await execute('git',['init','--quiet','--template=',nested]);await writeFile(path.join(nested,'private.txt'),'Synthetic scratch, never source evidence.');
+  h.taskGate.resolve();assert.deepEqual((await started.completion).output,OUTPUT);
+  const check=h.execution.records('synthetic-run')[0].verification!.check!;assert.equal(check.unchanged,true);assert.deepEqual(check.changed,[]);assert.equal(await lstat(copy.path).catch(()=>null),null);
+});
+
+test('provider failure remains primary when independent source observation fails or finds changes',async t=>{
+  for(const variant of ['unchanged','changed','unavailable','observation-error'] as const)await t.test(variant,async sub=>{
+    const h=await fixture(sub);h.state.taskListGate=h.taskGate.promise;h.state.taskStatus='failed';h.state.taskResult=()=>({receipt:'Synthetic authoritative terminal receipt.'});
+    const events:{type:string;message:string}[]=[],started=await h.execution.agent.start(h.input({executionPurpose:'review',onEvent:event=>events.push(event)})),copy=h.platform.workspaces.verification('synthetic-attempt');
+    const failure='Synthetic provider declined this execution.';h.state.tasks.get(started.ref.issueId!)![0].error=failure;
+    if(variant==='changed')await writeFile(path.join(copy.path,'tracked.txt'),'Synthetic changed source.');
+    if(variant==='unavailable')h.platform.workspaces.checkVerification=async()=>({unchanged:false,manifestHash:copy.manifest.sha256,changed:[],errorCode:'SYNTHETIC_INTEGRITY_UNAVAILABLE'});
+    if(variant==='observation-error')h.platform.workspaces.checkVerification=async()=>{throw new Error('Synthetic observation unavailable.');};
+    h.taskGate.resolve();await assert.rejects(started.completion,error=>error instanceof AppError&&error.code==='MULTICA_TASK_FAILED'&&error.message===failure);
+    const record=h.execution.records('synthetic-run')[0];assert.equal(record.cleanupConfirmed,true);assert.equal(record.error,failure);assert.equal(record.issueState,'cancelled');assert.equal(h.state.issuePosts,1);
+    if(variant==='observation-error'){assert.equal(record.verification!.observationError,'VERIFICATION_OBSERVATION_FAILED');assert.ok(events.some(event=>event.type==='verification.unavailable'));await h.platform.workspaces.disposeVerification(copy.id);}
+    else{assert.equal(await lstat(copy.path).catch(()=>null),null);assert.equal(record.verification!.check!.unchanged,variant==='unchanged');if(variant==='unavailable'){assert.equal(record.verification!.check!.errorCode,'SYNTHETIC_INTEGRITY_UNAVAILABLE');assert.ok(events.some(event=>event.type==='verification.checked'&&event.message.includes('could not be established')));assert.equal(events.some(event=>event.message.includes('Verification changed')),false);}}
+  });
+});
+
+test('an otherwise completed verifier with unavailable integrity is unverified rather than called a source mutation',async t=>{
+  const h=await fixture(t);h.state.taskListGate=h.taskGate.promise;
+  const started=await h.execution.agent.start(h.input({executionPurpose:'review'})),copy=h.platform.workspaces.verification('synthetic-attempt');
+  h.platform.workspaces.checkVerification=async()=>({unchanged:false,manifestHash:copy.manifest.sha256,changed:[],errorCode:'SYNTHETIC_UNAVAILABLE'});
+  h.taskGate.resolve();await assert.rejects(started.completion,code('VERIFICATION_INTEGRITY_UNAVAILABLE'));
+  assert.equal(h.execution.records('synthetic-run')[0].verification!.check!.errorCode,'SYNTHETIC_UNAVAILABLE');assert.equal(await lstat(copy.path).catch(()=>null),null);
+});
+
 test('an uncertain external review keeps its copy until authoritative reconciliation',async t=>{
   const h=await fixture(t);h.state.taskListError=true;h.engine.agentExecutor=h.execution.agent;
   const initial=h.engine.createPipeline({projectId:h.project.id,roleId:'qa',name:'Synthetic uncertain review'},OWNER),flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'work',name:'Review prepared source',roleId:'qa',executor:'codex',executionPurpose:'review',dependsOn:[],prompt:'Perform the bounded source review.',review:false}]},OWNER);

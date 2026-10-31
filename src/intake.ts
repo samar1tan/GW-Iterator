@@ -47,7 +47,7 @@ export class IntakeService {
       save:(goal,event)=>{this.save(goal);const record=currentWorkRecovery(goal)!;engine.store.event({projectId:goal.projectId,runId:record.runId,stageId:record.stageId,type:event,actor:'work-recovery',message:record.code,data:{intakeId:goal.id,recoveryId:record.id,phase:record.phase,checks:record.checks}});},
       active:id=>this.active.has(id),pause:goal=>{if(['routing','dispatched','retry_wait'].includes(goal.status)){this.discardScheduled(goal,'Work recovery needs owner input.');goal.status='failed';this.save(goal);this.active.get(goal.id)?.controller.abort();}},
       resume:(goal,record)=>this.resumeWork(goal,record),confirmed:run=>this.cleanupConfirmed(run,run.stages[0]?.attempts.at(-1))});
-    engine.intake={route:(runId,stageId,args)=>this.route(runId,stageId,args),reconcile:()=>this.reconcile(),allowance:runId=>this.allowanceForRun(runId),cancelRun:(id,note)=>this.cancelRun(id,note),close:()=>this.close()};
+    engine.intake={route:(runId,stageId,args)=>this.route(runId,stageId,args),reconcile:()=>this.reconcile(),allowance:runId=>this.allowanceForRun(runId),rework:(run,stageId,note)=>{const goal=this.engine.store.list<Intake>('intake').find(item=>this.family(this.normalize(item)).some(value=>value.id===run.id));if(goal)this.work.trackRework(goal,run,stageId,note);},cancelRun:(id,note)=>this.cancelRun(id,note),close:()=>this.close()};
   }
   private discardScheduled(goal:Intake,reason:string){
     for(const row of goal.recoveryHistory??[])if(row.status==='scheduled'){row.status='cancelled';row.endedAt=at();row.error=reason;}

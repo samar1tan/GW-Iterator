@@ -130,6 +130,15 @@ export type ContinueRunInput = {stageId:string;recoveryKey:string;note?:string;a
 export type ResolveRunInput = Omit<ContinueRunInput,'recoveryKey'> & {
   idempotencyKey:string;attemptId?:string;controlRevision?:number;recoveryKey?:string;
 };
+export type RunReworkInput = {attemptId:string;controlRevision:number;idempotencyKey:string;note:string};
+/** The frozen workflow, never a caller-supplied destination, owns this handoff. */
+export function configuredReworkTarget(run:Run,stageId:string):Stage|undefined {
+  const source=run.snapshot.pipeline.stages.find(stage=>stage.id===stageId),state=run.stages.find(stage=>stage.stageId===stageId);
+  if(run.executionKind||run.cancelRequested||['completed','cancelled'].includes(run.status)||source?.executor!=='codex'||!state||!['failed','interrupted'].includes(state.status)||!source.reworkTo||source.reworkTo===stageId)return;
+  const ancestors=new Set(source.dependsOn);let changed=true;
+  while(changed){changed=false;for(const stage of run.snapshot.pipeline.stages)if(ancestors.has(stage.id))for(const id of stage.dependsOn)if(!ancestors.has(id)){ancestors.add(id);changed=true;}}
+  return ancestors.has(source.reworkTo)?run.snapshot.pipeline.stages.find(stage=>stage.id===source.reworkTo):undefined;
+}
 export type RunResolution = {status:'continued';run:Run}|{status:'needs_input';recovery:RunRecovery};
 export type AuditEvent = {seq: number; at: string; projectId: string | null; runId: string | null; stageId: string | null; type: string; actor: string; message: string; data?: unknown};
 export type Proposal = {id: string; projectId: string; pipelineId: string; runId?: string; baseRevision: number; definition: Pipeline; rationale: string; status: 'pending' | 'applied' | 'rejected'; createdAt: string};

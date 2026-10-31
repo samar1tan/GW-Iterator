@@ -68,7 +68,7 @@ export function needsRetainedBrowserChoice(goal:Intake,runs:Run[],project:Projec
 }
 
 const messages={
-  CONFIRMING_TERMINATION:'workConfirming',RETRY_SCHEDULED:'workBackoff',RETRYING_STEP:'workRetrying',RESUMING_COORDINATION:'workResuming',RECOVERY_COMPLETED:'workRecoveryCompleted',RECOVERY_CANCELLED:'workRecoveryCancelled',
+  CONFIRMING_TERMINATION:'workConfirming',RETRY_SCHEDULED:'workBackoff',RETRYING_STEP:'workRetrying',REWORKING_STEP:'workReworking',RESUMING_COORDINATION:'workResuming',RECOVERY_COMPLETED:'workRecoveryCompleted',RECOVERY_CANCELLED:'workRecoveryCancelled',
   TERMINATION_UNCONFIRMED:'workTerminationUnconfirmed',EXTERNAL_RECONCILIATION_REQUIRED:'workTerminationUnconfirmed',EXTERNAL_REVIEW_REQUIRED:'workExternalReview',AUTOMATIC_RETRY_LIMIT:'workAutomaticLimit',REPEATED_TIMEOUT:'workRepeatedTimeout',RETRY_FAILED:'workRetryFailed',GOAL_BOUNDARY:'workGoalBoundary',RECOVERY_TARGET_CHANGED:'workTargetChanged',RECOVERY_CHECK_FAILED:'workCheckFailed',RECOVERY_INTERRUPTED:'workRecoveryInterrupted',
   STAGE_TIMEOUT:'workStepTimeout',STAGE_ATTEMPT_LIMIT:'workAttemptBoundary',RUN_TOKEN_BUDGET:'workRunBoundary',GOAL_TIME_LIMIT:'workGoalBoundary',GOAL_TOKEN_BUDGET:'workGoalBoundary',GOAL_ROUND_LIMIT:'workGoalBoundary',
   ACCOUNT_ALLOWANCE_EXHAUSTED:'workAccountBoundary',ACCOUNT_LIMIT_REACHED:'workAccountBoundary',ACCOUNT_ALLOWANCE_CAUTION:'workAccountDecision',ACCOUNT_ALLOWANCE_UNAVAILABLE:'workAccountDecision',ACCOUNT_STEP_APPROVAL_REQUIRED:'workAccountDecision',WORK_READY_TO_RESUME:'workReadyToResume',
