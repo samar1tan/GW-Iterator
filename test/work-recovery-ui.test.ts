@@ -7,7 +7,9 @@ import type {Intake,ProjectDetail,Run,WorkRecoveryRecord} from '../src/contracts
 import {observeProjectWork,withCreatedWork,type CreatedWork} from '../web/platform/workObservations.ts';
 import {knownWorkspace,unobservedWorkspaceReceipts,workspaceWorkCurrent,workspaceWorkNeedsInput} from '../web/platform/globalWork.ts';
 import {recordWorkStart} from '../web/platform/workStart.ts';
-import {currentWorkRecovery,recoveryReceiptObserved,workRecoveryTiming} from '../web/platform/workRecovery.ts';
+import {currentWorkRecovery,recoveryReceiptObserved,workRecoveryTiming,needsRetainedBrowserChoice} from '../web/platform/workRecovery.ts';
+
+import {defaultRoles} from '../src/defaults.ts';
 
 const at='2026-01-01T00:00:00Z',later='2026-01-01T00:00:01Z';
 function fixtures(){
@@ -169,4 +171,23 @@ test('recovery surfaces explain deadlines and stopping reasons in both locales w
     const stale=render(WorkRecoverySurface,{goal:{...goal,workRecoveryHistory:[record]},runs:[run],id:'synthetic-stale',busy:false,error:null,observationFailed:true,onRefresh:async()=>{},onRetry(){},onStep(){}});
     assert.ok(stale.includes(locale==='en'?'Recovery status needs an update':'需要更新恢复状态'));assert.ok(!stale.includes('class="pf-work-recovery-time"'));
   }
+});
+
+
+test('failed-goal cleanup rechecks expose an explicit changed browser choice without changing ordinary or closed recovery',()=>{
+  const{goal,detail,run,record}=fixtures(),role={...defaultRoles().find(role=>role.id==='qa')!,id:'owner'};run.snapshot.project.roles=[role];
+  const project={...detail.project,revision:2,roles:[{...role,tools:[...role.tools,'browser.use' as const],browser:{origins:['http://127.0.0.1:4567','http://127.0.0.1:4568']}}]},before=structuredClone(run);
+  for(const status of ['failed','stopped'] as const){const value={...goal,status,workRecoveryHistory:[{...record,phase:'needs_input' as const,code:'TERMINATION_UNCONFIRMED'}]};assert.equal(needsRetainedBrowserChoice(value,[run],project),true);}
+  const same=structuredClone(run);same.snapshot.project.roles=structuredClone(project.roles);same.snapshot.project.roles[0].browser!.origins.reverse();assert.equal(needsRetainedBrowserChoice(goal,[same],project),false,'An identical allowlist keeps direct recovery regardless of ordering.');
+  const granted=structuredClone(run);granted.browserContinuations=[{id:'synthetic-browser-grant',stageId:'inspect',roleId:'owner',afterAttemptId:'synthetic-before',projectRevision:2,browser:project.roles[0].browser,actor:'Synthetic owner',at,note:'Synthetic exact grant.'}];granted.stages[0].attempts[0].browserContinuationId='synthetic-browser-grant';granted.stages[0].attempts.unshift({...granted.stages[0].attempts[0],id:'synthetic-before',browserContinuationId:undefined});assert.equal(needsRetainedBrowserChoice(goal,[granted],project),true,'A consumed grant is not authority for the next attempt.');granted.stages[0].attempts[1].admissionHeld=true;assert.equal(needsRetainedBrowserChoice(goal,[granted],project),false,'An admission-held grant is still available for its next real execution.');granted.browserContinuations[0].projectRevision=1;assert.equal(needsRetainedBrowserChoice(goal,[granted],project),true,'A stale pending binding requires a current explicit choice.');
+  for(const status of ['completed','clarification','routing'] as const)assert.equal(needsRetainedBrowserChoice({...goal,status},[run],project),false);
+  assert.equal(needsRetainedBrowserChoice({...goal,workRecoveryHistory:[record]},[run],project),false);assert.equal(needsRetainedBrowserChoice(goal,[{...run,status:'running'}],project),false);
+  assert.equal(needsRetainedBrowserChoice(goal,[run],{...project,id:'synthetic-foreign-project'}),false);assert.equal(needsRetainedBrowserChoice(goal,[run],{...project,roles:project.roles.map(role=>({...role,retired:true}))}),false);assert.deepEqual(run,before);
+});
+
+test('an exact retained account hold exposes stage approval even when the last coordination round has no targets',async t=>{
+  const{goal,run,record,detail}=fixtures();goal.rounds=[{number:1,routerRunId:goal.routerRunId,targetRunIds:[]}];goal.workRecoveryHistory=[{...record,phase:'needs_input',code:'ACCOUNT_ALLOWANCE_CAUTION'}];
+  const role={...defaultRoles().find(role=>role.id==='qa')!,id:'owner'};run.snapshot.project.roles=[role];detail.project={...detail.project,roles:[{...role,tools:[...role.tools,'browser.use'],browser:{origins:['http://127.0.0.1:4567']}}]};assert.equal(needsRetainedBrowserChoice(goal,[run],detail.project),true);
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());const{I18nContext,makeI18n}=await vite.ssrLoadModule('/web/i18n.tsx'),{GoalWorkspace}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx');
+  for(const locale of ['en','zh-CN']){const html=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(GoalWorkspace,{goal,detail,models:[],onRun(){},onBack(){},onChanged:async()=>{}})));assert.ok(html.includes('pf-goal-step-resolution'));assert.ok(html.includes('pf-recovery pf-resolution'));assert.ok(!html.includes('class="pf-work-recovery"'));assert.ok(html.includes(locale==='en'?'Do not retry':'不再重试'));}
 });

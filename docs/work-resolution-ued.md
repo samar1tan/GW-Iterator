@@ -1,5 +1,7 @@
 # Actionable waiting and failure
 
+Failed-goal retry and cleanup recheck use the same exact-step browser-choice form as a stopped goal when today's binding differs from the failed attempt. Preserve the recovery note. Show the exact origins and project revision, leave the choice unchecked and retain the ordinary direct action when no browser authority changes.
+
 Keep the existing workbench and inspectors. The current-work card identifies the waiting reason. The next action appears before checks, result history and technical details.
 
 | State | Primary action | Secondary interaction |

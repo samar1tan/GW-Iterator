@@ -1,4 +1,5 @@
-import type {Intake,Run,WorkRecoveryRecord} from '../../src/contracts.ts';
+import type {Intake,Project,Run,WorkRecoveryRecord} from '../../src/contracts.ts';
+import {pendingBrowserContinuation} from '../../src/contracts.ts';
 import {activeRecoveryPhases} from '../../src/contracts.ts';
 import {currentGoalRecovery,isClosedWorkStatus} from '../../src/contracts.ts';
 
@@ -50,6 +51,20 @@ export function canRequestWorkRecovery(goal:Intake,runs:Run[]):boolean {
   if(runs.some(run=>!['completed','failed','interrupted','cancelled','skipped'].includes(run.status)))return false;
   const {stage,run}=recoveryTarget(goal,runs);
   return !!stage&&(['failed','interrupted','cancelled'].includes(stage.status)||!!run?.executionKind&&stage.status==='completed');
+}
+
+export function changedRetainedBrowser(run:Run,stageId:string,project:Project):boolean {
+  const definition=run.snapshot.pipeline.stages.find(stage=>stage.id===stageId),state=run.stages.find(stage=>stage.stageId===stageId);
+  if(project.id!==run.projectId||run.executionKind||definition?.executor!=='codex'||!state||!['failed','interrupted'].includes(state.status))return false;
+  const current=project.roles.find(role=>role.id===definition.roleId&&!role.retired),frozen=run.snapshot.project.roles.find(role=>role.id===definition.roleId),pending=pendingBrowserContinuation(run,stageId);
+  if(!current?.tools.includes('browser.use')||!current.browser?.origins.length)return false;
+  if(pending&&pending.projectRevision!==project.revision)return true;
+  const available=pending?.browser??(frozen?.tools.includes('browser.use')?frozen.browser:undefined);
+  return !available||JSON.stringify([...current.browser.origins].sort())!==JSON.stringify([...available.origins].sort());
+}
+export function needsRetainedBrowserChoice(goal:Intake,runs:Run[],project:Project):boolean {
+  if(!canRequestWorkRecovery(goal,runs))return false;
+  const {run,stage}=recoveryTarget(goal,runs);return !!run&&!!stage&&changedRetainedBrowser(run,stage.stageId,project);
 }
 
 const messages={
