@@ -1,4 +1,6 @@
 import type {AllowanceAssessment} from './account-allowance-types.ts';
+import type {GoalAttachment,AttachmentContinuation} from './attachment-types.ts';
+export type {GoalAttachment} from './attachment-types.ts';
 import type {DefinitionOrigin} from './template-types.ts';
 import type {KnowledgePurpose,KnowledgePurposeOrigin,LessonProposal} from './knowledge-context-types.ts';
 export const EXECUTORS = ['manual', 'codex', 'github', 'pipeline'] as const;
@@ -63,6 +65,7 @@ export type Usage = {input: number; output: number; total: number; cachedInput?:
 export function budgetTokens(usage:Usage):number{return usage.cachedInput===undefined?usage.total:Math.max(0,usage.input-usage.cachedInput)+usage.output;}
 export type ExecutionRef = {threadId?: string; turnId?: string; externalId?: string; url?: string; childRunId?: string;provider?:'codex'|'multica'|'github';issueId?:string;agentId?:string;runtimeId?:string};
 export type Attempt = {
+  attachments?:GoalAttachment[];
   id: string; number: number; iteration: number; status: WorkStatus; startedAt: string; endedAt?: string;
   output?: TaskOutput; error?: string; ref?: ExecutionRef; usage?: Usage;
   tokenReservation?: number; failureCode?: string; admissionHeld?:boolean;
@@ -77,7 +80,7 @@ export type Attempt = {
   browserContinuationId?:string;
   review?: {decision: 'accept' | 'revise'; note: string; actor: string; at: string};
 };
-export type StageRun = {stageId: string; status: WorkStatus; attempts: Attempt[];resumeChildRunId?:string;childInputInvalidated?:boolean;allowanceHold?:{code:string;assessmentKey?:string}};
+export type StageRun = {stageId: string; status: WorkStatus; attempts: Attempt[];attachmentHistory?:AttachmentContinuation[];resumeChildRunId?:string;childInputInvalidated?:boolean;allowanceHold?:{code:string;assessmentKey?:string}};
 export type Trigger = {kind: 'human' | 'agent' | 'loop' | 'replay'; actor: string};
 export type WorkflowSelection={method:'manual'|'owner-api'|'agent-tool'|'coordinator'|'dependency';pipeline:{id:string;revision:number};reason?:string;sourceRunId?:string;intakeId?:string;decisionRound?:number};
 export type Run = {
@@ -86,7 +89,7 @@ export type Run = {
   status: WorkStatus; iteration: number; mode: 'once' | 'loop'; createdAt: string; updatedAt: string; endedAt?: string;
   dependsOnRunIds: string[]; parentRunId?: string; parentStageId?: string; idempotencyKey: string; inputHash: string;
   pausedAt?:string;
-  snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]; conversation?: IntakeConversation;knowledgeCorpusId?:string};
+  snapshot: {project: Project; pipeline: Pipeline; pipelines: Pipeline[]; knowledge: KnowledgeEntry[]; conversation?: IntakeConversation;knowledgeCorpusId?:string;attachments?:GoalAttachment[]};
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
   continuationDeclined?:{at:string;actor:string;note:string};
   recoveryOfRunId?:string;
@@ -126,7 +129,7 @@ export type RunRecovery = {
   code:string;reason:string;limitRevision:number;allowance:RunAllowance;stageAttempts?:number;scope:RecoveryScope;
   recommendation?:{limits:Partial<RunPolicy>;note:string;basis:{usedTokens:number;reservedTokens:number;previousAttemptTokens?:number;attempts:number;previousPolicy:RunPolicy;purpose:'one-failed-stage'}};goal?:GoalAllowance;
 };
-export type ContinueRunInput = {stageId:string;recoveryKey:string;note?:string;approveRecommendation?:boolean;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string};
+export type ContinueRunInput = {stageId:string;recoveryKey:string;note?:string;attachmentIds?:string[];idempotencyKey?:string;approveRecommendation?:boolean;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string};
 export type ResolveRunInput = Omit<ContinueRunInput,'recoveryKey'> & {
   idempotencyKey:string;attemptId?:string;controlRevision?:number;recoveryKey?:string;
 };
@@ -152,6 +155,7 @@ export type WorkspaceDecision = {id:string;projectId:string;kind:'clarification'
 export type WorkspaceSummary = {projects:Pick<ProjectOverview,'id'|'name'|'repository'|'revision'|'pipelineCount'>[];work:WorkspaceWork[];decisions:WorkspaceDecision[];sequence:number;observedAt:string};
 export type IntakeConversation = {rootIntakeId:string;turns:{intakeId:string;request:string;response:string;resultKind:'answer'|'delivery';at:string;basisRevision:number;sourceRunId:string;clarifications?:{question:string;response:string}[];omittedClarifications?:number;truncated?:boolean}[];omittedTurns:number};
 export type Intake = {
+  attachments?:GoalAttachment[];
   id: string; projectId: string; request: string; baseline: string;
   status: 'routing' | 'dispatched' | 'clarification' | 'failed' | 'completed' | 'stopped' | 'retry_wait'; createdAt: string; updatedAt: string;
   routerRunId: string; targetRunId?: string; pipelineId?: string; rationale?: string; question?: string; error?: string;
@@ -167,19 +171,21 @@ export type Intake = {
   workRecoveryHistory?:WorkRecoveryRecord[];
 };
 export type WorkRecoveryRecord = {
+  attachments?:GoalAttachment[];
   note?:string;
   idempotencyKey?:string;inputHash?:string;browserContinuation?:BrowserContinuation;
   id:string;trigger:'manual'|'automatic';phase:'checking'|'backoff'|'retrying'|'resuming'|'completed'|'needs_input'|'cancelled';
   runId:string;stageId:string;attemptId?:string;routerRunId:string;controlRevision:number;runControlRevision?:number;
   startedAt:string;deadlineAt:string;nextAt:string;checks:number;code:string;error?:string;retriedAt?:string;endedAt?:string;
 };
-export type WorkResumeInput={note?:string;idempotencyKey?:string;controlRevision?:number;target?:{runId:string;stageId:string;attemptId:string;runControlRevision:number};browserProjectRevision?:number};
+export type WorkResumeInput={attachmentIds?:string[];recoveryKey?:string;note?:string;idempotencyKey?:string;controlRevision?:number;target?:{runId:string;stageId:string;attemptId:string;runControlRevision:number};browserProjectRevision?:number};
 export type GoalRecoveryPolicy = {autoRetry:boolean; maxAttempts?:number; backoffSeconds:number; allowedFallbackModels:string[]};
 /** Numeric fields describe legacy snapshots; they do not constrain current work. */
 export type IntakePolicy = {maxRounds?: number; maxParallel?: number; maxTotalTokens?: number; maxElapsedSeconds?: number; recovery?:GoalRecoveryPolicy;smartRetry?:boolean};
 export type GoalContinuationRecommendation = {policy:Partial<Pick<IntakePolicy,'maxRounds'|'maxTotalTokens'|'maxElapsedSeconds'>>;basis:{usedTokens:number;reservedTokens:number;usedSeconds:number;actionRounds:number;previousPolicy:IntakePolicy};purpose:'one-focused-continuation'};
 export type GoalFailure = {kind:'capacity'|'other'; message:string; code?:string; at:string; runId:string; native:boolean};
 export type GoalRecoveryRecord = {
+  attachments?:GoalAttachment[];
   id:string; trigger:'manual'|'automatic'; status:'scheduled'|'started'|'completed'|'failed'|'cancelled'; at:string;
   reason:string; note:string; model?:string; actualModel?:string; previousRunId:string; newRunId?:string;
   previousRef?:ExecutionRef; newRef?:ExecutionRef; basisRevision:number; previousBasisRevision:number;
@@ -190,12 +196,12 @@ export type GoalRecoveryRecord = {
   startedAt?:string; endedAt?:string;
   approvedRecommendation?:{key:string;recommendation:GoalContinuationRecommendation};
 };
-export type IntakeRetryInput = {resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string;note?:string; model?:string; refreshConfiguration?:boolean;recoveryKey?:string;approveRecommendation?:boolean; policy?:{maxRounds?:number; maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
+export type IntakeRetryInput = {attachmentIds?:string[];idempotencyKey?:string;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string;note?:string; model?:string; refreshConfiguration?:boolean;recoveryKey?:string;approveRecommendation?:boolean; policy?:{maxRounds?:number; maxTotalTokens?:number; maxElapsedSeconds?:number; recovery?:GoalRecoveryPolicy}};
 export type IntakeDecision = {action: 'dispatch' | 'retry' | 'complete' | 'answer' | 'clarify' | 'stop'; rationale: string; expectedGain: string; tasks: {pipelineId: string; goal: string}[]; response?: string; question?: string; retry?:{runId:string;stageId:string;note:string}};
 export type IntakeRound = {number: number; routerRunId: string; targetRunIds: string[]; decision?: IntakeDecision};
 export type ProjectDetail = {project: Project; pipelines: Pipeline[]; runs: Run[]; knowledge: KnowledgeEntry[]; proposals: Proposal[]; events: AuditEvent[]; intakes: Intake[]};
 export type Actor = {name: string; kind: 'human' | 'agent'; projectId?: string; tools?: ControlTool[]};
-export type StartRunInput = {projectId: string; pipelineId: string; goal: string; baseline: string; mode?: 'once' | 'loop'; dependsOnRunIds?: string[]; idempotencyKey: string; knowledgeIds?: string[]; trigger?: Trigger; parentRunId?: string; parentStageId?: string;limits?:Partial<RunPolicy>;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string};
+export type StartRunInput = {attachmentIds?:string[];projectId: string; pipelineId: string; goal: string; baseline: string; mode?: 'once' | 'loop'; dependsOnRunIds?: string[]; idempotencyKey: string; knowledgeIds?: string[]; trigger?: Trigger; parentRunId?: string; parentStageId?: string;limits?:Partial<RunPolicy>;resourceMode?:'account'|'tokens';approveAccountStep?:boolean;accountAssessmentKey?:string};
 export type KnowledgeSyncResult = {entries: KnowledgeEntry[]; stats: {added: number; changed: number; unchanged: number; missing: number; errors: number}};
 
 /** Accepted or deliberately ended work no longer requests a recovery decision. */

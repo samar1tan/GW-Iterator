@@ -4,6 +4,8 @@ Allowance revision: [Account allowance interaction](account-allowance-ued.md) de
 
 Status: shared visual and interaction contract for the implemented workbench and current experience refinement. Operational acceptance remains separate. This replaces the earlier default live canvas and configuration-heavy ordinary paths.
 
+Specified attachment increment: apply the [goal attachment interaction](goal-attachments-ued.md) across all [inventoried inputs](goal-attachments-prd.md#existing-inputs-and-coverage). Attachment implementation and rendered acceptance remain pending.
+
 ## Visual contract
 
 Use GitHub-like neutral dark surfaces, restrained borders, 6px radii, readable 14px body text, clear section headings and compact aligned controls. Blue identifies selection and links; status colors describe actual state. Support a coherent light appearance where provided. Avoid ornamental gradients, emoji/unicode icons, oversized empty cards and 8–11px essential text.

@@ -1,9 +1,10 @@
-import type {Artifact, ControlTool, ExecutionRef, ModelInfo, RoleProfile, TaskOutput, Usage, CodexInfo,Project} from '../contracts.ts';
+import type {Artifact, ControlTool, ExecutionRef, ModelInfo, RoleProfile, TaskOutput, Usage, CodexInfo,Project,GoalAttachment} from '../contracts.ts';
 import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
 import type {DeliveryPublication} from '../delivery-review.ts';
 
 export type AdapterEvent = {type: string; message: string; ref?: ExecutionRef; usage?: Usage; data?: unknown};
 export type CodexExecutionInput = {
+  attachments?:GoalAttachment[];
   workspace: string; role: RoleProfile; prompt: string; timeoutSeconds?: number; tokenBudget?: number;
   signal: AbortSignal; onEvent: (event: AdapterEvent) => void;
   onTool: (tool: ControlTool, args: Record<string, unknown>) => Promise<unknown>;

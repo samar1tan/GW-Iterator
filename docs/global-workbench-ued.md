@@ -14,6 +14,8 @@ The upper-right header always includes the compact Multica status, including the
 
 The request composer has one target project and the ordinary input. Use a useful existing selection when possible; otherwise ask for the target once through the visible selector. Never infer authority to change every project from an unscoped sentence. Retain drafts independently per target. No role, workflow, model or limit form is added.
 
+For the specified attachment increment, apply the [shared goal attachment interaction](goal-attachments-ued.md#journey-and-entry-placement) in this shell. Target changes restore the corresponding text/file draft; filtering or inspecting work does not transfer files. A selected result's reply/recovery material belongs to that result's project, independently of the global new-request target. Attachment implementation and rendered browser acceptance remain pending.
+
 A confirmed start opens its result in the global shell only if the operator has not moved to another selection while waiting. An acknowledged receipt remains reachable when the following read fails. The goal detail reuses in-place follow-up and clarification behavior. A child execution, selected stage, parent and previous/follow-up links remain in the global shell. Team/Knowledge/Settings links are explicit exits to the project workspace.
 
 ## State and feedback

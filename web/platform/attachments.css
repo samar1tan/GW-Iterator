@@ -1,0 +1,20 @@
+.pf-attachment-area{position:relative;min-width:0;border-radius:var(--radius-md,8px)}
+.pf-platform .pf-outcome-entry>.pf-attachment-area>textarea{min-height:78px;font-size:16px;line-height:1.65}
+.pf-attachment-area.is-dragging{outline:2px solid var(--accent,#3976dc);outline-offset:3px}
+.pf-attachment-drop{display:block;padding:8px;color:var(--accent,#3976dc);font-weight:600}
+.pf-attachments{min-width:0;margin:8px 0}
+.pf-attachment-add,.pf-attachment-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pf-attachment-add>.hint{font-size:12px}
+.pf-attachment-list{list-style:none;padding:0;margin:8px 0;display:flex;flex-direction:column;gap:8px;min-width:0}
+.pf-attachment{display:flex;gap:12px;align-items:flex-start;min-width:0;border:1px solid var(--line,#d0d7de);border-radius:8px;padding:10px;background:var(--surface,#fff)}
+.pf-attachment-body{display:flex;flex:1;flex-direction:column;gap:4px;min-width:0;overflow-wrap:anywhere}
+.pf-attachment-body strong{font-size:13px;overflow-wrap:anywhere}
+.pf-attachment-actions{flex-shrink:0;max-width:100%}
+.pf-attachment-thumb{width:64px;height:64px;object-fit:contain;border-radius:4px}
+.pf-attachment-text{min-width:0;max-width:100%;font-size:12px}
+.pf-attachment-text pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;margin:6px 0}
+.pf-attachment-error{color:var(--danger,#a12424);font-size:12px;margin:4px 0}
+.pf-submitted-attachments{margin:8px 0;min-width:0}
+.pf-submitted-attachments code{overflow-wrap:anywhere;white-space:normal}
+.pf-attachment-summary{font-size:12px;overflow-wrap:anywhere}
+@media(max-width:700px){.pf-attachment{flex-direction:column;gap:8px}.pf-attachment-actions{align-self:flex-end}.pf-attachment-add>.hint{flex-basis:100%}}

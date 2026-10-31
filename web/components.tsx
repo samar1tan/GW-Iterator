@@ -7,6 +7,7 @@ import { useI18n } from './i18n';
 import type { MessageKey } from './locales/en';
 import {Icon, StateIcon} from './Icons';
 import {governanceErrorKeys} from './governanceErrorMessages';
+import {attachmentEn,attachmentZh} from './platform/attachmentCopy';
 
 export function Button({ children, tone = 'default', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'default' | 'primary' | 'danger' | 'quiet' }) {
   return <button type="button" {...props} className={`button ${tone} ${className}`}>{children}</button>;
@@ -21,10 +22,13 @@ export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?
   return <div role={tone === 'error' ? 'alert' : 'status'} className={`notice ${tone}`}>{children}</div>;
 }
 export function ErrorNotice({ error }: { error: unknown }) {
-  const { t } = useI18n();
+  const { t,locale } = useI18n();
   if (!error) return null;
   const messageKeys:Record<string,MessageKey>={...governanceErrorKeys,FOLLOWUP_NOT_READY:'followUpNotReady',INVALID_PARENT_INTAKE:'invalidParentIntake',CLARIFICATION_REPLY_REQUIRED:'clarificationReplyRequired',INVALID_PROJECT:'invalidProject',REVISION_CONFLICT:'revisionChanged',INVALID_ROLE:'invalidRole',INVALID_BROWSER_ORIGINS:'invalidBrowserOrigins',REVIEW_CONFLICT:'deliveryReviewChanged',REVIEW_INPUT_CHANGED:'deliveryReviewChanged',REVIEW_SOURCE_UNAVAILABLE:'deliveryReviewSourceUnavailable',REVIEW_PREPARATION_ACTIVE:'deliveryReviewPreparationActive',REVIEW_CLOSED:'deliveryReviewClosed',REVIEW_FINDING_REQUIRED:'deliveryReviewFindingRequired',INVALID_SOURCE:'invalidSource',WORKSPACE_TOO_BROAD:'workspaceTooBroad'};
   const localizedKey=error instanceof APIError?messageKeys[error.code]:undefined;
+  const attachmentKeys:Record<string,keyof typeof attachmentEn>={INVALID_ATTACHMENT:'attachmentInvalid',INVALID_ATTACHMENTS:'attachmentInvalid',ATTACHMENT_TOO_LARGE:'attachmentTooLarge',ATTACHMENT_TOTAL_TOO_LARGE:'attachmentTotalTooLarge',ATTACHMENT_MISSING:'attachmentMissing',ATTACHMENT_NOT_FOUND:'attachmentMissing',ATTACHMENT_CORRUPT:'attachmentMissing',ATTACHMENT_UNSAFE_PATH:'attachmentUnsafe',ATTACHMENT_HANDOFF_UNAVAILABLE:'attachmentHandoffUnavailable',ATTACHMENT_PREVIEW_UNAVAILABLE:'attachmentPreviewUnavailable'};
+  const attachmentKey=error instanceof APIError?attachmentKeys[error.code]:undefined;
+  if(attachmentKey&&error instanceof APIError){const name=error.details&&typeof error.details==='object'&&'name' in error.details&&typeof error.details.name==='string'?error.details.name:undefined;return <Notice tone="error"><p>{(locale==='zh-CN'?attachmentZh:attachmentEn)[attachmentKey]}{name&&<> · {name}</>}</p><details><summary>{t('details')}</summary><code>{error.code}</code><p>{error.message}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details></Notice>;}
   return <Notice tone="error"><div>{localizedKey?t(localizedKey):errorText(error)}</div>{error instanceof APIError && (localizedKey?<details><summary>{t('details')}</summary><code className="error-code">{error.code}</code><p>{errorText(error)}</p>{error.details!==undefined&&<pre className="json-output">{JSON.stringify(error.details,null,2)}</pre>}</details>:<><code className="error-code">{error.code}</code>{error.details !== undefined && <details><summary>{t('details')}</summary><pre className="json-output">{JSON.stringify(error.details, null, 2)}</pre></details>}</>)}</Notice>;
 }
 export function Empty({ children }: { children: ReactNode }) { return <div className="empty">{children}</div>; }

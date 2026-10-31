@@ -1,6 +1,7 @@
 import {CONVERSATION_DATA_RULE} from './intake-context.ts';
 import {budgetTokens} from './contracts.ts';
 import {randomUUID} from 'node:crypto';
+import {tmpdir} from 'node:os';
 import type {ExecutionRef,Project,RoleProfile,TaskOutput,Usage,Run,Intake} from './contracts.ts';
 import type {AgentExecutionInput,AgentExecutor,CodexExecution,AdapterEvent} from './adapters/types.ts';
 import type {GoalPlanner,GoalPlannerInput} from './goal-planner.ts';
@@ -15,12 +16,14 @@ import type {KnowledgeLocator} from './knowledge-context-types.ts';
 import {knowledgeContextSummary} from './knowledge-context.ts';
 import type {BrowserRuntime,BrowserObservation} from './browser-runtime.ts';
 
+import type {GoalAttachment} from './attachment-types.ts';
+
 export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;cancelAcknowledgedAt?:string;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck;observationError?:string};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null};allowanceExecutionId?:string;allowanceFinishedAt?:string;allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING';browser?:BrowserObservation};
 export type ReconcileOptions={signal?:AbortSignal;cancelIfRunning?:boolean};
 type ReconcileResult=ExecutionRecord&{canRetry:boolean};
 type Reconciliation={controller:AbortController;cancelIfRunning:boolean;promise:Promise<ReconcileResult>};
 type RemoteProject={id:string;providerProjectId:string;workspace:string;sourceCommit:string;verification?:ExecutionRecord['verification']};
-type Request={project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds?:number;tokenBudget?:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review';accountStageId?:string};
+type Request={attachments?:GoalAttachment[];project:Project;role:RoleProfile;runId:string;stageId:string;attemptId:string;prompt:string;signal:AbortSignal;timeoutSeconds?:number;tokenBudget?:number;onEvent:(event:AdapterEvent)=>void;onTool?:AgentExecutionInput['onTool'];executionPurpose?:'review';accountStageId?:string};
 const at=()=>new Date().toISOString();
 const wait=(ms:number,signal?:AbortSignal)=>new Promise<void>((resolve,reject)=>{
   checkSignal(signal);
@@ -109,6 +112,7 @@ export class PlatformExecution {
     const previous=this.platform.engine.store.list<ExecutionRecord>('multica-execution').find(row=>row.runId===request.runId&&row.stageId===request.stageId&&!row.cleanupConfirmed);
     demand(!previous,'EXTERNAL_RECONCILIATION_REQUIRED','Inspect the previous external execution before starting this stage again.',409);
     const space=await this.executionProject(request),basis=await this.platform.agent(request.project,request.role,false);
+    const handoff=request.attachments?.length?await this.platform.engine.attachments.handoff(request.project.id,request.attachments,space.workspace,request.runId,request.attemptId,{writableRoots:[...(space.verification||request.role.sandbox==='workspace-write'?[space.workspace]:[]),tmpdir(),...(process.platform==='win32'?[]:['/tmp'])]}):'';
     const materialOnly=this.platform.engine.store.get<Run>('run',request.runId)?.snapshot.pipeline.stages.find(stage=>stage.id===request.stageId)?.deliveryPreparation===true;
     const wantsBrowser=request.role.tools.includes('browser.use');
     demand(!wantsBrowser||this.browsers&&this.controls,'BROWSER_RUNTIME_REQUIRED','Connect the hosted browser runtime before assigning browser work.',409);
@@ -140,7 +144,7 @@ export class PlatformExecution {
       const allowance=await this.platform.engine.beginAccountExecution(request.runId,canonicalStage,basis.model??null);if(allowance)record.allowanceExecutionId=allowance.id;
       demand(!request.signal.aborted&&!this.closing,'EXECUTION_CANCELLED','Execution was cancelled before assignment.',409);
       record.status='creating';record.cleanupConfirmed=false;this.platform.engine.store.put('multica-execution',record);assignmentIntent=true;
-      issue=await this.platform.client.createIssue({title:request.project.name.slice(0,70)+' · '+request.stageId+' · '+request.attemptId.slice(0,8),allow_duplicate:true,project_id:space.providerProjectId,status:'todo',assignee_type:'agent',assignee_id:agent.id,description:request.prompt+'\n\nGWI execution identity: '+request.attemptId+'\nWorkspace: '+space.workspace+'\nSource revision: '+space.sourceCommit});
+      issue=await this.platform.client.createIssue({title:request.project.name.slice(0,70)+' · '+request.stageId+' · '+request.attemptId.slice(0,8),allow_duplicate:true,project_id:space.providerProjectId,status:'todo',assignee_type:'agent',assignee_id:agent.id,description:request.prompt+handoff+'\n\nGWI execution identity: '+request.attemptId+'\nWorkspace: '+space.workspace+'\nSource revision: '+space.sourceCommit});
     }catch(error){
       await release();const rejected=!assignmentIntent||error instanceof MulticaApiError&&error.status===409&&error.code==='active_duplicate_issue';record.status=rejected?'not_dispatched':'unknown';record.cleanupConfirmed=rejected;record.error=error instanceof Error?error.message:'External creation could not be confirmed.';if(error instanceof MulticaApiError)record.rejection={code:error.code,status:error.status};record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);
       if(rejected){await this.finishAccountExecution(record,request.onEvent);if(record.verification)await this.platform.workspaces.disposeVerification(record.verification.workspaceId);}throw error;
@@ -197,7 +201,7 @@ export class PlatformExecution {
     if(context.status!=='ready')throw new AppError('KNOWLEDGE_CONTEXT_REQUIRED','Required coordinator guidance needs attention before model work.',409,{contextId:context.id,gaps:context.gaps});
     const access=input.knowledgeAccess??service.access(context.scope,context.id);
     const prompt='Make exactly one project coordination decision from actual evidence. Do not implement, poll CI, or wait for humans; the platform owns waiting. Reuse accepted work. For an informational question before delegated action, answer directly with no tasks; answer cannot certify changes, tests or publication. Complete only from verified accepted outcomes. Use the scoped knowledge tool to refine or translate a query within this ordinary task, and read exact frozen locators when needed. No-match evidence must remain uncertain. Do not convert token diagnostics into subscription allowance or invent task charges. '+'\n'+context.context+'\nReturn only JSON {"action":"answer|dispatch|retry|complete|clarify|stop","rationale":"concise reason","expectedGain":"useful result","tasks":[{"pipelineId":"actual workflow ID","goal":"bounded instruction"}],"response":"only for answer: evidence-based answer, at most 16000 characters","question":"only for clarify","retry":{"runId":"owned run ID","stageId":"failed stage ID","note":"what changes"}}. tasks must be empty except for dispatch. Never invent identifiers.';
-    const result=await this.launch({project:input.project,role:{...role,sandbox:'read-only',tools:role.tools.filter(tool=>tool==='context.read'||tool==='knowledge.search')},runId:input.executionId,stageId:'decision-'+(input.rounds.length+1),accountStageId:'supervise',attemptId,prompt,signal:input.signal,onEvent:input.onEvent,onTool:async(tool,args)=>{
+    const result=await this.launch({attachments:input.attachments,project:input.project,role:{...role,sandbox:'read-only',tools:role.tools.filter(tool=>tool==='context.read'||tool==='knowledge.search')},runId:input.executionId,stageId:'decision-'+(input.rounds.length+1),accountStageId:'supervise',attemptId,prompt,signal:input.signal,onEvent:input.onEvent,onTool:async(tool,args)=>{
       if(tool==='context.read')return knowledgeContextSummary(context);
       demand(tool==='knowledge.search','TOOL_NOT_ALLOWED','The coordinator lease only reads its frozen knowledge.',403);
       if(args.read)return access.read(args.read as KnowledgeLocator);

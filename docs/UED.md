@@ -6,6 +6,8 @@ Current allowance interaction: [Account allowance](account-allowance-ued.md), la
 
 Current design revision: [Human workbench UED](human-workbench-ued.md). Apply its GitHub-inspired visual system, step-first execution and progressive configuration in preference to the earlier presentation below.
 
+Specified attachment interaction: [Goal attachment interaction](goal-attachments-ued.md) defines shared add, preview, draft and recovery behavior; rendered implementation and acceptance remain pending.
+
 Status: interaction contract for the implemented workbench and its current experience refinement. Source coverage, operational verification and user acceptance are separate. Read with [the PRD](PRD.md).
 
 ## Structure and visual system

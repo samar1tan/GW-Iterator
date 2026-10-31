@@ -4,6 +4,8 @@ Allowance revision: [Account-aware execution allowance](account-allowance-prd.md
 
 Status: implemented workbench baseline with an authorized experience-refinement pass. Implementation and observed acceptance must be recorded separately. Read with the core [PRD](PRD.md) and [interaction design](human-workbench-ued.md).
 
+Specified next increment: [Attachments in goal inputs](goal-attachments-prd.md), with [attachment interaction](goal-attachments-ued.md). It covers project/global entry, follow-ups, replies, saved-pipeline launch and executable recovery notes; it is not evidence of implemented or accepted attachment support.
+
 ## User outcome
 
 A person can choose a project, describe useful work, follow its progress, review the actual result and continue after a recoverable problem without first designing a workflow, changing role permissions or filling token forms. Configurable workflows remain reusable resources for people and agents. Configuration is a means of changing deliberate defaults, not the entry price for ordinary work.

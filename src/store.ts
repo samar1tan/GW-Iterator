@@ -14,9 +14,11 @@ function frozenDocument(document:unknown):unknown {
 
 export class Store {
   readonly db: DatabaseSync;
+  readonly directory:string;
   private transactionDepth=0;
   private readView:ReadView|null=null;
   constructor(directory: string) {
+    this.directory=path.resolve(directory);
     mkdirSync(directory,{recursive:true,mode:0o700});
     const filename=path.join(directory,'iterator.sqlite');
     this.db=new DatabaseSync(filename); chmodSync(filename,0o600);

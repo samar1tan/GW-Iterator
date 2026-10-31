@@ -13,26 +13,28 @@ import {AccountAllowance,canRequestAccountStep,accountStepNeedsApproval,accountS
 import {useTextDraft} from './useTextDraft';
 import {submittedDraftKey} from './workStart';
 import {requestEnterAction} from './requestKeys';
+import {AttachmentArea,AttachmentControls,useGoalAttachments} from './GoalAttachments';
 
 export function LaunchPipeline({pipeline,pipelines=[],project,onClose,onStarted}:{pipeline:Pipeline;pipelines?:Pipeline[];project:Project;onClose:()=>void;onStarted:(run:Run)=>Promise<void>}) {
   const {p}=useCopy(),formId=useId();
-  const composing=useRef(false);
+  const composing=useRef(false),working=useRef(false);
   const [goal,setGoal,clearGoal]=useTextDraft(`pipeline:${project.id}:${pipeline.id}`),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(null),[storedKey,setStoredKey,clearStoredKey]=useTextDraft(`pipeline-key:${project.id}:${pipeline.id}`),[account,setAccount]=useState<AllowanceAssessment|null>(null);
   const {requiresAccount,manualOnly,modelRoles:scopeRoles}=workflowScope(pipeline,pipelines);
   const readiness=useProjectReadiness(project,requiresAccount),sourceBlocked=requiresAccount&&readiness.readiness?.workspace.status!=='ready';
   const modelRoles=project.roles.filter(role=>scopeRoles.has(role.id));
   const models=[...new Set(modelRoles.map(role=>p('modelSummary',{model:role.model??p('defaultModel'),effort:EFFORT_LABELS[role.effort]})))];
-  const disabled=busy||!goal.trim()||sourceBlocked||(requiresAccount&&!canRequestAccountStep(account));
+  const attachments=useGoalAttachments(project.id,`pipeline:${project.id}:${pipeline.id}`);
+  const disabled=attachments.blocked||busy||!goal.trim()||sourceBlocked||(requiresAccount&&!canRequestAccountStep(account));
   const submit=async(event:React.FormEvent)=>{
-    event.preventDefault();if(!goal.trim()||busy||sourceBlocked||(requiresAccount&&!canRequestAccountStep(account)))return;
-    setBusy(true);setError(null);const submission=submittedDraftKey(goal.trim(),storedKey,uid);setStoredKey(JSON.stringify(submission));
-    try{const run=await api<Run>('/api/runs',{method:'POST',body:{projectId:project.id,pipelineId:pipeline.id,goal:goal.trim(),idempotencyKey:submission.key,resourceMode:'account',...(requiresAccount?accountStepAuthorization(account):{})}});clearGoal(goal);clearStoredKey(JSON.stringify(submission));await onStarted(run);}catch(value){setError(value);}finally{setBusy(false);}
+    event.preventDefault();if(working.current||attachments.blocked||!goal.trim()||busy||sourceBlocked||(requiresAccount&&!canRequestAccountStep(account)))return;
+    working.current=true;setBusy(true);setError(null);const submission=submittedDraftKey(JSON.stringify({goal:goal.trim(),attachmentIds:attachments.ids}),storedKey,uid),attachmentSnapshot=attachments.value;setStoredKey(JSON.stringify(submission));
+    try{const run=await api<Run>('/api/runs',{method:'POST',body:{projectId:project.id,pipelineId:pipeline.id,goal:goal.trim(),attachmentIds:attachments.ids,idempotencyKey:submission.key,resourceMode:'account',...(requiresAccount?accountStepAuthorization(account):{})}});clearGoal(goal,()=>attachments.clear(attachmentSnapshot));clearStoredKey(JSON.stringify(submission));await onStarted(run);}catch(value){setError(value);}finally{working.current=false;setBusy(false);}
   };
-  const footer=<><Button onClick={onClose} disabled={busy}>{p('cancel')}</Button><Button form={formId} type="submit" tone="primary" disabled={disabled}><Icon name="play"/>{p(busy?'starting':requiresAccount&&accountStepNeedsApproval(account)?'approveAndStart':'startWork')}</Button></>;
+  const footer=<><Button onClick={onClose} disabled={busy}>{p('cancel')}</Button><Button form={formId} type="submit" tone="primary" disabled={disabled} aria-describedby={attachments.blocked?formId+'-files':undefined}><Icon name="play"/>{p(busy?'starting':requiresAccount&&accountStepNeedsApproval(account)?'approveAndStart':'startWork')}</Button></>;
   return <Modal title={p('launchPipeline',{name:pipeline.name})} busy={busy} onClose={onClose} footer={footer}>
     <form id={formId} className="pf-launch-form" onSubmit={event=>void submit(event)}>
       <ErrorNotice error={error}/>{requiresAccount&&<ProjectReadinessNotice {...readiness}/>}
-      <Field label={p('launchTask')}><textarea id={formId+'-task'} autoFocus required rows={3} value={goal} placeholder={p('launchTaskPlaceholder')} onChange={event=>setGoal(event.target.value)} aria-keyshortcuts="Enter Meta+Enter Control+Enter" aria-describedby={formId+'-keys'} onCompositionStart={()=>{composing.current=true;}} onCompositionEnd={()=>{composing.current=false;}} onKeyDown={event=>{const action=requestEnterAction(event.nativeEvent,composing.current);if(action==='native')return;event.preventDefault();if(action==='submit'&&!disabled)event.currentTarget.form?.requestSubmit();}}/></Field>
+      <AttachmentArea draft={attachments} disabled={busy} onText={setGoal}><Field label={p('launchTask')}><textarea id={formId+'-task'} autoFocus required rows={3} value={goal} placeholder={p('launchTaskPlaceholder')} onChange={event=>setGoal(event.target.value)} aria-keyshortcuts="Enter Meta+Enter Control+Enter" aria-describedby={formId+'-keys'} onCompositionStart={()=>{composing.current=true;}} onCompositionEnd={()=>{composing.current=false;}} onKeyDown={event=>{const action=requestEnterAction(event.nativeEvent,composing.current);if(action==='native')return;event.preventDefault();if(action==='submit'&&!disabled)event.currentTarget.form?.requestSubmit();}}/></Field><AttachmentControls draft={attachments} disabled={busy} id={formId+'-files'}/></AttachmentArea>
       <span className="pf-request-keys" id={formId+'-keys'}>{p('requestKeysHint')}</span>
       <LaunchPath pipeline={pipeline} project={project}/>
       {modelRoles.length>0&&<div className="pf-launch-models" aria-label={p('roleDefaults')}><Icon name="cpu"/><span>{models.length===1?models[0]:p('modelConfigurationCount',{count:models.length})}</span></div>}

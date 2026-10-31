@@ -10,7 +10,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import test from 'node:test';
 import type {TestContext} from 'node:test';
-import type {Actor, KnowledgeEntry, RoleProfile, TaskOutput,Project,Run} from '../src/contracts.ts';
+import type {Actor, Intake, KnowledgeEntry, RoleProfile, TaskOutput,Project,Run} from '../src/contracts.ts';
 import type {AllowanceExecution,AllowanceFinish,AllowanceAssessment} from '../src/account-allowance-types.ts';
 import type {AgentExecutionInput, CodexAdapter} from '../src/adapters/types.ts';
 import {MulticaClient} from '../src/adapters/multica.ts';
@@ -36,12 +36,15 @@ function deferred<T>() {let resolve!: (value: T) => void; const promise = new Pr
 async function eventually(condition: () => boolean, label: string) {for (let index = 0; index < 300; index++) {if (condition()) return; await delay(10);} assert.fail(`Synthetic platform did not reach ${label}.`);}
 const code = (expected: string) => (error: unknown) => error instanceof AppError && error.code === expected;
 
-async function fixture(t: TestContext,browsers?:BrowserRuntime) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'gwi-platform-test-')), workspace = path.join(directory, 'source'), stateDirectory = path.join(directory, 'state');
+async function fixture(t: TestContext, fixtureOptions?:BrowserRuntime|boolean|'project') {
+  const browsers=typeof fixtureOptions==='object'?fixtureOptions:undefined,protectedInputState=fixtureOptions===true||fixtureOptions==='project'?fixtureOptions:false;
+  const privateTests=path.join(process.cwd(),'.local','attachment-tests');if(protectedInputState)await mkdir(privateTests,{recursive:true,mode:0o700});
+  const directory = await mkdtemp(path.join(protectedInputState?privateTests:tmpdir(), 'gwi-platform-test-')), workspace = path.join(directory, 'source'),stateDirectory=protectedInputState==='project'?path.join(workspace,'.local','state'):path.join(directory,'state');
   await mkdir(workspace);
   await execute('git', ['-C', workspace, 'init', '--template=']);
   await writeFile(path.join(workspace, 'tracked.txt'), 'Committed synthetic workspace.\n');
   await execute('git', ['-C', workspace, 'add', '--', 'tracked.txt']);
+  if(protectedInputState==='project'){await writeFile(path.join(workspace,'.gitignore'),'.local/\n');await execute('git',['-C',workspace,'add','--','.gitignore']);}
   await execute('git', ['-C', workspace, '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Synthetic Test', '-c', 'user.email=synthetic@example.invalid', 'commit', '-m', 'Create synthetic execution input']);
   const state = {
     agents: new Map<string, MulticaAgent>(), projects: new Map<string, MulticaProject>(), issues: new Map<string, MulticaIssue>(), tasks: new Map<string, MulticaTask[]>(),
@@ -162,6 +165,37 @@ test('browser tools without a hosted runtime fail before paid assignment; bindin
   await assert.rejects(h.execution.agent.start({...input,role:{...input.role,tools:['browser.use'],browser:{origins:['http://127.0.0.1:45678']}}}),code('BROWSER_RUNTIME_REQUIRED'));assert.equal(h.state.issuePosts,0);
   const role={...input.role,browser:{origins:['http://127.0.0.1:45678']}},first=await h.platform.agent(h.project,role,false),second=await h.platform.agent(h.project,{...role,browser:{origins:['http://127.0.0.1:45679']}},false);
   assert.notEqual(first.id,second.id);assert.deepEqual(h.project.roles.find(item=>item.id===role.id)?.browser,undefined);
+});
+
+test('private attachments reach the actual worker and independent review workspace without entering prepared source',async t=>{
+  for(const review of [false,true])await t.test(review?'independent review':'worker',async sub=>{
+    const h=await fixture(sub,true);
+    const bytes=Buffer.from('Independent private attachment for protocol verification.'),item=await h.engine.attachments.upload(h.project.id,{key:'synthetic-input-upload',draft:'synthetic-draft',name:'private-note.txt',bytes},OWNER);
+    h.state.taskListGate=h.taskGate.promise;const started=await h.execution.agent.start(h.input({attachments:[item],...(review?{executionPurpose:'review' as const}:{})}));
+    const request=h.state.requests.find(request=>request.method==='POST'&&request.path==='/api/issues')!,description=String(request.body.description),manifest=JSON.parse(description.split('Attached input manifest:\n')[1].split('\n\nGWI execution identity:')[0]);
+    const workspace=review?h.platform.workspaces.verification('synthetic-attempt').path:h.platform.workspaces.get('synthetic-run').path;
+    assert.ok(manifest[0].path.startsWith(path.join(await realpath(h.engine.store.directory),'attachment-inputs',h.project.id)+path.sep));assert.ok(!manifest[0].path.startsWith(workspace+path.sep));assert.equal(manifest[0].sha256,item.sha256);assert.deepEqual(await readFile(manifest[0].path),bytes);assert.match(description,/untrusted task data/);
+    assert.equal(await lstat(path.join(h.project.workspace,'.local')).catch(()=>null),null);assert.equal(await lstat(path.join(workspace,'.local')).catch(()=>null),null);if(review)assert.ok(!h.platform.workspaces.verification('synthetic-attempt').manifest.entries.some(entry=>entry.path.includes('attachment-inputs')));
+    await assert.rejects(h.platform.workspaces.artifact('synthetic-run',path.relative(workspace,manifest[0].path)),code('INVALID_ARTIFACT_PATH'));
+    h.taskGate.resolve();assert.deepEqual((await started.completion).output,OUTPUT);
+  });
+});
+
+test('worker-writable temporary application state rejects attachment assignment before any paid task',async t=>{
+  const h=await fixture(t),item=await h.engine.attachments.upload(h.project.id,{key:'synthetic-blocked-input',draft:'synthetic-draft',name:'note.txt',bytes:Buffer.from('Authored blocked input.')},OWNER);
+  await assert.rejects(h.execution.agent.start(h.input({attachments:[item]})),code('ATTACHMENT_HANDOFF_UNAVAILABLE'));assert.equal(h.state.issuePosts,0);assert.equal(h.execution.records('synthetic-run')[0].status,'not_dispatched');assert.equal(h.execution.records('synthetic-run')[0].cleanupConfirmed,true);
+});
+
+test('Intake connected coordination hands off project-local state to its actual isolated read-only worker',async t=>{
+  const h=await fixture(t,'project'),bytes=Buffer.from('Synthetic connected Intake attachment.'),item=await h.engine.attachments.upload(h.project.id,{key:'synthetic-intake-input',draft:'synthetic-draft',name:'intake.txt',bytes},OWNER);
+  h.engine.goalPlanner=h.execution.planner;h.state.taskResult=()=>JSON.stringify({action:'answer',response:'Model-free connected coordination result.',rationale:'Synthetic Intake path check.',expectedGain:'Verify frozen input delivery.',tasks:[]});
+  const intakes=new IntakeService(h.engine),input={request:'Inspect the synthetic attachment.',attachmentIds:[item.id],idempotencyKey:'synthetic-connected-intake'},created=await intakes.createWithAccount(h.project.id,input,OWNER);
+  await eventually(()=>h.engine.store.get<Intake>('intake',created.id)?.status==='completed','connected Intake completion');
+  const record=h.platform.workspaces.get(created.routerRunId),request=h.state.requests.find(row=>row.method==='POST'&&row.path==='/api/issues')!,manifest=JSON.parse(String(request.body.description).split('Attached input manifest:\n')[1].split('\n\nGWI execution identity:')[0]);
+  assert.ok((await realpath(h.engine.store.directory)).startsWith(await realpath(h.project.workspace)+path.sep));
+  assert.ok(!manifest[0].path.startsWith(record.path+path.sep));assert.deepEqual(await readFile(manifest[0].path),bytes);
+  assert.ok(h.state.agents.get(String(request.body.assignee_id))!.custom_args?.includes('default_permissions="gwi-readonly"'));
+  assert.deepEqual(h.engine.run(created.routerRunId).snapshot.attachments,[item]);assert.equal(intakes.create(h.project.id,input,OWNER).id,created.id);assert.equal(h.state.issuePosts,1);
 });
 
 test('connected coordinator sends the shared frozen context and a genuine read-only knowledge lease that revokes after completion',async t=>{

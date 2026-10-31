@@ -185,3 +185,22 @@ test('declining the optional browser binding leaves the ordinary account approva
   await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:run.stages[4].attempts.at(-1)!.id,controlRevision:0,idempotencyKey:'synthetic-unchanged-browser-account-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);assert.equal(h.tasks[0].input.role.browser,undefined);
   await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='retrying');h.tasks[0].resolve({output:done});await h.pump(()=>!!h.engine.run(h.run.id).stages[5].allowanceHold);assert.equal(h.tasks.length,1,'The later maintenance step still needs its own account decision.');assert.equal(h.engine.run(h.run.id).stages[4].status,'completed');
 });
+
+
+test('attachment continuation and current-browser authority share one durable receipt while frozen history stays intact',async t=>{
+  const h=await fixture(t),before=structuredClone(h.run),bytes=Buffer.from('An independently authored retained QA supplement.');
+  const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-browser-attachment',draft:'synthetic-retained-instruction',name:'supplement.txt',bytes},OWNER),input={...h.input,attachmentIds:[item.id]};
+  const receipt=h.intake.continueWork(h.goal.id,OWNER,input);
+  assert.deepEqual(h.intake.continueWork(h.goal.id,OWNER,input),receipt);
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,{...input,attachmentIds:[]}),code('IDEMPOTENCY_CONFLICT'));
+  const withoutBrowser={...input};delete withoutBrowser.browserProjectRevision;
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,withoutBrowser),code('IDEMPOTENCY_CONFLICT'));
+  await h.pump(()=>h.tasks.length===1);
+  const retried=h.engine.run(h.run.id),attempt=retried.stages[4].attempts.at(-1)!;
+  assert.deepEqual(retried.snapshot,before.snapshot);assert.deepEqual(retried.stages.slice(0,4),before.stages.slice(0,4));assert.deepEqual(retried.stages[4].attempts[0],before.stages[4].attempts[0]);
+  assert.deepEqual(attempt.attachments,[item]);assert.equal(h.tasks[0].input.role.sandbox,'read-only');assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),true);
+  const manifest=JSON.parse(h.tasks[0].input.prompt.split('Attached input manifest:\n')[1]);assert.deepEqual(await readFile(manifest[0].path),bytes);
+  const original=path.join(h.store.directory,'attachments',h.run.projectId,item.id,'original');await rm(original);
+  assert.deepEqual(h.intake.continueWork(h.goal.id,OWNER,input),receipt,'A lost response reconciles its accepted manifest without requiring the original to be uploaded again.');
+  assert.equal(h.tasks.length,1);assert.equal(h.coordinatorStarts(),0);assert.equal(h.get().workRecoveryHistory?.length,1);
+});

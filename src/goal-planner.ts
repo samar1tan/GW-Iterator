@@ -4,6 +4,7 @@ import type {AdapterEvent} from './adapters/types.ts';
 import type {KnowledgeContextPlan,KnowledgeReadAccess} from './knowledge-context-types.ts';
 import {demand, isObject, text} from './validation.ts';
 import {CONVERSATION_DATA_RULE} from './intake-context.ts';
+import type {GoalAttachment} from './attachment-types.ts';
 
 export type GoalPlannerObservation = {
   id: string; status: WorkStatus; goal: string; stopReason?: string;
@@ -12,6 +13,7 @@ export type GoalPlannerObservation = {
   limits?:{tokenBudget?:number;usedTokens:number;remainingTokens?:number;maxAttempts?:number};
 };
 export type GoalPlannerInput = {
+  attachments?:GoalAttachment[];
   resourceMode?:'account'|'tokens';account?:AllowanceAssessment;
   project: Project; pipelines: Pipeline[]; knowledge: KnowledgeEntry[];
   request: string; baseline: string; rounds: IntakeRound[]; observations: GoalPlannerObservation[];
