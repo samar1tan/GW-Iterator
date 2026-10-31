@@ -22,5 +22,5 @@ export function workflowScope(pipeline:Pipeline,pipelines:Pipeline[]=[]){
 
 /** Action changes cannot retain an invisible contract for a different executor. */
 export function switchStageExecutor(stage:Stage,executor:Executor):Stage {
-  return {...stage,executor,options:undefined,executionPurpose:executor==='codex'?stage.executionPurpose:undefined,ownerGate:executor==='manual'?stage.ownerGate:undefined};
+  return {...stage,executor,options:undefined,executionPurpose:executor==='codex'?stage.executionPurpose:undefined,ownerGate:executor==='manual'?stage.ownerGate:undefined,deliveryPreparation:executor==='codex'?stage.deliveryPreparation:undefined};
 }

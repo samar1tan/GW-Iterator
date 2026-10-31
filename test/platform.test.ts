@@ -25,6 +25,8 @@ import {Store} from '../src/store.ts';
 import {Workspaces} from '../src/workspaces.ts';
 import {defaultRoles} from '../src/defaults.ts';
 import {AppError} from '../src/validation.ts';
+import {DeliveryReviewService} from '../src/delivery-review.ts';
+import {AccountAllowanceService,normalizeAccountObservation} from '../src/account-allowance.ts';
 
 const OWNER: Actor = {name: 'Synthetic platform owner', kind: 'human'};
 const WORKSPACE = 'synthetic-provider-workspace', PROVIDER_TOKEN = 'SYNTHETIC_PROVIDER_AUTH_VALUE';
@@ -101,6 +103,36 @@ async function fixture(t: TestContext,browsers?:BrowserRuntime) {
 }
 
 type Fixture=Awaited<ReturnType<typeof fixture>>;
+
+async function reviewMaterialParent(h:Fixture){
+  h.engine.agentExecutor=h.execution.agent;const initial=h.engine.createPipeline({projectId:h.project.id,roleId:'lead',name:'Synthetic retained delivery'},OWNER),flow=h.engine.updatePipeline(initial.id,initial.revision,{...initial,stages:[{id:'delivery',name:'Review retained source',roleId:'lead',executor:'manual',ownerGate:true,dependsOn:[],prompt:'Inspect the actual retained input.',review:false}]},OWNER);
+  const run=h.engine.startRun({projectId:h.project.id,pipelineId:flow.id,goal:'Prepare material without changing the retained source.',baseline:'Synthetic committed input.',idempotencyKey:'synthetic-material-parent'},OWNER),checkout=await h.platform.workspaces.ensure(run.snapshot.project,run.id);await writeFile(path.join(checkout.path,'synthetic-new.txt'),'Retained untracked candidate.\n');
+  const service=new DeliveryReviewService(h.engine,{changes:id=>h.platform.workspaces.changes(id)}),bundle=await service.bundle(run.id,'delivery',OWNER);
+  const input={idempotencyKey:'synthetic-material-request',bundleKey:bundle.key,attemptId:h.engine.run(run.id).stages[0].attempts[0].id,controlRevision:0};
+  return{run:h.engine.run(run.id),checkout,service,input};
+}
+
+test('review support uses the original prepared candidate and drops inherited write bindings',async t=>{
+  const h=await fixture(t);h.state.agents.set('synthetic-shared-review',{id:'synthetic-shared-review',workspace_id:WORKSPACE,runtime_id:'synthetic-runtime',name:'Synthetic review template',status:'active',updated_at:'2026-01-01T00:00:00Z',description:'Synthetic inherited write bindings.',instructions:'Inspect the assigned evidence.',model:'synthetic-model',thinking_level:'max',mcp_config:{mcpServers:{syntheticWrite:{command:'synthetic-write-command'}}},skills:[{id:'synthetic-write-skill',name:'Synthetic write skill'}]} as MulticaAgent);
+  const current=h.engine.project(h.project.id);await h.engine.updateProject(current.id,current.revision,{...current,roles:current.roles.map(role=>role.id==='lead'?{...role,multica:{agentId:'synthetic-shared-review'},tools:[...role.tools,'run.start','knowledge.write']}:role)},OWNER);
+  const p=await reviewMaterialParent(h),snapshot=structuredClone(h.engine.run(p.run.id)),child=await p.service.prepare(p.run.id,'delivery',p.input,OWNER);await eventually(()=>['completed','failed'].includes(h.engine.run(child.id).status),'one material preparation');assert.equal(h.engine.run(child.id).status,'completed',JSON.stringify(h.engine.run(child.id).stages));
+  const record=h.execution.records(child.id)[0],worker=h.state.agents.get(record.agentId!)!;
+  assert.equal(h.state.issuePosts,1);assert.equal(h.state.scopeProbes.length,1);assert.equal(path.dirname(h.state.scopeProbes[0].executionFile),await realpath(p.checkout.path));assert.equal(h.engine.store.get<{manifest:{entries:{path:string}[]}}>('verification-workspace',record.id)?.manifest.entries.some(entry=>entry.path==='synthetic-new.txt'),true);
+  assert.deepEqual(worker.skills,[]);assert.deepEqual(Object.keys((worker.mcp_config as {mcpServers:Record<string,unknown>}).mcpServers),['gwi']);assert.ok(worker.custom_args?.includes('default_permissions="gwi-workspace"'));assert.deepEqual(h.engine.run(p.run.id),snapshot);assert.throws(()=>h.platform.workspaces.get(child.id),code('EXECUTION_WORKSPACE_UNAVAILABLE'));assert.equal(await readFile(path.join(p.checkout.path,'synthetic-new.txt'),'utf8'),'Retained untracked candidate.\n');
+});
+
+test('a changed prepared source blocks material dispatch before any paid assignment',async t=>{
+  const h=await fixture(t),p=await reviewMaterialParent(h),prepare=h.platform.workspaces.prepareVerification.bind(h.platform.workspaces);
+  t.mock.method(h.platform.workspaces,'prepareVerification',async(project:Project,runId:string,attemptId:string)=>{await writeFile(path.join(p.checkout.path,'synthetic-new.txt'),'Changed before protected capture.\n');return prepare(project,runId,attemptId);});
+  const child=await p.service.prepare(p.run.id,'delivery',p.input,OWNER);await eventually(()=>h.engine.run(child.id).status==='failed','changed preparation input');assert.equal(h.state.issuePosts,0);assert.equal(h.execution.records(child.id)[0].cleanupConfirmed,true);assert.equal(h.engine.run(child.id).stages[0].attempts[0].failureCode,'REVIEW_INPUT_CHANGED');assert.equal(h.engine.run(p.run.id).stages[0].status,'waiting');
+});
+
+test('material preparation retains real account approval before one scoped provider assignment',async t=>{
+  const h=await fixture(t),p=await reviewMaterialParent(h),now=Date.now();h.engine.accountModelResolver=async()=> 'synthetic-model';h.engine.accountAllowances=new AccountAllowanceService(h.engine.store,{readAccountAllowance:async()=>normalizeAccountObservation({status:'available',source:'local-codex',accountKey:'d'.repeat(64),observedAt:new Date(now).toISOString(),expiresAt:new Date(now+60000).toISOString(),windows:[{bucketId:'synthetic-window',slot:'primary',usedPercent:98,windowDurationMins:300,resetsAt:Math.floor(now/1000)+86400}],exhausted:false},now)},{now:()=>now});
+  const child=await p.service.prepare(p.run.id,'delivery',p.input,OWNER);await eventually(()=>!!h.engine.run(child.id).stages[0].allowanceHold,'actual account hold');assert.equal(h.state.issuePosts,0);assert.equal(h.engine.run(p.run.id).stages[0].status,'waiting');
+  const recovery=await h.engine.recoveryWithAccount(child.id,'prepare-review',OWNER);assert.equal(recovery.action,'approve');await h.engine.resolveWaiting(child.id,{stageId:'prepare-review',attemptId:h.engine.run(child.id).stages[0].attempts.at(-1)!.id,controlRevision:0,idempotencyKey:'synthetic-material-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);
+  await eventually(()=>['completed','failed'].includes(h.engine.run(child.id).status),'approved material preparation');assert.equal(h.engine.run(child.id).status,'completed',JSON.stringify(h.engine.run(child.id).stages));assert.equal(h.state.issuePosts,1);assert.equal(h.engine.run(p.run.id).stages[0].status,'waiting');assert.equal(h.engine.run(child.id).accountApprovals?.[0].used,true);
+});
 
 test('hosted browser forwarding uses the frozen role and isolated execution workspace, and revokes on stop',async t=>{
   const scopes:BrowserScope[]=[],calls:unknown[]=[],leases:{closed:boolean}[]=[];
@@ -642,17 +674,17 @@ test('real HTTP planner references advance only after authoritative completion a
   for (const id of current().supervisorRunIds!) {const attempt = h.engine.run(id).stages[0].attempts[0]; assert.equal(attempt.provider, 'multica'); assert.ok(attempt.ref?.externalId); assert.equal(attempt.nativeGoal, undefined); assert.equal(h.execution.records(id)[0].cleanupConfirmed, true);}
 });
 
-test('new projects include the focused implement, independent QA and manual delivery path', async t => {
+test('new projects include the focused implement, independent QA, evidence preparation and owner delivery path', async t => {
   const h = await fixture(t), flow = h.engine.detail(h.project.id, OWNER).pipelines.find(pipeline => pipeline.name === 'Focused change'); assert.ok(flow);
-  assert.deepEqual(flow.stages.map(stage => ({id: stage.id, role: stage.roleId, executor: stage.executor, dependsOn: stage.dependsOn})), [{id: 'implement', role: 'development', executor: 'codex', dependsOn: []}, {id: 'verify', role: 'qa', executor: 'codex', dependsOn: ['implement']}, {id: 'delivery', role: 'lead', executor: 'manual', dependsOn: ['verify']}]);assert.equal(flow.stages[1].executionPurpose,'review');
-  assert.equal(flow.stages[1].reworkTo, 'implement'); assert.equal(flow.stages[2].reworkTo, 'implement'); assert.deepEqual(flow.policy, {});
+  assert.deepEqual(flow.stages.map(stage => ({id: stage.id, role: stage.roleId, executor: stage.executor, dependsOn: stage.dependsOn})), [{id: 'implement', role: 'development', executor: 'codex', dependsOn: []}, {id: 'verify', role: 'qa', executor: 'codex', dependsOn: ['implement']}, {id:'prepare-delivery',role:'lead',executor:'codex',dependsOn:['verify']}, {id: 'delivery', role: 'lead', executor: 'manual', dependsOn: ['prepare-delivery']}]);assert.equal(flow.stages[1].executionPurpose,'review');
+  assert.equal(flow.stages[1].reworkTo, 'implement'); assert.equal(flow.stages[3].reworkTo, 'implement'); assert.deepEqual(flow.policy, {});assert.equal(flow.stages[2].deliveryPreparation,true);assert.equal(flow.stages[3].ownerGate,true);
   h.engine.agentExecutor = h.execution.agent;
   const run = h.engine.startRun({projectId: h.project.id, pipelineId: flow.id, goal: 'Prepare one synthetic change with independent evidence.', baseline: 'Synthetic committed input.', idempotencyKey: 'synthetic-focused-default'}, OWNER);
-  await eventually(() => h.engine.run(run.id).stages[2].status === 'waiting', 'the focused manual delivery gate');
-  const before = h.engine.run(run.id); assert.equal(before.status, 'waiting'); assert.deepEqual(before.stages.map(stage => stage.status), ['completed', 'completed', 'waiting']); assert.equal(h.state.issuePosts, 2);
-  const agents = [...h.state.issues.values()].map(issue => h.state.agents.get(issue.assignee_id!)!); assert.ok(agents[0].custom_args?.includes('default_permissions="gwi-workspace"')); assert.ok(agents[1].custom_args?.includes('default_permissions="gwi-workspace"'));assert.equal(h.project.roles.find(role=>role.id==='qa')?.sandbox,'read-only');assert.equal(h.state.scopeProbes.length,1);
-  for (let count = 0; count < 3; count++) {await h.engine.tick(); await delay(10);} assert.equal(h.state.issuePosts, 2);
-  h.engine.completeManual(run.id, 'delivery', {...OUTPUT, summary: 'The owner inspected the synthetic change and independent checks.'}, OWNER); assert.equal(h.engine.run(run.id).status, 'completed'); assert.equal(h.state.issuePosts, 2); assert.ok([...h.state.issues.values()].every(issue => issue.status === 'done'));
+  await eventually(() => h.engine.run(run.id).stages[3].status === 'waiting', 'the focused manual delivery gate');
+  const before = h.engine.run(run.id); assert.equal(before.status, 'waiting'); assert.deepEqual(before.stages.map(stage => stage.status), ['completed', 'completed', 'completed', 'waiting']); assert.equal(h.state.issuePosts, 3);
+  const agents = [...h.state.issues.values()].map(issue => h.state.agents.get(issue.assignee_id!)!); assert.ok(agents[0].custom_args?.includes('default_permissions="gwi-workspace"')); assert.ok(agents[1].custom_args?.includes('default_permissions="gwi-workspace"'));assert.equal(h.project.roles.find(role=>role.id==='qa')?.sandbox,'read-only');assert.equal(h.state.scopeProbes.length,2);
+  for (let count = 0; count < 3; count++) {await h.engine.tick(); await delay(10);} assert.equal(h.state.issuePosts, 3);
+  h.engine.completeManual(run.id, 'delivery', {...OUTPUT, summary: 'The owner inspected the synthetic change and independent checks.'}, OWNER); assert.equal(h.engine.run(run.id).status, 'completed'); assert.equal(h.state.issuePosts, 3); assert.ok([...h.state.issues.values()].every(issue => issue.status === 'done'));
 });
 
 test('new roles and agents default to max and preserve max/ultra on Multica requests', async t => {

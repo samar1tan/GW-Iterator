@@ -1,5 +1,6 @@
 import type {Artifact, ControlTool, ExecutionRef, ModelInfo, RoleProfile, TaskOutput, Usage, CodexInfo,Project} from '../contracts.ts';
 import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
+import type {DeliveryPublication} from '../delivery-review.ts';
 
 export type AdapterEvent = {type: string; message: string; ref?: ExecutionRef; usage?: Usage; data?: unknown};
 export type CodexExecutionInput = {
@@ -34,6 +35,7 @@ export interface CodexAdapter {
 }
 export type GithubObservation = {status: 'queued' | 'running' | 'completed' | 'failed'; summary: string; url?: string; runId?: number; artifacts?: Artifact[]; data?: unknown};
 export interface GithubAdapter {
+  publication?(repository:string,url:string):Promise<DeliveryPublication>;
   info(): Promise<{available: boolean; authenticated: boolean; error?: string}>;
   observe(repository: string, options: {runId?: number; workflow?: string; ref?: string}): Promise<GithubObservation>;
   dispatch(repository: string, workflow: string, ref: string): Promise<GithubObservation>;

@@ -20,7 +20,7 @@ async function fixture(t:test.TestContext,saveRole?:TemplateRoleWriter){
   t.after(async()=>{await engine.close();await rm(root,{recursive:true,force:true})});
   const source=(kind:'role'|'pipeline',id:string)=>({projectId:project.id,kind,id,expectedProjectRevision:engine.project(project.id).revision,...(kind==='pipeline'?{expectedPipelineRevision:engine.pipeline(id).revision}:{})});
   const flow=engine.createPipeline({projectId:project.id,roleId:'development',template:'focused',name:'Synthetic focused workflow'},OWNER);
-  const manual=engine.updatePipeline(flow.id,flow.revision,{...flow,stages:flow.stages.map(stage=>({...stage,executor:'manual',executionPurpose:undefined,review:false}))},OWNER);
+  const manual=engine.updatePipeline(flow.id,flow.revision,{...flow,stages:flow.stages.map(stage=>({...stage,executor:'manual',executionPurpose:undefined,deliveryPreparation:undefined,review:false}))},OWNER);
   return{root,engine,templates,project,source,flow:manual};
 }
 

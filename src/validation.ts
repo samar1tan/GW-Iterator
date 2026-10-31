@@ -37,6 +37,7 @@ export function validatePipeline(pipeline:Pipeline,project:Project,others:Pipeli
     if(stage.executor==='github')demand(!stage.options?.repository||stage.options.repository===project.repository,'PROJECT_SCOPE','GitHub stages must use this project repository.');
     demand(stage.executionPurpose===undefined||(stage.executionPurpose==='review'&&stage.executor==='codex'),'INVALID_EXECUTION_PURPOSE','Review execution requires a Codex worker.');
     demand(stage.ownerGate===undefined||(typeof stage.ownerGate==='boolean'&&stage.executor==='manual'),'INVALID_OWNER_GATE','Owner gates require a manual stage.');
+    demand(stage.deliveryPreparation===undefined||(typeof stage.deliveryPreparation==='boolean'&&stage.executor==='codex'&&(!stage.deliveryPreparation||stage.executionPurpose==='review')),'INVALID_DELIVERY_PREPARATION','Delivery preparation requires a protected review worker.');
     if(stage.executor==='pipeline')demand(text(stage.options?.pipelineId,100)&&stage.options?.pipelineId!==pipeline.id,'INVALID_CHILD_PIPELINE','Choose another pipeline in this project.');
     demand(contractList(stage.inputs)&&contractList(stage.outputs)&&contractList(stage.checks),'INVALID_STAGE_CONTRACT','Provide bounded input, output and acceptance descriptions.');
     if(stage.position)demand(isObject(stage.position)&&Number.isFinite(stage.position.x)&&Number.isFinite(stage.position.y)&&Math.abs(stage.position.x)<100000&&Math.abs(stage.position.y)<100000,'INVALID_STAGE_POSITION','Provide finite stage canvas coordinates.');

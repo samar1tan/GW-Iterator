@@ -92,6 +92,8 @@ Organize requirements, decisions, produced artifacts, selected memory and verifi
 
 Delivery gathers changes, checks, reviews and external publication references. Distinguish prepared, accepted and deployed. Retain supported learning/change proposals; do not automatically store every model sentence as project memory.
 
+The [delivery review interaction](delivery-review-ued.md) places this material beside the waiting decision in both project and global inspection. The person can inspect changes, screenshots and actual publication observations before accepting or requesting changes, without retyping the agent's result. An explicit preparation action adds material through a linked execution and leaves the decision open.
+
 ## Concrete review journey
 
 Use the GW website mismatch as a clearly labeled replay: select GW; submit the mismatch; see the chosen operations flow; inspect roles and shared case; review rejection/return; inspect CI/publication evidence; accept delivery; find the reusable finding. Historical evidence must not masquerade as a fresh run.

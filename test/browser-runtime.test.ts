@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {createServer,request as httpRequest} from 'node:http';
 import {createSocket} from 'node:dgram';
 import type {Server} from 'node:http';
-import {mkdtemp,mkdir,rm,writeFile,symlink,link,readFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,writeFile,symlink,link,readFile,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -26,6 +26,16 @@ function scope(root:string,origins=['http://127.0.0.1:45678']):BrowserScope{retu
 test('browser bindings accept exact literal loopback origins and reject ambiguous authority',()=>{
   assert.deepEqual(parseBrowserOrigins(['http://127.0.0.1:45678','http://[::1]:45679']),['http://127.0.0.1:45678','http://[::1]:45679']);
   for(const origins of [[],['https://127.0.0.1:45678'],['http://localhost:45678'],['http://127.1:45678'],['http://127.0.0.1:45678/'],['http://127.0.0.1:45678/path'],['http://127.0.0.1:45678?x=1'],['http://user@127.0.0.1:45678'],['http://127.0.0.1:80'],['http://example.invalid:45678']])assert.equal(parseBrowserOrigins(origins),null,JSON.stringify(origins));
+});
+
+test('retained screenshots read only server-owned regular PNG evidence within the private browser root',async t=>{
+  const base=await directory(t),root=await realpath(base),browserRoot=path.join(root,'browser'),session=path.join(browserRoot,'session-synthetic');await mkdir(session,{recursive:true});
+  const runtime=new BrowserRuntime(browserRoot,[]),file=path.join(session,'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png'),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=','base64');await writeFile(file,png);
+  const record={id:'synthetic-attempt',...scope(root),status:'closed' as const,cleanupConfirmed:true,operations:1,blockedRequests:0,updatedAt:'2026-01-01T00:00:00Z',screenshot:file};
+  assert.deepEqual(await runtime.recordedScreenshot(record),png);
+  const outside=path.join(root,'outside.png');await writeFile(outside,png);await assert.rejects(runtime.recordedScreenshot({...record,screenshot:outside}),code('BROWSER_EVIDENCE_UNAVAILABLE'));
+  const alias=path.join(session,'11111111-2222-3333-4444-555555555555.png');await symlink(file,alias);await assert.rejects(runtime.recordedScreenshot({...record,screenshot:alias}),code('BROWSER_EVIDENCE_UNAVAILABLE'));await rm(alias);await link(file,alias);await assert.rejects(runtime.recordedScreenshot(record),code('BROWSER_EVIDENCE_UNAVAILABLE'));await rm(alias);
+  await writeFile(file,'Synthetic private non-image.');await assert.rejects(runtime.recordedScreenshot(record),code('BROWSER_EVIDENCE_UNAVAILABLE'));await rm(file);await assert.rejects(runtime.recordedScreenshot(record),code('BROWSER_EVIDENCE_UNAVAILABLE'));
 });
 
 test('host proxy requires its session identity, streams responses and never forwards a redirect or another origin',async t=>{

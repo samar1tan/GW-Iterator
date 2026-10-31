@@ -1,6 +1,7 @@
 import type { Messages } from './en';
 
 export const zhCN: Messages = {
+  deliveryReviewChanged:'交付材料已变化，请刷新后再作决定。',deliveryReviewSourceUnavailable:'原候选工作区暂不可用，恢复后再准备审阅材料。',deliveryReviewPreparationActive:'审阅材料仍在准备，或尚未确认执行结束，请先查看该执行。',deliveryReviewClosed:'这项交付已不再等待决定。',deliveryReviewFindingRequired:'请说明需要修改的具体问题。',
   invalidBrowserOrigins:'请填写使用 127.0.0.1 或 [::1] 和本地端口的完整 HTTP 来源，不包含路径或末尾斜杠。',
 
   toolBrowserUse:'用 Chrome 验证本地网站',browserOrigins:'允许访问的浏览器测试地址',browserOriginsRequired:'请先设置本地测试地址，再分派浏览器任务。',browserOriginsHelp:'每行填写一个完整 HTTP 来源，例如 http://127.0.0.1:4320。请使用独立测试服务；GWI 及运行时控制端口不可访问。',browserFutureRuns:'这些地址用于新运行。Chrome 使用独立会话，代码执行权限保持不变。',

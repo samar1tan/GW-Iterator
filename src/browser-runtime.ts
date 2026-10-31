@@ -9,7 +9,7 @@ import {browserProxy} from './browser-proxy.ts';
 import {AppError,demand,isObject} from './validation.ts';
 
 export type BrowserScope={projectId:string;runId:string;stageId:string;attemptId:string;workspace:string;origins:string[]};
-export type BrowserObservation={id:string;projectId:string;runId:string;stageId:string;workspace:string;origins:string[];status:'starting'|'ready'|'failed'|'closed';cleanupConfirmed:boolean;operations:number;blockedRequests:number;updatedAt:string;action?:string;operationId?:string;url?:string;title?:string;screenshot?:string;error?:string};
+export type BrowserObservation={id:string;projectId:string;runId:string;stageId:string;workspace:string;origins:string[];status:'starting'|'ready'|'failed'|'closed';cleanupConfirmed:boolean;operations:number;blockedRequests:number;updatedAt:string;action?:string;operationId?:string;url?:string;title?:string;screenshot?:string;screenshotAt?:string;error?:string};
 export type BrowserToolResult={content:({type:'text';text:string}|{type:'image';data:string;mimeType:string})[]};
 export type BrowserLease={invoke:(args:Record<string,unknown>)=>Promise<BrowserToolResult>;close:()=>Promise<void>;observation:()=>BrowserObservation};
 type Launch=(options:LaunchOptions)=>Promise<Browser>;
@@ -25,6 +25,15 @@ export class BrowserRuntime {
   private launch:Launch;
   constructor(directory:string,blockedOrigins:string[],launch:Launch=options=>chromium.launch(options)){
     this.directory=directory;this.blockedPorts=new Set(blockedOrigins.map(origin=>{const url=new URL(origin);return url.port||(url.protocol==='https:'?'443':'80');}));this.launch=launch;
+  }
+  /** The caller supplies a server-owned observation, never a client filesystem path. */
+  async recordedScreenshot(record:BrowserObservation):Promise<Buffer>{
+    demand(record.screenshot,'BROWSER_EVIDENCE_UNAVAILABLE','No retained screenshot is recorded for this attempt.',404);
+    const root=await realpath(this.directory).catch(()=>null),filename=await realpath(record.screenshot).catch(()=>null);
+    demand(root&&filename&&inside(root,filename)&&filename===record.screenshot,'BROWSER_EVIDENCE_UNAVAILABLE','The retained screenshot is unavailable.',404);
+    const relative=path.relative(root,filename).split(path.sep);demand(relative.length===2&&relative[0].startsWith('session-')&&/^[a-f0-9-]+\.png$/.test(relative[1]),'BROWSER_EVIDENCE_UNAVAILABLE','The retained screenshot is unavailable.',404);
+    const handle=await open(filename,constants.O_RDONLY|constants.O_NOFOLLOW).catch(()=>{throw new AppError('BROWSER_EVIDENCE_UNAVAILABLE','The retained screenshot is unavailable.',404);});
+    try{const file=await handle.stat();demand(file.isFile()&&file.nlink===1&&file.size<=2*1024*1024,'BROWSER_EVIDENCE_UNAVAILABLE','The retained screenshot is unavailable.',404);const bytes=await handle.readFile();demand(bytes.length<=2*1024*1024&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),'BROWSER_EVIDENCE_UNAVAILABLE','The retained screenshot is unavailable.',404);return bytes;}finally{await handle.close();}
   }
   async prepare(scope:BrowserScope,signal:AbortSignal,observe:Observe=()=>{}):Promise<BrowserLease>{
     demand(!this.stopping&&!signal.aborted,'BROWSER_CLOSED','The execution browser is closed.',409);
@@ -102,7 +111,7 @@ export class BrowserRuntime {
         active();const url=page.url();demand(url==='about:blank'||allowed(url),'BROWSER_ORIGIN_NOT_ALLOWED','The page left its authorized origin.',403);
         const receipt={operationId:randomUUID(),action,actionCompleted:true,url,...(screenshotPath?{screenshot:screenshotPath}:{})};
         // Record the completed action before a separate page observation can fail.
-        publish({status:'ready',operations:record.operations+1,action,operationId:receipt.operationId,url,...(screenshotPath?{screenshot:screenshotPath}:{})});
+        publish({status:'ready',operations:record.operations+1,action,operationId:receipt.operationId,url,...(screenshotPath?{screenshot:screenshotPath,screenshotAt:now()}:{})});
         let observation:Record<string,unknown>;
         try{
           const title=await page.title(),snapshot=(await page.locator('body').ariaSnapshot()).slice(0,32000),viewport=page.viewportSize();active();publish({title,error:undefined});observation={title,viewport,snapshot};

@@ -26,7 +26,13 @@ An independent QA stage can use a disposable copy of the actual prepared source,
 
 ## Review, return and stop
 
-A manual stage waits for a recorded result. A review gate waits for an acceptance or revision decision. Attach a concrete finding to the work; bounded rework invalidates affected downstream stages and preserves independent accepted work and older attempts.
+A manual stage waits for a recorded result. A review gate waits for an acceptance or revision decision. Its **Review material** panel gathers the original request, producing stages' reports, actual source changes including eligible new files and deletions, retained browser screenshots and publication observations. Reports, observed checks and missing evidence are labeled separately. A PR check result names its observed head; a dirty or different local candidate is not claimed to be covered by that CI.
+
+Use **Accept delivery** at an explicit owner gate or **Accept result** at a legacy technical handoff. Acceptance records the inspected material without requiring you to rewrite it. **Request changes** requires a concrete finding and follows the workflow's return target; accepted unaffected work and older attempts remain visible. The secondary manual-result form remains for supplying an external result.
+
+If the material needs explanation, **Prepare review material** starts or reuses one linked protected execution with optional instructions. It reads an independent copy of the actual candidate and retained evidence, uses ordinary account admission, and leaves the parent decision open. It does not repeat implementation or accepted QA, publish, or accept for you. Open that execution to inspect its result, resolve an account hold or stop it. Unconfirmed cleanup must settle before another preparation or decision. Unchanged requests reuse their recorded execution. Missing original source must be restored before preparation or code acceptance; GWI does not substitute today's project checkout.
+
+New focused, product and operations workflows prepare material before their separate owner gate. Existing runs retain their frozen definitions and receive the same evidence and optional preparation controls. Only the actual local owner can accept `ownerGate:true`; a technical agent's legacy result is recorded separately from owner acceptance.
 
 **Pause** stops further dispatch while current work may finish. **Resume** releases eligible stages. **Stop** requests cancellation of owned work; stopping GitHub observation does not cancel external CI. A running agent can receive supplementary guidance when its actual runtime supports it. A pending receipt is not confirmation that the instruction was delivered.
 
