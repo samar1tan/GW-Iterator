@@ -16,7 +16,7 @@ export {isNativeCapacityFailure} from './execution-failures.ts';
 import {WorkRecovery,currentWorkRecovery,workRecoveryPending} from './work-recovery.ts';
 import type {BrowserContinuation,WorkRecoveryRecord,WorkResumeInput} from './contracts.ts';
 import {parseBrowserOrigins} from './browser-policy.ts';
-import {executionFailureIdentity} from './execution-evidence.ts';
+import {executionFailureIdentity,plannerStageIdentity} from './execution-evidence.ts';
 
 const at=()=>new Date().toISOString();
 const terminal=(run:Run)=>['completed','failed','interrupted','cancelled'].includes(run.status);
@@ -141,10 +141,10 @@ export class IntakeService {
     const item=this.engine.store.list<Intake>('intake').find(value=>value.projectId===run.projectId&&(value.routerRunId===run.id||value.supervisorRunIds?.includes(run.id)));
     if(!item||run.stages[0]?.stageId!=='supervise')return false;
     if(attempt?.nativeDispatchState==='not_dispatched'&&attempt.nativeDispatched===false&&attempt.nativeCleanupConfirmed===true&&!ref?.issueId&&!ref?.externalId&&!ref?.threadId&&!ref?.turnId&&!this.engine.store.list<PlannerExecutionRecord>('multica-execution').some(record=>record.runId===run.id))return true;
-    const decision=item.rounds.find(round=>round.routerRunId===run.id)?.number??item.rounds.length+1;
-    if(!ref?.issueId&&!ref?.externalId&&!ref?.threadId){const records=this.engine.store.list<PlannerExecutionRecord>('multica-execution').filter(record=>record.projectId===run.projectId&&record.runId===run.id&&record.stageId===`decision-${decision}`);return records.length===1&&records[0].status==='not_dispatched'&&records[0].cleanupConfirmed===true&&!records[0].issueId&&!records[0].taskId;}
+    const identity=plannerStageIdentity(item,run.id,this.engine.store.list<PlannerExecutionRecord>('multica-execution'));if(!identity)return false;
+    if(!ref?.issueId&&!ref?.externalId&&!ref?.threadId){const records=this.engine.store.list<PlannerExecutionRecord>('multica-execution').filter(record=>record.projectId===run.projectId&&record.runId===run.id&&record.stageId===identity);return records.length===1&&records[0].status==='not_dispatched'&&records[0].cleanupConfirmed===true&&!records[0].issueId&&!records[0].taskId;}
     if(ref.provider!=='multica'||!ref.issueId)return false;
-    const records=this.engine.store.list<PlannerExecutionRecord>('multica-execution').filter(record=>record.projectId===run.projectId&&record.runId===run.id&&record.stageId===`decision-${decision}`&&record.issueId===ref.issueId);
+    const records=this.engine.store.list<PlannerExecutionRecord>('multica-execution').filter(record=>record.projectId===run.projectId&&record.runId===run.id&&record.stageId===identity&&record.issueId===ref.issueId);
     return records.length===1&&records.every(record=>text(record.taskId,4096)&&(!ref.externalId||record.taskId===ref.externalId)&&record.cleanupConfirmed===true&&['completed','failed','cancelled','aborted','timeout'].includes(record.status));
   }
   private recoveryKey(item:Intake):string{return createHash('sha256').update(JSON.stringify({id:item.id,routerRunId:item.routerRunId,basis:item.basisRevision,policy:item.policy,status:item.status,controlRevision:item.controlRevision??0,limitReached:item.limitReached,allowance:this.allowanceForItem(item),family:this.family(item).map(run=>({id:run.id,status:run.status,stages:run.stages.map(stage=>[stage.stageId,stage.status,stage.attempts.length])}))})).digest('hex');}

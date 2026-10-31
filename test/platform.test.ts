@@ -708,3 +708,11 @@ test('new roles and agents default to max and preserve max/ultra on Multica requ
   const saved = await h.platform.saveRole(h.project.id, revision, {name:'Synthetic default'}, OWNER);
   assert.equal(saved.roles.at(-1)!.effort, 'max');
 });
+
+test('explicit coordinator reconciliation retains a historical unaccepted preparation identity after later rounds',async t=>{
+  const h=await fixture(t),run=storedAdapterRun(h);run.executionKind='agent-goal';run.stages[0].stageId='supervise';h.engine.store.put('run',run);
+  h.engine.store.put('intake',{id:'synthetic-history-owner',projectId:h.project.id,routerRunId:'synthetic-later-router',supervisorRunIds:[run.id,'synthetic-later-router'],rounds:[{number:1,routerRunId:'synthetic-later-one',targetRunIds:[]},{number:2,routerRunId:'synthetic-later-two',targetRunIds:[]},{number:3,routerRunId:'synthetic-later-router',targetRunIds:[]}]});
+  const at=new Date().toISOString(),record={id:'synthetic-historical-preparation',projectId:h.project.id,runId:run.id,stageId:'decision-1',status:'not_dispatched',cleanupConfirmed:true,createdAt:at,updatedAt:at};h.engine.store.put('multica-execution',record);
+  const requests=h.state.requests.length,result=await h.execution.reconcile(run.id,'supervise');assert.equal(result.stageId,'decision-1');assert.equal(result.cleanupConfirmed,true);assert.equal(result.canRetry,true);assert.equal(h.state.issuePosts,0);assert.equal(h.state.requests.length,requests);assert.deepEqual(h.engine.run(run.id),run);assert.deepEqual(h.engine.store.get('multica-execution',record.id),record);
+  h.engine.store.put('multica-execution',{...record,id:'synthetic-ambiguous-preparation',stageId:'decision-2'});await assert.rejects(h.execution.reconcile(run.id,'supervise'),code('EXTERNAL_TASK_SCOPE'));assert.equal(h.state.issuePosts,0);
+});
