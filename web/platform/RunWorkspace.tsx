@@ -1,5 +1,5 @@
 import {useEffect,useId,useState} from 'react';
-import {budgetTokens,EFFORT_LABELS,isClosedWorkStatus} from '../../src/contracts';
+import {attemptRole,budgetTokens,EFFORT_LABELS,isClosedWorkStatus} from '../../src/contracts';
 import type {Artifact,Attempt,AuditEvent,Run,Stage,TaskOutput} from '../../src/contracts';
 import {api,safeURL} from '../api';
 import {Button,Empty,ErrorNotice,Field,Modal,NativeGoalInfo,Notice,Status} from '../components';
@@ -47,7 +47,7 @@ export function RunWorkspace({run:observedRun,events,stageId,onSelect,onRun,onGo
 }
 function StageContext({anchorId,acceptsInput,stage,run,onRun,onGoal,onChanged,multicaSteer,events,observedAt,observationFailed}:{events:AuditEvent[];observedAt?:number;observationFailed?:boolean;anchorId:string;acceptsInput:boolean;stage:Stage;run:Run;onRun:(id:string)=>void;onGoal?:(id:string)=>void;onChanged:()=>Promise<void>;multicaSteer:boolean}) {
   const readerId=useId();
-  const {p,date}=useCopy(), state=run.stages.find(item=>item.stageId===stage.id), attempt=state?.attempts.at(-1), role=run.snapshot.project.roles.find(item=>item.id===stage.roleId);
+  const {p,date}=useCopy(), state=run.stages.find(item=>item.stageId===stage.id), attempt=state?.attempts.at(-1), role=attemptRole(run,stage.id,attempt),browserContinuation=run.browserContinuations?.find(value=>value.id===attempt?.browserContinuationId);
   const documentHref=writeRoute(typeof location==='undefined'?{projectId:run.projectId,surface:'workbench',role:'',runId:run.id,stageId:stage.id}:readRoute());
   const [note,setNote,clearNote]=useTextDraft(`review:${run.id}:${stage.id}:${attempt?.id??'pending'}`), [busy,setBusy]=useState(false), [error,setError]=useState<unknown>(null), [manual,setManual]=useState(false), [done,setDone]=useState('');
   const failedScope=!!state&&(['failed','interrupted','cancelled'].includes(state.status)||!!state.allowanceHold);
@@ -66,6 +66,7 @@ function StageContext({anchorId,acceptsInput,stage,run,onRun,onGoal,onChanged,mu
     {!!stage.checks?.length&&<section><h3>{p('checks')}</h3><ul className="pf-check-contract">{stage.checks.map((check,index)=><li key={index}>{check}</li>)}</ul></section>}
     {attempt?.ref?.childRunId&&<Button onClick={()=>onRun(attempt.ref!.childRunId!)}>{p('openChildPipeline')}<Icon name="arrow-right"/></Button>}
     <details><summary>{p('consumed')}</summary><div className="pf-stage-inputs">{!!stage.inputs?.length&&<ul>{stage.inputs.map((item,index)=><li key={index}>{item}</li>)}</ul>}{stage.dependsOn.map(id=>{const previous=run.stages.find(item=>item.stageId===id)?.attempts.at(-1)?.output;return <div key={id}><strong>{run.snapshot.pipeline.stages.find(item=>item.id===id)?.name??id}</strong><p>{previous?.summary??p('noResult')}</p></div>;})}<details><summary>{p('instructions')}</summary><p className="pre-wrap">{stage.prompt}</p></details></div></details>
+    {browserContinuation&&<section><p>{p('browserContinuationApplied',{revision:browserContinuation.projectRevision})}</p><ul>{browserContinuation.browser.origins.map(origin=><li key={origin}><code>{origin}</code></li>)}</ul></section>}
     {role&&<details><summary>{p('roleHistory')}</summary><dl className="metadata-list"><div><dt>{p('responsibility')}</dt><dd>{role.description}</dd></div><div><dt>{p('executionBoundary')}</dt><dd>{p(role.sandbox==='read-only'?'readSourceBoundary':'writeWorkspaceBoundary')}</dd></div></dl><details><summary>{p('roleInstructions')}</summary><p className="pre-wrap">{role.instructions}</p></details></details>}
     <details><summary>{p('technical')}</summary><div className="pf-technical-stack">{usesMultica(run)&&<p className="hint">{p('codexSessionBoundary')}</p>}{attempt?.nativeGoal&&<NativeGoalInfo attempt={attempt}/ >}<ReportedUsage attempt={attempt}/>{attempt?.ref&&<pre className="json-output">{JSON.stringify(attempt.ref,null,2)}</pre>}<details><summary>{p('fullHistory')} · {state?.attempts.length??0}</summary>{state?.attempts.map(item=><details key={item.id}><summary>#{item.number} · <Status value={item.status}/> · {date(item.startedAt)}</summary><pre className="json-output">{JSON.stringify(item,null,2)}</pre></details>)}</details></div></details>
     {manual&&acceptsInput&&<ManualResult run={run} stage={stage} onClose={()=>setManual(false)} onChanged={onChanged}/ >}

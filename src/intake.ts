@@ -14,7 +14,8 @@ import {CONVERSATION_DATA_RULE,followUpContext} from './intake-context.ts';
 import {isNativeCapacityFailure} from './execution-failures.ts';
 export {isNativeCapacityFailure} from './execution-failures.ts';
 import {WorkRecovery,currentWorkRecovery,workRecoveryPending} from './work-recovery.ts';
-import type {WorkRecoveryRecord} from './contracts.ts';
+import type {BrowserContinuation,WorkRecoveryRecord,WorkResumeInput} from './contracts.ts';
+import {parseBrowserOrigins} from './browser-policy.ts';
 import {executionFailureIdentity} from './execution-evidence.ts';
 
 const at=()=>new Date().toISOString();
@@ -52,11 +53,31 @@ export class IntakeService {
     for(const row of goal.recoveryHistory??[])if(row.status==='scheduled'){row.status='cancelled';row.endedAt=at();row.error=reason;}
     this.scheduled.delete(goal.id);delete goal.nextRetryAt;
   }
-  continueWork(id:string,actor:Actor,input:{note?:string}={}):Intake{
+  continueWork(id:string,actor:Actor,input:WorkResumeInput={}):Intake{
     const goal=this.get(id);this.engine.detail(goal.projectId,actor);demand(!actor.projectId,'OWNER_REQUIRED','Only the local owner may request task recovery.',403);
+    demand(isObject(input)&&Object.keys(input).every(key=>['note','idempotencyKey','controlRevision','target','browserProjectRevision'].includes(key)),'INVALID_CONTINUATION','Choose the exact retained step and browser revision.');
     demand(input.note===undefined||text(input.note,2000),'INVALID_RECOVERY_NOTE','Keep additional recovery instructions within 2,000 characters.');
+    demand(input.idempotencyKey===undefined||text(input.idempotencyKey,160),'INVALID_CONTINUATION','Use a stable continuation request identity.');
+    demand(input.controlRevision===undefined||Number.isSafeInteger(input.controlRevision)&&input.controlRevision>=0,'INVALID_CONTINUATION','Use the current task control revision.');
+    const target=input.target;
+    demand(target===undefined||isObject(target)&&Object.keys(target).every(key=>['runId','stageId','attemptId','runControlRevision'].includes(key))&&text(target.runId,160)&&text(target.stageId,160)&&text(target.attemptId,160)&&Number.isSafeInteger(target.runControlRevision)&&target.runControlRevision>=0&&text(input.idempotencyKey,160)&&input.controlRevision!==undefined,'INVALID_CONTINUATION','Choose the failed run, stage, attempt and current control revisions.');
+    demand(input.browserProjectRevision===undefined||Number.isSafeInteger(input.browserProjectRevision)&&input.browserProjectRevision>0&&!!target,'INVALID_CONTINUATION','Browser continuation needs an exact failed-step target and project revision.');
+    const inputHash=createHash('sha256').update(JSON.stringify({note:input.note?.trim(),target:target?[target.runId,target.stageId,target.attemptId,target.runControlRevision]:undefined,controlRevision:input.controlRevision,browserProjectRevision:input.browserProjectRevision})).digest('hex');
+    const previous=input.idempotencyKey&&goal.workRecoveryHistory?.find(record=>record.idempotencyKey===input.idempotencyKey);
+    if(previous){demand(previous.inputHash===inputHash,'IDEMPOTENCY_CONFLICT','This continuation identity already records different instructions.',409);return this.decorate(goal);}
+    demand(input.controlRevision===undefined||input.controlRevision===(goal.controlRevision??0),'RECOVERY_CONFLICT','The task was stopped or changed. Read its current state before continuing.',409);
+    let browserContinuation:BrowserContinuation|undefined;
+    if(input.browserProjectRevision!==undefined){
+      demand(actor.kind==='human'&&!actor.projectId,'OWNER_REQUIRED','Only the local owner may authorize the current browser configuration.',403);
+      const run=this.family(goal).find(run=>run.id===target!.runId),definition=run?.snapshot.pipeline.stages.find(stage=>stage.id===target!.stageId);
+      demand(run&&definition?.executor==='codex','PROJECT_SCOPE','Choose a failed agent step belonging to this goal.',403);
+      const project=this.engine.project(goal.projectId),role=project.roles.find(role=>role.id===definition.roleId);
+      demand(project.revision===input.browserProjectRevision,'REVISION_CONFLICT','The project configuration changed. Review the browser origins before continuing.',409);
+      demand(role&&!role.retired&&role.tools.includes('browser.use')&&parseBrowserOrigins(role.browser?.origins),'BROWSER_ORIGINS_REQUIRED','Configure explicit local browser origins for the same role before continuing.',409);
+      browserContinuation={id:newId(),stageId:definition.id,roleId:definition.roleId,afterAttemptId:target!.attemptId,projectRevision:project.revision,browser:structuredClone(role.browser!),actor:actor.name,at:at(),note:input.note?.trim()??'Use the explicitly authorized hosted browser for this attempt. Retain accepted upstream work and verify the remaining journey before downstream maintenance.'};
+    }
     if(goal.status==='retry_wait'){this.discardScheduled(goal,'Replaced by explicit work recovery.');goal.controlRevision=(goal.controlRevision??0)+1;goal.status='failed';this.save(goal);}
-    this.work.begin(id,'manual',input.note?.trim());this.work.tick();return this.decorate(this.get(id));
+    this.work.begin(id,'manual',input.note?.trim(),{target,browserContinuation,idempotencyKey:input.idempotencyKey,inputHash});this.work.tick();return this.decorate(this.get(id));
   }
   private async resumeWork(goal:Intake,record:WorkRecoveryRecord):Promise<void>{
     if(goal.status==='dispatched'){goal.status='failed';this.save(goal);}
@@ -483,7 +504,7 @@ export class IntakeService {
     }}finally{this.reconciling=false;}
   }
   private cancelActions(item:Intake,note:string):void{for(const run of this.family(item))if(run.id!==item.routerRunId&&!terminal(run))void this.engine.cancel(run.id,note,{name:'goal-supervisor',kind:'agent'}).catch(()=>undefined);}
-  private stop(item:Intake,note:string):Intake{this.knowledgePreparations.get(item.id)?.abort(new AppError('RECOVERY_CANCELLED','This continuation was stopped during knowledge capture.',409));this.work.cancel(item);for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=note;}item.controlRevision=(item.controlRevision??0)+1;item.status='stopped';item.outcome=note;delete item.nextRetryAt;this.scheduled.delete(item.id);this.save(item,'goal.stopped');this.active.get(item.id)?.controller.abort();this.cancelActions(item,note);return item;}
+  private stop(item:Intake,note:string):Intake{for(const run of this.family(item))this.engine.revokeBrowserContinuations(run.id);this.knowledgePreparations.get(item.id)?.abort(new AppError('RECOVERY_CANCELLED','This continuation was stopped during knowledge capture.',409));this.work.cancel(item);for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=note;}item.controlRevision=(item.controlRevision??0)+1;item.status='stopped';item.outcome=note;delete item.nextRetryAt;this.scheduled.delete(item.id);this.save(item,'goal.stopped');this.active.get(item.id)?.controller.abort();this.cancelActions(item,note);return item;}
   async cancelRun(runId:string,note:string):Promise<void>{const item=this.engine.store.list<Intake>('intake').find(value=>value.routerRunId===runId);demand(item,'INTAKE_NOT_FOUND','Goal not found.',404);this.stop(item,note);}
   cancel(id:string,note:string,actor:Actor):Intake{const item=this.get(id);demand(!actor.projectId||actor.projectId===item.projectId,'PROJECT_SCOPE','Choose the current project.',403);demand(text(note,2000),'NOTE_REQUIRED','Record why this goal is stopping.');demand(workRecoveryPending(item)||this.recovering.has(id)||!['completed','failed','stopped'].includes(item.status),'GOAL_CLOSED','This goal is already closed.',409);return this.stop(item,note);}
   async close():Promise<void>{if(this.closed)return;this.closed=true;this.work.close();for(const item of this.engine.store.list<Intake>('intake').filter(value=>value.status==='retry_wait')){item.status='failed';item.error='Supervisor stopped; scheduled recovery requires manual inspection.';delete item.nextRetryAt;for(const recovery of item.recoveryHistory??[])if(recovery.status==='scheduled'){recovery.status='cancelled';recovery.endedAt=at();recovery.error=item.error;}this.save(item,'goal.recovery_interrupted');}this.scheduled.clear();const pending:Promise<void>[]=[];for(const[id,active]of this.active){const item=this.get(id);if(item.status==='routing'||item.status==='dispatched'){item.status='failed';item.error='Supervisor stopped; inspect native execution before a new goal.';this.save(item,'goal.interrupted');}active.controller.abort();if(active.finished)pending.push(active.finished);}await Promise.allSettled(pending);}

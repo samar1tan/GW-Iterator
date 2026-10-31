@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {Engine} from './engine.ts';
-import type {Intake,Run,WorkRecoveryRecord} from './contracts.ts';
+import type {BrowserContinuation,Intake,Run,WorkRecoveryRecord,WorkResumeInput} from './contracts.ts';
 import {isNativeCapacityFailure} from './execution-failures.ts';
 import {AppError,demand} from './validation.ts';
 import {executionFailureIdentity} from './execution-evidence.ts';
@@ -39,22 +39,33 @@ export class WorkRecovery {
     if(!run.executionKind&&run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.executor!=='codex')return false;
     return attempt.failureCode==='STAGE_TIMEOUT'||isNativeCapacityFailure(attempt.error??goal.lastFailure?.message);
   }
-  begin(id:string,trigger:'manual'|'automatic',note?:string):Intake{
+  begin(id:string,trigger:'manual'|'automatic',note?:string,options:{target?:WorkResumeInput['target'];browserContinuation?:BrowserContinuation;idempotencyKey?:string;inputHash?:string}={}):Intake{
     demand(note===undefined||typeof note==='string'&&note.trim().length>0&&note.length<=2000,'INVALID_RECOVERY_NOTE','Keep additional recovery instructions within 2,000 characters.');
-    const goal=this.context.get(id);if(workRecoveryPending(goal))return goal;
+    const goal=this.context.get(id);if(workRecoveryPending(goal)){demand(!options.idempotencyKey||currentWorkRecovery(goal)?.idempotencyKey===options.idempotencyKey,'RECOVERY_IN_PROGRESS','Another recovery is already being checked.',409);return goal;}
     demand(goal.status!=='completed','GOAL_COMPLETED','This task is already complete.',409);
     demand(goal.status!=='clarification','CLARIFICATION_REPLY_REQUIRED','Reply to the current question before continuing.',409);
     demand(!this.context.active(id)||goal.status==='dispatched','EXECUTION_ACTIVE','Wait for the current decision to finish.',409);
     demand(this.context.family(goal).every(ended),'GOAL_WORK_ACTIVE','Wait for active work to finish before retrying.',409);
-    const {run,stage}=this.target(goal);demand(stage&&(['failed','interrupted','cancelled'].includes(stage.status)||run.executionKind&&stage.status==='completed'),'NO_FAILED_STAGE','There is no failed step ready to retry.',409);
+    const selected=options.target&&this.context.family(goal).find(run=>run.id===options.target!.runId);
+    demand(!options.target||selected,'PROJECT_SCOPE','Choose a failed execution belonging to this goal.',403);
+    const {run,stage}=selected?{run:selected,stage:selected.stages.find(stage=>stage.stageId===options.target!.stageId)}:this.target(goal);
+    demand(!options.target||stage?.attempts.at(-1)?.id===options.target.attemptId&&(run.controlRevision??0)===options.target.runControlRevision,'RECOVERY_CONFLICT','The failed step changed before continuation.',409);
+    demand(run.executionKind||!run.cancelRequested&&run.status!=='cancelled','RECOVERY_CANCELLED','Further work in this execution was stopped.',409);
+    demand(stage&&(['failed','interrupted','cancelled'].includes(stage.status)||run.executionKind&&stage.status==='completed'),'NO_FAILED_STAGE','There is no failed step ready to retry.',409);
+    demand(!options.browserContinuation||trigger==='manual'&&!!options.target,'OWNER_REQUIRED','Browser continuation requires an explicit owner target.',403);
+    if(trigger==='manual')goal.controlRevision=(goal.controlRevision??0)+1;
     if(goal.status==='stopped'&&trigger==='manual')goal.status='failed';
     const now=Date.now(),record:WorkRecoveryRecord={id:randomUUID(),trigger,phase:'checking',runId:run.id,stageId:stage.stageId,attemptId:stage.attempts.at(-1)?.id,runControlRevision:run.controlRevision??0,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision??0,startedAt:new Date(now).toISOString(),deadlineAt:new Date(now+60000).toISOString(),nextAt:new Date(now).toISOString(),checks:0,code:'CONFIRMING_TERMINATION'};
+    if(options.browserContinuation)record.browserContinuation=structuredClone(options.browserContinuation);
+    if(options.idempotencyKey){record.idempotencyKey=options.idempotencyKey;record.inputHash=options.inputHash;}
     if(note)record.note=note.trim();goal.workRecoveryHistory??=[];goal.workRecoveryHistory.push(record);this.context.save(goal,'work.recovery_checking');return goal;
   }
   tick(){
     if(this.closed)return;
     for(const stored of this.context.all()){
       let goal=stored;
+      const held=currentWorkRecovery(goal),heldAttempt=held?.browserContinuation&&this.context.engine.run(held.runId).stages.find(stage=>stage.stageId===held.stageId)?.attempts.at(-1);
+      if(held?.phase==='needs_input'&&held.code.startsWith('ACCOUNT_')&&heldAttempt?.browserContinuationId===held.browserContinuation?.id&&heldAttempt?.id!==held.attemptId&&heldAttempt?.admissionHeld!==true&&!['stopped','completed'].includes(goal.status)&&held.controlRevision===(goal.controlRevision??0)&&held.routerRunId===goal.routerRunId){held.phase='retrying';held.code='RETRYING_STEP';held.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');}
       if(!workRecoveryPending(goal)&&goal.status==='dispatched'&&goal.policy.smartRetry===true&&this.transient(goal)){
         const previous=currentWorkRecovery(goal);
         if(previous?.phase==='needs_input'||previous?.phase==='cancelled')continue;
@@ -67,7 +78,7 @@ export class WorkRecovery {
       if(!workRecoveryPending(goal)||this.busy.has(goal.id))continue;
       const recoveryId=currentWorkRecovery(goal)!.id;
       this.busy.add(goal.id);void this.advance(goal.id).catch(error=>{
-        if(!this.closed){const current=this.context.get(goal.id);if(currentWorkRecovery(current)?.id===recoveryId&&workRecoveryPending(current))this.finish(current,'RECOVERY_CHECK_FAILED',error instanceof Error?error.message:String(error));}
+        if(!this.closed){const current=this.context.get(goal.id);if(currentWorkRecovery(current)?.id===recoveryId&&workRecoveryPending(current))this.finish(current,error instanceof AppError?error.code:'RECOVERY_CHECK_FAILED',error instanceof Error?error.message:String(error));}
       }).finally(()=>this.busy.delete(goal.id));
     }
   }
@@ -103,6 +114,7 @@ export class WorkRecovery {
     if(!stage){this.finish(goal,'RECOVERY_TARGET_CHANGED');return;}
     if(!run.executionKind&&run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.executor!=='codex'){this.finish(goal,'EXTERNAL_REVIEW_REQUIRED');return;}
     if(record.phase==='retrying'){
+      if(stage.allowanceHold){this.finish(goal,stage.allowanceHold.code);return;}
       if(stage.status==='completed'&&this.context.active(id)){await this.complete(goal,record);return;}
       if(!ended(run))return;
       if(run.status!=='completed'){this.finish(goal,stage.attempts.at(-1)?.failureCode==='STAGE_TIMEOUT'?'REPEATED_TIMEOUT':'RETRY_FAILED');return;}
@@ -122,6 +134,7 @@ export class WorkRecovery {
         if(this.cleanup(goal)){record.nextAt=new Date(Math.min(Date.parse(record.deadlineAt),Date.now()+Math.min(15000,record.checks*5000))).toISOString();this.context.save(goal,'work.recovery_waiting');return;}
       }
       if(run.executionKind){await this.complete(goal,record);return;}
+      if(record.browserContinuation)this.context.engine.authorizeBrowserContinuation(run.id,record.browserContinuation,{name:record.browserContinuation.actor,kind:'human'});
       record.phase='backoff';record.code='RETRY_SCHEDULED';record.nextAt=new Date(Date.now()+(record.trigger==='automatic'?30000:0)).toISOString();this.context.save(goal,'work.recovery_scheduled');return;
     }
     if(this.context.engine.accountMode(run)&&this.context.engine.accountAllowances){
@@ -133,7 +146,7 @@ export class WorkRecovery {
     if(fresh?.attempts.at(-1)?.id!==record.attemptId||!['failed','interrupted','cancelled'].includes(fresh?.status??'')){record.phase='cancelled';record.code='RECOVERY_TARGET_CHANGED';record.endedAt=new Date().toISOString();this.context.save(goal,'work.recovery_cancelled');return;}
     if(this.cleanup(goal)){this.finish(goal,'TERMINATION_UNCONFIRMED');return;}
     record.phase='retrying';record.code='RETRYING_STEP';record.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');
-    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step from retained work and prior findings; preserve accepted upstream work and current boundaries.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',projectId:goal.projectId});}
+    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step from retained work and prior findings; preserve accepted upstream work and current boundaries.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',...(record.trigger==='automatic'?{projectId:goal.projectId}:{})},{...(record.browserContinuation?{browserContinuation:record.browserContinuation}:{})});}
     catch(error){this.finish(this.context.get(id),error instanceof Error&&'code'in error?String(error.code):'RETRY_FAILED',error instanceof Error?error.message:String(error));}
   }
   private async complete(goal:Intake,record:WorkRecoveryRecord){

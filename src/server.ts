@@ -24,7 +24,7 @@ import {BrowserRuntime} from './browser-runtime.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
-import type {Actor,ContinueRunInput,IntegrationInfo,IntakeRetryInput,LessonLifecycleInput,Pipeline,Project,ResolveRunInput,Run,StartRunInput,TaskOutput} from './contracts.ts';
+import type {Actor,WorkResumeInput,ContinueRunInput,IntegrationInfo,IntakeRetryInput,LessonLifecycleInput,Pipeline,Project,ResolveRunInput,Run,StartRunInput,TaskOutput} from './contracts.ts';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
@@ -162,7 +162,7 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     json(response,await engine.startRunWithContext(input as StartRunInput,actor,approval),201);return;
   }
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry|resume)$/);
-  if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='resume'?intakeService.continueWork(id,actor,typeof input.note==='string'?{note:input.note}:{}):intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
+  if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='resume'?intakeService.continueWork(id,actor,input as WorkResumeInput):intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
   if(run&&run[2]==='context'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);const stageId=url.searchParams.get('stage')??engine.run(id).snapshot.pipeline.stages[0]?.id??'';json(response,{context:engine.contextRecord(id,stageId,url.searchParams.get('attempt')??undefined)});return;}
   if(run&&run[2]==='context/read'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.contextRead(id,String(input.stageId??''),typeof input.attemptId==='string'?input.attemptId:undefined,input.locator as KnowledgeLocator));return;}
