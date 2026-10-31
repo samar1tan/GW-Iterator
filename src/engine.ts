@@ -18,6 +18,7 @@ import {sourceSignature} from './project-readiness.ts';
 import type {KnowledgeIndexReceipt} from './project-readiness.ts';
 import type {DefinitionCheckpoint,DefinitionMutation,ProjectDefinitionMutation} from './template-types.ts';
 import {executionFailureIdentity} from './execution-evidence.ts';
+import {isMulticaTaskTerminal} from './adapters/multica.ts';
 
 const now=()=>new Date().toISOString();
 const terminal=(status:WorkStatus)=>['completed','failed','cancelled','interrupted','skipped'].includes(status);
@@ -574,17 +575,25 @@ export class Engine {
     demand(!this.resolutions.has(id)&&!this.accountContinuations.has(id),'RECOVERY_IN_PROGRESS','Another continuation is being prepared.',409);
     demand(![...this.active.values()].some(active=>active.runId===id)&&!run.stages.some(stage=>stage.status==='running'),'EXECUTION_ACTIVE','Let the current execution finish before returning findings.',409);
     const family=new Set([id]);let expanded=true;const all=this.store.list<Run>('run');while(expanded){expanded=false;for(const child of all)if(child.parentRunId&&family.has(child.parentRunId)&&!family.has(child.id)){family.add(child.id);expanded=true;}}
-    const records=this.store.list<{id:string;projectId:string;runId:string;stageId:string;taskId?:string;cleanupConfirmed:boolean}>('multica-execution');
+    const records=this.store.list<{id:string;projectId:string;runId:string;stageId:string;status:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;cleanupConfirmed:boolean}>('multica-execution');
     const unknown=all.filter(value=>family.has(value.id)).some(value=>value.stages.some(stage=>stage.attempts.some(attempt=>{
+      if(attempt.provider&&attempt.ref?.provider&&attempt.provider!==attempt.ref.provider)return true;
       if(attempt.ref?.threadId&&attempt.nativeCleanupConfirmed!==true)return true;
       if((attempt.provider??attempt.ref?.provider)!=='multica')return false;
-      if(value.executionKind&&attempt.nativeDispatchState==='not_dispatched'&&attempt.nativeCleanupConfirmed===true)return false;
-      return !records.some(record=>record.projectId===value.projectId&&record.runId===value.id&&record.cleanupConfirmed&&(value.executionKind?attempt.ref?.externalId?record.taskId===attempt.ref.externalId:record.id===attempt.id:record.id===attempt.id&&record.stageId===stage.stageId));
+      const ref=attempt.ref,unassigned=!ref?.issueId&&!ref?.externalId&&!ref?.agentId&&!ref?.runtimeId&&!ref?.threadId;
+      if(value.executionKind&&attempt.nativeDispatchState==='not_dispatched'&&attempt.nativeCleanupConfirmed===true&&unassigned)return false;
+      return !records.some(record=>{
+        if(record.projectId!==value.projectId||record.runId!==value.id||!record.cleanupConfirmed||(!isMulticaTaskTerminal(record)&&record.status!=='not_dispatched'))return false;
+        if(!value.executionKind&&(record.id!==attempt.id||record.stageId!==stage.stageId))return false;
+        if(value.executionKind&&!ref?.externalId&&record.id!==attempt.id)return false;
+        if(record.status==='not_dispatched')return unassigned&&!record.issueId&&!record.taskId;
+        return (!ref?.issueId||record.issueId===ref.issueId)&&(!ref?.externalId||record.taskId===ref.externalId)&&(!ref?.agentId||record.agentId===ref.agentId)&&(!ref?.runtimeId||record.runtimeId===ref.runtimeId);
+      });
     })));
     demand(!this.unsettledOwnedExecution(id)&&!unknown,'EXTERNAL_RECONCILIATION_REQUIRED','Confirm the affected execution family has ended before returning findings.',409);
     const value=this.store.transaction(()=>{
       this.store.put('rework-guidance',{id:`${id}:${target.id}`,identity:randomUUID(),note:request.note,actor:actor.name});
-      const next=this.saveRun(id,value=>{const affected=this.rework(value,target.id,request.note);value.controlRevision=(value.controlRevision??0)+1;for(const stageId of affected){const grant=pendingBrowserContinuation(value,stageId);if(grant)grant.revokedAt=now();}for(const approval of value.accountApprovals??[])if(affected.has(approval.stageId)&&!approval.used)approval.revoked=true;if(value.pausedAt)value.status='paused';});
+      const next=this.saveRun(id,value=>{const affected=this.rework(value,target.id,request.note);value.controlRevision=(value.controlRevision??0)+1;for(const grant of value.browserContinuations??[])if(affected.has(grant.stageId)&&!grant.revokedAt)grant.revokedAt=now();for(const approval of value.accountApprovals??[])if(affected.has(approval.stageId)&&!approval.used)approval.revoked=true;if(value.pausedAt)value.status='paused';});
       this.intake?.rework?.(next,target.id,request.note);
       this.audit(actor,run.projectId,'stage.rework_requested',request.note,{runId:id,stageId,data:{attemptId:input.attemptId,targetStageId:target.id,controlRevision:next.controlRevision,idempotencyKey:input.idempotencyKey}});
       this.store.put('run-rework-receipt',{id:receiptId,runId:id,inputHash,run:next});return next;

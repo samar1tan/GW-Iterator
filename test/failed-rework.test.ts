@@ -9,7 +9,7 @@ import {Engine} from '../src/engine.ts';
 import {Store} from '../src/store.ts';
 import {IntakeService} from '../src/intake.ts';
 import {defaultRoles} from '../src/defaults.ts';
-import {configuredReworkTarget} from '../src/contracts.ts';
+import {configuredReworkTarget,pendingBrowserContinuation} from '../src/contracts.ts';
 import type {Intake,Pipeline,Project,Run,RunReworkInput,TaskOutput} from '../src/contracts.ts';
 import type {CodexAdapter,CodexExecutionInput,GithubAdapter} from '../src/adapters/types.ts';
 import {AccountAllowanceService,normalizeAccountObservation} from '../src/account-allowance.ts';
@@ -97,4 +97,25 @@ test('rework receipts deduplicate after Stop and changed request identities fail
   const h=await fixture(t);h.store.put('run',{...h.run,pausedAt:at});const receipt=h.engine.requestRework(h.run.id,'verify',h.input,OWNER);await h.engine.cancel(h.run.id,'Synthetic owner stopped.',OWNER);
   assert.deepEqual(h.engine.requestRework(h.run.id,'verify',h.input,OWNER),receipt);assert.equal(h.engine.run(h.run.id).status,'cancelled');assert.equal(h.tasks.length,0);assert.throws(()=>h.engine.requestRework(h.run.id,'verify',{...h.input,note:'Different findings.'},OWNER),code('IDEMPOTENCY_CONFLICT'));
   assert.equal(configuredReworkTarget(h.engine.run(h.run.id),'verify'),undefined);assert.equal(h.store.events({runId:h.run.id}).filter(event=>event.type==='stage.rework_requested').length,1);
+});
+
+test('rework revokes every affected browser grant without exposing an earlier pending grant',async t=>{
+  const h=await fixture(t),project=structuredClone(h.project);project.revision=2;const qa=project.roles.find(role=>role.id==='qa')!;qa.tools.push('browser.use');qa.browser={origins:['http://127.0.0.1:4567']};h.store.put('project',project);
+  const grant={id:'first-pending-grant',stageId:'verify',roleId:'qa',afterAttemptId:'old-verify',projectRevision:2,browser:qa.browser,actor:OWNER.name,at,note:'Synthetic explicit next-attempt browser choice.'};
+  h.engine.authorizeBrowserContinuation(h.run.id,grant,OWNER);h.engine.authorizeBrowserContinuation(h.run.id,{...grant,id:'second-pending-grant'},OWNER);assert.equal(pendingBrowserContinuation(h.engine.run(h.run.id),'verify')?.id,'second-pending-grant');
+  const run=h.engine.run(h.run.id);run.browserContinuations!.push({...grant,id:'unrelated-grant',stageId:'retained',roleId:'development',afterAttemptId:'old-retained'});h.store.put('run',run);
+  const result=h.engine.requestRework(h.run.id,'verify',h.input,OWNER,{deferDispatch:true});assert.ok(result.browserContinuations!.slice(0,2).every(value=>value.revokedAt));assert.equal(result.browserContinuations![2].revokedAt,undefined);assert.equal(pendingBrowserContinuation(result,'verify'),undefined);assert.deepEqual(result.snapshot,h.run.snapshot);assert.equal(h.tasks.length,0);
+});
+
+test('rework termination proof must match every recorded assignment reference and an ended state',async t=>{
+  for(const variant of ['matched','issue','task','agent','runtime','provider','active-status','unassigned-with-ref','unassigned-empty'] as const)await t.test(variant,async sub=>{
+    const h=await fixture(sub),run=h.engine.run(h.run.id);run.stages[2].attempts[0].ref={provider:'multica',issueId:'synthetic-actual-issue',externalId:'synthetic-actual-task',agentId:'synthetic-actual-agent',runtimeId:'synthetic-actual-runtime'};
+    const record={id:'old-verify',projectId:h.project.id,runId:run.id,stageId:'verify',status:'completed',cleanupConfirmed:true,issueId:'synthetic-actual-issue',taskId:'synthetic-actual-task',agentId:'synthetic-actual-agent',runtimeId:'synthetic-actual-runtime'};
+    if(variant==='provider')run.stages[2].attempts[0].ref!.provider='codex';if(variant==='issue')record.issueId='another-issue';if(variant==='task')record.taskId='another-task';if(variant==='agent')record.agentId='another-agent';if(variant==='runtime')record.runtimeId='another-runtime';if(variant==='active-status')record.status='running';
+    if(variant.startsWith('unassigned')){record.status='not_dispatched';delete (record as Partial<typeof record>).issueId;delete (record as Partial<typeof record>).taskId;if(variant==='unassigned-empty')delete run.stages[2].attempts[0].ref;}
+    h.store.put('run',run);h.store.put('multica-execution',record);
+    if(variant==='matched'||variant==='unassigned-empty'){h.engine.requestRework(run.id,'verify',h.input,OWNER,{deferDispatch:true});assert.equal(h.engine.run(run.id).stages[1].status,'queued');}
+    else{assert.throws(()=>h.engine.requestRework(run.id,'verify',h.input,OWNER),code('EXTERNAL_RECONCILIATION_REQUIRED'));assert.deepEqual(h.engine.run(run.id),run);assert.equal(h.store.list('run-rework-receipt').length,0);assert.equal(h.store.list('rework-guidance').length,0);}
+    assert.equal(h.tasks.length,0);
+  });
 });
