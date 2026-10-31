@@ -149,8 +149,8 @@ export class Workspaces {
     demand(paths.length<=10000,'VERIFICATION_INPUT_LIMIT','This verification input exceeds 10,000 source paths.',409);
     const entries:VerificationEntry[]=[],excluded:VerificationManifest['excluded']=[];let total=0;
     for(const relative of paths){
-      demand(safeRelative(relative),'VERIFICATION_UNSAFE_PATH','Prepared source has an unsafe path.',409);
       if(privatePath(relative)){demand(!tracked.has(relative),'VERIFICATION_PRIVATE_INPUT','Tracked private or runtime state cannot enter a verification copy.',409);excluded.push({path:relative,reason:'private-runtime'});continue;}
+      demand(safeRelative(relative),'VERIFICATION_UNSAFE_PATH','Prepared source has an unsafe path.',409);
       const filename=path.join(root,relative),file=await lstat(filename).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;});
       if(!file){if(committed.has(relative))entries.push({path:relative,kind:'deleted',tracked:true});continue;}
       if(file.isSymbolicLink()){

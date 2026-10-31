@@ -7,6 +7,7 @@ Keep the existing workbench and inspectors. The current-work card identifies the
 | State | Primary action | Secondary interaction |
 | --- | --- | --- |
 | Failed step / healthy account hold | Retry step / Continue step | Optional note; Stop |
+| Failed verification with a responsible predecessor | Retry step | Return findings to the named predecessor after entering concrete findings; retains Pause |
 | External cleanup unconfirmed | Retry step performs the check first | Check again or open external task if confirmation fails |
 | Real account uncertainty or near-limit risk | Approve one bounded step | Refresh; optional note; Stop |
 | Account exhausted | Refresh, with reset time | Stop |
@@ -16,6 +17,10 @@ Keep the existing workbench and inspectors. The current-work card identifies the
 | Stopped / completed | Open the recorded result | Historical recovery and external state in details; no inherited pending-work action |
 
 A requested continuation changes its button to Checking execution, then Continuing step. No fictional progress is shown. When a check cannot complete, the same section explains what remains unknown and offers Check again. Keep the note, selection and confirmed receipt through refresh failure.
+
+The failed verifier's ordinary recovery section also names its configured rework destination. Returning findings uses the same note and receipt behavior in project/global goal and execution inspection. It queues only that destination and dependent steps, keeps earlier attempts and does not clear Pause. If a retained recovery was previously shown outside the current decision round, keep its existing note when presenting the stage actions. The destination receives new findings after a prior acceptance; the failed verifier's provider and integrity errors remain separate historical observations.
+
+An accepted write exposes Stop immediately while its observation is pending. If Stop cannot be confirmed, name that failed control beside the saved continuation and keep Stop available. A late older refresh error cannot replace the Stop result.
 
 An owner Stop wins over an old recovery phase in every list, counter and status badge. The goal/execution detail retains the reason, a read-only Stop confirmation, earlier attempts and actual external-cleanup uncertainty without treating the stopped task as awaiting retry. A completed execution does not display a Stop confirmation. A new explicit continuation receives its own current recovery identity; do not erase or rewrite the old recovery to fix the display.
 

@@ -15,7 +15,7 @@ import type {KnowledgeLocator} from './knowledge-context-types.ts';
 import {knowledgeContextSummary} from './knowledge-context.ts';
 import type {BrowserRuntime,BrowserObservation} from './browser-runtime.ts';
 
-export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;cancelAcknowledgedAt?:string;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null};allowanceExecutionId?:string;allowanceFinishedAt?:string;allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING';browser?:BrowserObservation};
+export type ExecutionRecord={id:string;projectId:string;runId:string;stageId:string;issueId?:string;taskId?:string;agentId?:string;runtimeId?:string;status:string;cleanupConfirmed:boolean;createdAt:string;updatedAt:string;error?:string;daemon?:DaemonIdentity;usage?:Usage;cancelAcknowledgedAt?:string;issueState?:string;issueDesiredState?:'done'|'cancelled';issueSyncError?:string;rejection?:{code:string;status?:number};verification?:{workspaceId:string;manifestHash:string;scope:VerificationScopeProof;check?:VerificationCheck;observationError?:string};timeout?:{configuredSeconds:number;observationDeadlineSeconds:number;runtimeMaxSeconds:null};allowanceExecutionId?:string;allowanceFinishedAt?:string;allowanceFinishError?:'ACCOUNT_OBSERVATION_PENDING';browser?:BrowserObservation};
 export type ReconcileOptions={signal?:AbortSignal;cancelIfRunning?:boolean};
 type ReconcileResult=ExecutionRecord&{canRetry:boolean};
 type Reconciliation={controller:AbortController;cancelIfRunning:boolean;promise:Promise<ReconcileResult>};
@@ -172,7 +172,8 @@ export class PlatformExecution {
         if(isMulticaTaskTerminal(task)){
           if(task.status==='completed'&&task.result!==undefined&&task.result!==null){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);request.onEvent({type:'cleanup',message:'Completed external execution confirmed.',ref,data:{confirmed:true}});await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);await readMessages(task);return{text:taskResultText(task,messages),usage:record.usage};}
           if(!task.started_at||task.result!==undefined&&task.result!==null||await this.inspect(()=>this.platform.confirmDaemonIdle(record.daemon),signal)){record.cleanupConfirmed=true;this.platform.engine.store.put('multica-execution',record);}
-          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent,signal);await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent);}
+          record.error=task.error??task.failure_reason??'The external task did not deliver a verified result.';this.platform.engine.store.put('multica-execution',record);
+          if(record.cleanupConfirmed){await this.syncIssue(record,'cancelled',request.onEvent,signal);await this.finishAccountExecution(record,request.onEvent);await this.checkVerification(record,request.onEvent,false);await readMessages(task);}
           throw new AppError(record.cleanupConfirmed?'MULTICA_TASK_FAILED':'EXTERNAL_RECONCILIATION_REQUIRED',task.error??task.failure_reason??'The external task did not deliver a verified result.',409);
         }
         if(!cancelRequested&&request.signal.aborted){
@@ -221,12 +222,13 @@ export class PlatformExecution {
       const latest=this.platform.engine.store.get<ExecutionRecord>('multica-execution',record.id)??record;latest.allowanceFinishedAt=record.allowanceFinishedAt;if(record.allowanceFinishError)latest.allowanceFinishError=record.allowanceFinishError;else delete latest.allowanceFinishError;this.platform.engine.store.put('multica-execution',latest);
     })().finally(()=>this.accountFinishes.delete(record.id));this.accountFinishes.set(record.id,finish);await finish;
   }
-  private async checkVerification(record:ExecutionRecord,onEvent?:(event:AdapterEvent)=>void){
-    if(!record.verification||record.verification.check)return;
-    const check=await this.platform.workspaces.checkVerification(record.verification.workspaceId);record.verification.check=check;this.platform.engine.store.put('multica-execution',record);
-    await this.platform.workspaces.disposeVerification(record.verification.workspaceId);
-    onEvent?.({type:'verification.checked',message:check.unchanged?'Verification finished with the prepared source unchanged; the disposable copy has been removed.':'Verification changed prepared source; its result cannot satisfy independent review.',data:check});
-    demand(check.unchanged,'VERIFICATION_SOURCE_MUTATED','The verification task changed prepared source. Its result was rejected; retry independent verification or return the change to implementation.',409);
+  private async checkVerification(record:ExecutionRecord,onEvent?:(event:AdapterEvent)=>void,requireUnchanged=true){
+    if(!record.verification)return;
+    try{
+    const cached=record.verification.check,check=cached??await this.platform.workspaces.checkVerification(record.verification.workspaceId);
+    if(!cached){record.verification.check=check;this.platform.engine.store.put('multica-execution',record);await this.platform.workspaces.disposeVerification(record.verification.workspaceId);onEvent?.({type:'verification.checked',message:check.unchanged?'Verification finished with the prepared source unchanged; the disposable copy has been removed.':check.errorCode?'Source integrity could not be established; this attempt supplies no independent verification evidence.':'Verification changed prepared source; its result cannot satisfy independent review.',data:check});}
+    if(requireUnchanged){demand(!check.errorCode,'VERIFICATION_INTEGRITY_UNAVAILABLE','Source integrity could not be established. Inspect the retained integrity observation before independent verification; no source change is claimed.',409);demand(check.unchanged,'VERIFICATION_SOURCE_MUTATED','The verification task changed prepared source. Its result was rejected; retry independent verification or return the change to implementation.',409);}
+    }catch(error){if(requireUnchanged)throw error;record.verification.observationError=error instanceof AppError?error.code:'VERIFICATION_OBSERVATION_FAILED';this.platform.engine.store.put('multica-execution',record);onEvent?.({type:'verification.unavailable',message:'Source integrity observation or copy cleanup remains unavailable; the provider failure is retained separately.',data:{code:record.verification.observationError}});}
   }
   private async finishIssue(id:string,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void){const record=this.platform.engine.store.get<ExecutionRecord>('multica-execution',id);if(record)await this.syncIssue(record,state,onEvent);}
   private async syncIssue(record:ExecutionRecord,state:'done'|'cancelled',onEvent?:(event:AdapterEvent)=>void,signal?:AbortSignal){
@@ -290,14 +292,15 @@ export class PlatformExecution {
     demand(task,'EXTERNAL_TASK_UNCONFIRMED','The provider has not confirmed an unambiguous task for this assignment.',409);
     this.taskScope(record,task);
     checkSignal(signal);record.taskId=task.id;record.status=task.status;if(!isMulticaTaskTerminal(task))record.cleanupConfirmed=false;record.updatedAt=at();
+    if(isMulticaTaskTerminal(task)&&task.status!=='completed')record.error=task.error??task.failure_reason??'The external task did not deliver a verified result.';
     const usage=multicaUsage(task.usage);if(usage)this.meter(record,usage);
     if(isMulticaTaskTerminal(task)&&(!task.started_at||task.result!==undefined&&task.result!==null||await this.inspect(()=>this.platform.confirmDaemonIdle(record.daemon),signal)))record.cleanupConfirmed=true;
     checkSignal(signal);
     this.platform.engine.store.put('multica-execution',record);
     if(!isMulticaTaskTerminal(task)&&job.cancelIfRunning&&!record.cancelAcknowledgedAt){record.status='cancel_requested';record.updatedAt=at();this.platform.engine.store.put('multica-execution',record);const acknowledged=await this.platform.client.cancelTask(record.issueId,task.id,{signal});checkSignal(signal);this.taskScope(record,acknowledged);demand(acknowledged.id===task.id,'EXTERNAL_TASK_SCOPE','Cancellation acknowledged a different task.',409);record.cancelAcknowledgedAt=at();this.platform.engine.store.put('multica-execution',record);}
-    if(record.cleanupConfirmed){await this.inspect(()=>this.finishAccountExecution(record),signal);await this.inspect(()=>this.checkVerification(record),signal);}
+    if(record.cleanupConfirmed){await this.inspect(()=>this.finishAccountExecution(record),signal);await this.inspect(()=>this.checkVerification(record,undefined,false),signal);}
     if(record.cleanupConfirmed&&task.status!=='completed')await this.syncIssue(record,'cancelled',undefined,signal);
-    this.platform.engine.store.event({projectId:record.projectId,runId,stageId,type:'multica.reconciled',actor:'local-owner',message:record.cleanupConfirmed?'External task termination confirmed; prior results remain available for review.':'External task state observed; termination is not yet confirmed.',data:{taskId:task.id,status:task.status,cleanupConfirmed:record.cleanupConfirmed}});
+    this.platform.engine.store.event({projectId:record.projectId,runId,stageId,type:'multica.reconciled',actor:'local-owner',message:record.cleanupConfirmed&&task.status!=='completed'&&record.error?'External task ended with a provider failure: '+record.error:record.cleanupConfirmed?'External task termination confirmed; prior results remain available for review.':'External task state observed; termination is not yet confirmed.',data:{taskId:task.id,status:task.status,cleanupConfirmed:record.cleanupConfirmed,...(task.status!=='completed'&&record.error?{providerError:record.error}:{}),...(record.verification?.check?{verification:record.verification.check}:{})}});
     return{...record,canRetry:record.cleanupConfirmed};
   }
 }

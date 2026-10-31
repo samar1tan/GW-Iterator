@@ -60,6 +60,16 @@ export class WorkRecovery {
     if(options.idempotencyKey){record.idempotencyKey=options.idempotencyKey;record.inputHash=options.inputHash;}
     if(note)record.note=note.trim();goal.workRecoveryHistory??=[];goal.workRecoveryHistory.push(record);this.context.save(goal,'work.recovery_checking');return goal;
   }
+  trackRework(goal:Intake,run:Run,stageId:string,note:string):void{
+    demand(!this.closed&&!['completed','stopped','clarification'].includes(goal.status),'GOAL_CLOSED','Continue the supervising task before returning findings.',409);
+    demand(!workRecoveryPending(goal),'RECOVERY_IN_PROGRESS','Another task recovery is already being checked.',409);
+    demand(!this.context.active(goal.id)||goal.status==='dispatched','EXECUTION_ACTIVE','Let the current coordinator decision finish before returning findings.',409);
+    demand(!this.cleanup(goal),'EXTERNAL_RECONCILIATION_REQUIRED','Confirm the task family has ended before returning findings.',409);
+    const stage=run.stages.find(value=>value.stageId===stageId);demand(stage&&this.context.family(goal).some(value=>value.id===run.id),'PROJECT_SCOPE','Return findings within the supervising task.',403);
+    const timestamp=new Date().toISOString();goal.controlRevision=(goal.controlRevision??0)+1;
+    const record:WorkRecoveryRecord={id:randomUUID(),trigger:'manual',phase:'retrying',runId:run.id,stageId,attemptId:stage.attempts.at(-1)?.id,runControlRevision:run.controlRevision??0,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision,startedAt:timestamp,deadlineAt:new Date(Date.now()+60000).toISOString(),nextAt:timestamp,checks:0,code:'REWORKING_STEP',note};
+    goal.workRecoveryHistory??=[];goal.workRecoveryHistory.push(record);this.context.save(goal,'work.rework_requested');
+  }
   tick(){
     if(this.closed)return;
     for(const stored of this.context.all()){
