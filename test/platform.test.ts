@@ -781,3 +781,13 @@ test('explicit coordinator reconciliation retains a historical unaccepted prepar
   const requests=h.state.requests.length,result=await h.execution.reconcile(run.id,'supervise');assert.equal(result.stageId,'decision-1');assert.equal(result.cleanupConfirmed,true);assert.equal(result.canRetry,true);assert.equal(h.state.issuePosts,0);assert.equal(h.state.requests.length,requests);assert.deepEqual(h.engine.run(run.id),run);assert.deepEqual(h.engine.store.get('multica-execution',record.id),record);
   h.engine.store.put('multica-execution',{...record,id:'synthetic-ambiguous-preparation',stageId:'decision-2'});await assert.rejects(h.execution.reconcile(run.id,'supervise'),code('EXTERNAL_TASK_SCOPE'));assert.equal(h.state.issuePosts,0);
 });
+
+
+test('connected workers without browser authority receive the same native-launch boundary without a new tool grant',async t=>{
+  for(const leased of [true,false])await t.test(leased?'execution lease':'plain task context',async sub=>{
+    const h=await fixture(sub),input=h.input(),started=await h.execution.agent.start({...input,...(!leased?{onTool:undefined}:{})});await started.completion;
+    const issue=h.state.requests.find(request=>request.method==='POST'&&request.path==='/api/issues')!,worker=h.state.agents.get(started.ref.agentId!)!,instructions=leased?worker.instructions!:String(issue.body.description);
+    assert.match(instructions,/Do not launch Chrome, Chromium or Playwright browser binaries through native command tools/);assert.match(instructions,/If the tool is absent, complete permitted checks/);
+    assert.equal(input.role.tools.includes('browser.use'),false);assert.equal(h.execution.records(input.runId)[0].browser,undefined);
+  });
+});

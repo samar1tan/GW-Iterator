@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {executionFailureIdentity} from '../execution-evidence.ts';
 import {ACCOUNT_ALLOWANCE_TTL_MS,normalizeAccountObservation,unavailableAccountObservation} from '../account-allowance.ts';
-import {BROWSER_TOOL_DEFINITION} from '../browser-policy.ts';
+import {BROWSER_EXECUTION_GUIDANCE,BROWSER_TOOL_DEFINITION} from '../browser-policy.ts';
 import type {AccountAllowanceObservation} from '../account-allowance-types.ts';
 import type {ControlTool, CodexInfo, ExecutionRef, ModelInfo, TaskOutput, Usage} from '../contracts.ts';
 import type {AdapterEvent, CodexAdapter, CodexExecution, CodexExecutionInput, CodexGoalExecution, CodexGoalInput, CodexGoalResult, CodexNativeGoal} from './types.ts';
@@ -773,7 +773,7 @@ class LocalCodexAdapter implements CodexAdapter {
         skillSources.push(`Selected installed skill $${selected.name} (${selected.path}):\n${source}`);
       }
     }
-    const instructions = `${input.role.instructions}\n\nNative goal: ${input.objective}\nTask context:\n${input.prompt}\n\nThis is a supervised native Codex goal. Its native goal state governs continuation across turns; a single completed turn does not complete the goal. Use the authorized GWI control tools only within the current project. Await actual child outcomes before claiming success, and use native update_goal only when the corresponding native status is supported by observed evidence. Never pause a goal automatically or request expanded permissions. Native tools remain governed by this role's sandbox.\n\n${skillSources.join('\n\n')}`;
+    const instructions = `${input.role.instructions}\n\n${BROWSER_EXECUTION_GUIDANCE}\n\nNative goal: ${input.objective}\nTask context:\n${input.prompt}\n\nThis is a supervised native Codex goal. Its native goal state governs continuation across turns; a single completed turn does not complete the goal. Use the authorized GWI control tools only within the current project. Await actual child outcomes before claiming success, and use native update_goal only when the corresponding native status is supported by observed evidence. Never pause a goal automatically or request expanded permissions. Native tools remain governed by this role's sandbox.\n\n${skillSources.join('\n\n')}`;
     const model = input.role.model ?? this.options.defaultModel;
     const response = await beforeStart(this.request('thread/start', {
       cwd: input.workspace, runtimeWorkspaceRoots: [input.workspace], sandbox: input.role.sandbox, approvalPolicy: 'never',
@@ -868,7 +868,7 @@ class LocalCodexAdapter implements CodexAdapter {
     }
     const tools = new Set(input.role.tools);
     if ([...tools].some(tool => !Object.hasOwn(TOOL_DEFINITIONS, tool))) throw new Error('The role includes an unsupported GWI control tool.');
-    const instructions = `${input.role.instructions}\n\nComplete only the supplied task within its approved scope and permissions. Use the selected GWI tools only for the current project; they do not grant additional native filesystem or network permissions. Native Codex tools remain governed by the configured sandbox. Report a blocker instead of requesting permission expansion. Return a final JSON object matching the supplied TaskOutput schema; use null for an artifact path or URL that is absent.`;
+    const instructions = `${input.role.instructions}\n\n${BROWSER_EXECUTION_GUIDANCE}\n\nComplete only the supplied task within its approved scope and permissions. Use the selected GWI tools only for the current project; they do not grant additional native filesystem or network permissions. Native Codex tools remain governed by the configured sandbox. Report a blocker instead of requesting permission expansion. Return a final JSON object matching the supplied TaskOutput schema; use null for an artifact path or URL that is absent.`;
     const model = input.role.model ?? this.options.defaultModel;
     const response = await beforeStart(this.request('thread/start', {
       cwd: input.workspace, runtimeWorkspaceRoots: [input.workspace], sandbox: input.role.sandbox, approvalPolicy: 'never',
