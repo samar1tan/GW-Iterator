@@ -314,7 +314,7 @@ export class Engine {
     const state=run.stages.find(stage=>stage.stageId===input.stageId);demand(state,'STAGE_NOT_FOUND','Choose a step in this execution.',404);
     demand(input.attemptId===undefined||state.attempts.at(-1)?.id===input.attemptId,'RECOVERY_CONFLICT','This step has a different attempt. Read its current state before continuing.',409);
     demand(input.controlRevision===undefined||(run.controlRevision??0)===input.controlRevision,'RECOVERY_CONFLICT','The execution was stopped or changed. Read its current state before continuing.',409);
-    const generation=run.controlRevision??0,fingerprint=(value:Run)=>digest({status:value.status,iteration:value.iteration,pausedAt:value.pausedAt,controlRevision:value.controlRevision??0,limitRevision:value.limitRevisions?.length??0,policy:runPolicy(value),resourceMode:value.resourceMode,stages:value.stages.map(stage=>[stage.stageId,stage.status,stage.attempts.length,stage.attempts.at(-1)?.id])}),expected=fingerprint(run);
+    const generation=run.controlRevision??0,fingerprint=(value:Run)=>digest({recoveryInput:this.recoveryInputIdentity(value),status:value.status,iteration:value.iteration,pausedAt:value.pausedAt,controlRevision:value.controlRevision??0,limitRevision:value.limitRevisions?.length??0,policy:runPolicy(value),resourceMode:value.resourceMode,stages:value.stages.map(stage=>[stage.stageId,stage.status,stage.attempts.length,stage.attempts.at(-1)?.id])}),expected=fingerprint(run);
     const controller=new AbortController(),signal=AbortSignal.any([controller.signal,AbortSignal.timeout(15000)]);
     const checkState=()=>{signal.throwIfAborted();const current=this.run(id);demand(!this.closed&&!current.cancelRequested&&current.status!=='cancelled'&&(current.controlRevision??0)===generation,'RECOVERY_CANCELLED','This continuation was stopped before replacement work could start.',409);demand(fingerprint(current)===expected,'RECOVERY_CONFLICT','The step or its recorded basis changed during the check. Read the current decision before continuing.',409);};
     this.accountContinuations.add(id);
@@ -348,13 +348,21 @@ export class Engine {
   private async resolutionCheck<T>(operation:()=>Promise<T>,signal:AbortSignal):Promise<T>{
     signal.throwIfAborted();return new Promise<T>((resolve,reject)=>{const abort=()=>reject(signal.reason);signal.addEventListener('abort',abort,{once:true});Promise.resolve().then(()=>{signal.throwIfAborted();return operation();}).then(resolve,reject).finally(()=>signal.removeEventListener('abort',abort));});
   }
+  private recoveryInputIdentity(run:Run){
+    const id=this.intake?.allowance?.(run.id)?.id,goal=id?this.store.get<Intake>('intake',id):undefined;
+    return goal?digest([goal.id,goal.routerRunId,goal.controlRevision??0,goal.workRecoveryHistory?.at(-1)?.id,['completed','stopped'].includes(goal.status)]):undefined;
+  }
   private pendingAttachmentRecovery(run:Run,stageId:string){
-    const goalId=this.intake?.allowance?.(run.id)?.id,goal=goalId?this.store.get<Intake>('intake',goalId):undefined,record=goal?.workRecoveryHistory?.at(-1),attempt=run.stages.find(stage=>stage.stageId===stageId)?.attempts.at(-1);
-    if(!goal||['completed','stopped'].includes(goal.status)||!record?.attachments?.length||record.phase!=='needs_input'||record.routerRunId!==goal.routerRunId||record.controlRevision!==(goal.controlRevision??0)||record.runId!==run.id||record.stageId!==stageId||record.runControlRevision!==(run.controlRevision??0)||!attempt||record.attemptId!==attempt.id)return;
+    const goalId=this.intake?.allowance?.(run.id)?.id,goal=goalId?this.store.get<Intake>('intake',goalId):undefined,record=goal?.workRecoveryHistory?.at(-1),attempts=run.stages.find(stage=>stage.stageId===stageId)?.attempts??[];
+    if(!goal||['completed','stopped'].includes(goal.status)||!record?.attachments?.length||record.phase!=='needs_input'||record.routerRunId!==goal.routerRunId||record.controlRevision!==(goal.controlRevision??0)||record.runId!==run.id||record.stageId!==stageId||record.runControlRevision!==(run.controlRevision??0)||!record.attemptId)return;
+    const index=attempts.findIndex(attempt=>attempt.id===record.attemptId);if(index<0)return;
+    // Only a matching, unexecuted admission chain can retain the accepted instruction.
+    if(attempts.slice(index+1).some(attempt=>attempt.admissionHeld!==true||attempt.status!=='failed'||!attempt.failureCode?.startsWith('ACCOUNT_')||attempt.nativeDispatched===true||attempt.nativeDispatchState&&attempt.nativeDispatchState!=='not_dispatched'||Object.values(attempt.ref??{}).some(Boolean)||record.browserContinuation&&attempt.browserContinuationId!==record.browserContinuation.id||!record.attachments!.every(item=>attempt.attachments?.some(value=>JSON.stringify(value)===JSON.stringify(item)))))return;
     return record;
   }
   private async prepareAccountContinuation(id:string,input:ContinueRunInput,actor:Actor,generation:number,prepared:{recovery?:RunRecovery;checkState?:()=>void;checkpoint?:(run:Run)=>void}={}):Promise<Run>{
-    const checkGeneration=()=>{prepared.checkState?.();demand((this.run(id).controlRevision??0)===generation&&!this.run(id).cancelRequested,'RECOVERY_CANCELLED','This continuation was stopped while checking account availability.',409);};
+    const recoveryIdentity=this.recoveryInputIdentity(this.run(id));
+    const checkGeneration=()=>{prepared.checkState?.();demand((this.run(id).controlRevision??0)===generation&&!this.run(id).cancelRequested,'RECOVERY_CANCELLED','This continuation was stopped while checking account availability.',409);demand(this.recoveryInputIdentity(this.run(id))===recoveryIdentity,'RECOVERY_CONFLICT','The accepted recovery instruction changed during account approval. Review the current instruction before continuing.',409);};
     checkGeneration();
     const pendingInput=this.pendingAttachmentRecovery(this.run(id),input.stageId);if(!input.note?.trim()&&pendingInput?.note)input={...input,note:pendingInput.note};
     if(!this.accountAllowances&&!this.accountMode(this.run(id))){
