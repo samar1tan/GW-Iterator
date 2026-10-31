@@ -73,6 +73,7 @@ export type Attempt = {
   provider?:'codex'|'multica'|'github'|'manual';
   nativeConfiguration?: {model?:string; modelProvider?:string; reasoningEffort?:string|null; serviceTier?:string|null};
   knowledgeContextId?:string;
+  browserContinuationId?:string;
   review?: {decision: 'accept' | 'revise'; note: string; actor: string; at: string};
 };
 export type StageRun = {stageId: string; status: WorkStatus; attempts: Attempt[];resumeChildRunId?:string;childInputInvalidated?:boolean;allowanceHold?:{code:string;assessmentKey?:string}};
@@ -92,8 +93,25 @@ export type Run = {
   approvedPolicy?: RunPolicy;
   resourceMode?:'account'|'tokens';
   accountApprovals?:AccountStepApproval[];controlRevision?:number;
+  browserContinuations?:BrowserContinuation[];
   limitRevisions?:{revision:number;policy:RunPolicy;note:string;actor:string;at:string}[];
 };
+/** Explicit owner authority for one subsequent attempt; the run snapshot stays frozen. */
+export type BrowserContinuation={id:string;stageId:string;roleId:string;afterAttemptId:string;projectRevision:number;browser:{origins:string[]};actor:string;at:string;note:string;revokedAt?:string};
+/** An account hold before dispatch does not consume the owner's browser authority. */
+export function pendingBrowserContinuation(run:Run,stageId:string):BrowserContinuation|undefined {
+  const attempts=run.stages.find(stage=>stage.stageId===stageId)?.attempts??[];
+  return run.browserContinuations?.findLast(binding=>{
+    if(binding.stageId!==stageId||binding.revokedAt)return false;
+    const index=attempts.findIndex(attempt=>attempt.id===binding.afterAttemptId);
+    return index>=0&&attempts.slice(index+1).every(attempt=>attempt.browserContinuationId===binding.id&&attempt.admissionHeld===true);
+  });
+}
+export function attemptRole(run:Run,stageId:string,attempt?:Attempt):RoleProfile|undefined {
+  const stage=run.snapshot.pipeline.stages.find(value=>value.id===stageId),role=run.snapshot.project.roles.find(value=>value.id===stage?.roleId);
+  const binding=attempt?.browserContinuationId&&run.browserContinuations?.find(value=>value.id===attempt.browserContinuationId&&value.stageId===stageId&&value.roleId===role?.id);
+  return role&&binding?{...role,tools:[...role.tools.filter(tool=>tool!=='browser.use'),'browser.use'],browser:structuredClone(binding.browser)}:role;
+}
 export function runPolicy(run:Run):RunPolicy{return run.limitRevisions?.at(-1)?.policy??run.approvedPolicy??run.snapshot.pipeline.policy;}
 export type AccountStepApproval={stageId:string;assessmentKey:string;accountSnapshotId:string;at:string;actor:string;used?:boolean;revoked?:boolean};
 export type RunAllowance = {policy:RunPolicy;usedTokens:number;reservedTokens:number;remainingTokens?:number;usageComplete:boolean};
@@ -138,10 +156,12 @@ export type Intake = {
 };
 export type WorkRecoveryRecord = {
   note?:string;
+  idempotencyKey?:string;inputHash?:string;browserContinuation?:BrowserContinuation;
   id:string;trigger:'manual'|'automatic';phase:'checking'|'backoff'|'retrying'|'resuming'|'completed'|'needs_input'|'cancelled';
   runId:string;stageId:string;attemptId?:string;routerRunId:string;controlRevision:number;runControlRevision?:number;
   startedAt:string;deadlineAt:string;nextAt:string;checks:number;code:string;error?:string;retriedAt?:string;endedAt?:string;
 };
+export type WorkResumeInput={note?:string;idempotencyKey?:string;controlRevision?:number;target?:{runId:string;stageId:string;attemptId:string;runControlRevision:number};browserProjectRevision?:number};
 export type GoalRecoveryPolicy = {autoRetry:boolean; maxAttempts?:number; backoffSeconds:number; allowedFallbackModels:string[]};
 /** Numeric fields describe legacy snapshots; they do not constrain current work. */
 export type IntakePolicy = {maxRounds?: number; maxParallel?: number; maxTotalTokens?: number; maxElapsedSeconds?: number; recovery?:GoalRecoveryPolicy;smartRetry?:boolean};
