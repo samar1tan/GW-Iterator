@@ -2,7 +2,7 @@ import {CONVERSATION_DATA_RULE} from './intake-context.ts';
 import {attemptRole,budgetTokens,configuredReworkTarget,pendingBrowserContinuation,runPolicy} from './contracts.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import {stat} from 'node:fs/promises';
-import type {Actor,Attempt,AuditEvent,BrowserContinuation,ContinueRunInput,ControlTool,GoalAllowance,Intake,KnowledgeEntry,KnowledgeSyncResult,LessonLifecycleInput,Pipeline,Project,ProjectBindings,ProjectDetail,ProjectOverview,Proposal,ResolveRunInput,RoleProfile,Run,RunAllowance,RunPolicy,RunRecovery,RunResolution,RunReworkInput,Stage,StartRunInput,TaskOutput,Usage,WorkStatus,WorkflowSelection} from './contracts.ts';
+import type {Actor,Attempt,AuditEvent,BrowserContinuation,ContinueRunInput,ControlTool,GoalAllowance,Intake,KnowledgeEntry,KnowledgeSyncResult,LessonLifecycleInput,Pipeline,Project,ProjectBindings,ProjectDetail,ProjectOverview,Proposal,ResolveRunInput,RoleProfile,Run,RunAllowance,RunPolicy,RunRecovery,RunResolution,RunReworkInput,Stage,StartRunInput,TaskOutput,Usage,WorkRecoveryRecord,WorkStatus,WorkflowSelection} from './contracts.ts';
 import type {CodexAdapter,GithubAdapter,AdapterEvent,AgentExecutor} from './adapters/types.ts';
 import type {GoalPlanner} from './goal-planner.ts';
 import {Store} from './store.ts';
@@ -352,19 +352,23 @@ export class Engine {
     const id=this.intake?.allowance?.(run.id)?.id,goal=id?this.store.get<Intake>('intake',id):undefined;
     return goal?digest([goal.id,goal.routerRunId,goal.controlRevision??0,goal.workRecoveryHistory?.at(-1)?.id,['completed','stopped'].includes(goal.status)]):undefined;
   }
-  private pendingAttachmentRecovery(run:Run,stageId:string){
+  private pendingWorkRecoveryInput(run:Run,stageId:string){
     const goalId=this.intake?.allowance?.(run.id)?.id,goal=goalId?this.store.get<Intake>('intake',goalId):undefined,record=goal?.workRecoveryHistory?.at(-1),attempts=run.stages.find(stage=>stage.stageId===stageId)?.attempts??[];
-    if(!goal||['completed','stopped'].includes(goal.status)||!record?.attachments?.length||record.phase!=='needs_input'||record.routerRunId!==goal.routerRunId||record.controlRevision!==(goal.controlRevision??0)||record.runId!==run.id||record.stageId!==stageId||record.runControlRevision!==(run.controlRevision??0)||!record.attemptId)return;
+    if(!goal||['completed','stopped'].includes(goal.status)||!record||!['checking','backoff','retrying','needs_input'].includes(record.phase)||record.routerRunId!==goal.routerRunId||record.controlRevision!==(goal.controlRevision??0)||record.runId!==run.id||record.stageId!==stageId||record.runControlRevision!==(run.controlRevision??0)||!record.attemptId)return;
     const index=attempts.findIndex(attempt=>attempt.id===record.attemptId);if(index<0)return;
     // Only a matching, unexecuted admission chain can retain the accepted instruction.
-    if(attempts.slice(index+1).some(attempt=>attempt.admissionHeld!==true||attempt.status!=='failed'||!attempt.failureCode?.startsWith('ACCOUNT_')||attempt.nativeDispatched===true||attempt.nativeDispatchState&&attempt.nativeDispatchState!=='not_dispatched'||Object.values(attempt.ref??{}).some(Boolean)||record.browserContinuation&&attempt.browserContinuationId!==record.browserContinuation.id||!record.attachments!.every(item=>attempt.attachments?.some(value=>JSON.stringify(value)===JSON.stringify(item)))))return;
+    if(attempts.slice(index+1).some(attempt=>attempt.admissionHeld!==true||attempt.status!=='failed'||!attempt.failureCode?.startsWith('ACCOUNT_')||attempt.nativeDispatched===true||attempt.nativeDispatchState&&attempt.nativeDispatchState!=='not_dispatched'||Object.values(attempt.ref??{}).some(Boolean)||record.browserContinuation&&attempt.browserContinuationId!==record.browserContinuation.id||!(record.attachments??[]).every(item=>attempt.attachments?.some(value=>JSON.stringify(value)===JSON.stringify(item)))))return;
     return record;
+  }
+  private acceptedRecoveryNote(run:Run,stageId:string,record:WorkRecoveryRecord){
+    const guidance=this.store.get<{note:string;workRecovery?:{id:string;routerRunId:string;controlRevision:number;runControlRevision?:number;afterAttemptId?:string}}>('rework-guidance',run.id+':'+stageId),scope=guidance?.workRecovery,attempts=run.stages.find(stage=>stage.stageId===stageId)?.attempts??[],start=attempts.findIndex(attempt=>attempt.id===record.attemptId),after=attempts.findIndex(attempt=>attempt.id===scope?.afterAttemptId);
+    return scope&&scope.id===record.id&&scope.routerRunId===record.routerRunId&&scope.controlRevision===record.controlRevision&&scope.runControlRevision===record.runControlRevision&&start>=0&&after>=start?guidance!.note:record.note;
   }
   private async prepareAccountContinuation(id:string,input:ContinueRunInput,actor:Actor,generation:number,prepared:{recovery?:RunRecovery;checkState?:()=>void;checkpoint?:(run:Run)=>void}={}):Promise<Run>{
     const recoveryIdentity=this.recoveryInputIdentity(this.run(id));
     const checkGeneration=()=>{prepared.checkState?.();demand((this.run(id).controlRevision??0)===generation&&!this.run(id).cancelRequested,'RECOVERY_CANCELLED','This continuation was stopped while checking account availability.',409);demand(this.recoveryInputIdentity(this.run(id))===recoveryIdentity,'RECOVERY_CONFLICT','The accepted recovery instruction changed during account approval. Review the current instruction before continuing.',409);};
     checkGeneration();
-    const pendingInput=this.pendingAttachmentRecovery(this.run(id),input.stageId);if(!input.note?.trim()&&pendingInput?.note)input={...input,note:pendingInput.note};
+    const inputRun=this.run(id),pendingInput=this.pendingWorkRecoveryInput(inputRun,input.stageId),retainedNote=pendingInput&&this.acceptedRecoveryNote(inputRun,input.stageId,pendingInput);if(!input.note?.trim()&&retainedNote)input={...input,note:retainedNote};
     if(!this.accountAllowances&&!this.accountMode(this.run(id))){
       const value=this.store.transaction(()=>{const value=this.continueRun(id,input,actor,{deferDispatch:true});prepared.checkpoint?.(value);return value;});
       void this.tick();return value;
@@ -458,7 +462,7 @@ export class Engine {
     const inputAttachments=this.attachments.forStage(run,stage.id);
     const attempt:Attempt={...(inputAttachments.length?{attachments:inputAttachments}:{}),id:randomUUID(),number:state.attempts.length+1,iteration:run.iteration,status:stage.executor==='manual'?'waiting':'running',startedAt:now()};
     const browser=pendingBrowserContinuation(run,stage.id);
-    if(browser){attempt.browserContinuationId=browser.id;attempt.review={decision:'revise',note:browser.note,actor:browser.actor,at:browser.at};}
+    if(browser){const recovery=this.pendingWorkRecoveryInput(run,stage.id);attempt.browserContinuationId=browser.id;attempt.review={decision:'revise',note:recovery?this.acceptedRecoveryNote(run,stage.id,recovery)??browser.note:browser.note,actor:browser.actor,at:browser.at};}
     this.saveRun(run.id,value=>{const current=value.stages.find(item=>item.stageId===stage.id)!;current.attempts.push(attempt);current.status=attempt.status;delete current.resumeChildRunId;value.status=stage.executor==='manual'?'waiting':'running';},'stage.started',stage.name,stage.id);
     if(stage.executor==='manual')return;
     if(stage.executor==='pipeline'){
@@ -656,8 +660,8 @@ export class Engine {
     const state=run.stages.find(item=>item.stageId===stageId);
     demand(state&&(['failed','interrupted'].includes(state.status)||!!state.allowanceHold)&&![...this.active.values()].some(item=>item.runId===id),'INVALID_STAGE_STATE','Inspect active work before retrying.',409);
     demand(!this.unsettledOwnedExecution(id),'EXTERNAL_RECONCILIATION_REQUIRED','Confirm owned external and subordinate executions have ended before retrying.',409);
-    const pendingInput=this.pendingAttachmentRecovery(run,stageId);
-    if(pendingInput){
+    const pendingInput=this.pendingWorkRecoveryInput(run,stageId);
+    if(pendingInput?.attachments?.length){
       const recorded=new Set((state.attachmentHistory??[]).filter(row=>row.afterAttemptId===pendingInput.attemptId).flatMap(row=>row.attachments.map(item=>item.id))),unconsumed=pendingInput.attachments!.filter(item=>!recorded.has(item.id)),pinned=this.attachments.pin(run.projectId,unconsumed.map(item=>item.id));
       demand(JSON.stringify(pinned)===JSON.stringify(unconsumed),'ATTACHMENT_CORRUPT','Accepted recovery input no longer matches its recorded manifest.',409);
       attachments=this.attachments.pin(run.projectId,mergeAttachments(pinned,attachments).map(item=>item.id));
@@ -678,7 +682,7 @@ export class Engine {
       if(browser&&!current.browserContinuations?.some(value=>value.id===browser.id)){current.browserContinuations??=[];current.browserContinuations.push(structuredClone(browser));}
 
       if(attachments.length){const target=current.stages.find(item=>item.stageId===stageId)!;target.attachmentHistory??=[];target.attachmentHistory.push({id:randomUUID(),at:now(),note,attachments,afterAttemptId:target.attempts.at(-1)?.id});}
-      if(actor.kind==='human')this.store.put('rework-guidance',{id:`${id}:${stageId}`,identity:randomUUID(),note,actor:actor.name});
+      if(actor.kind==='human')this.store.put('rework-guidance',{id:`${id}:${stageId}`,identity:randomUUID(),note,actor:actor.name,...(pendingInput?{workRecovery:{id:pendingInput.id,routerRunId:pendingInput.routerRunId,controlRevision:pendingInput.controlRevision,runControlRevision:pendingInput.runControlRevision,afterAttemptId:state.attempts.at(-1)?.id}}:{})});
       else this.store.put('agent-retry-evidence',{id:retryId,runId:id,stageId,fingerprints:[...(previous?.fingerprints??[]),retryEvidence]});
       current.stages.find(item=>item.stageId===stageId)!.status='queued';delete current.stages.find(item=>item.stageId===stageId)!.allowanceHold;
       if(childId)current.stages.find(item=>item.stageId===stageId)!.resumeChildRunId=childId;

@@ -250,3 +250,21 @@ test('a superseding accepted instruction invalidates an account approval already
   const current=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER);await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-new-approval',recoveryKey:current.recoveryKey,approveAccountStep:true,accountAssessmentKey:current.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);
   assert.deepEqual(h.tasks[0].input.attachments,[second]);assert.ok(h.tasks[0].input.prompt.includes(next.note));assert.equal(h.tasks[0].input.prompt.includes(input.note),false);assert.deepEqual(h.engine.run(h.run.id).stages[4].attachmentHistory?.map(row=>row.attachments),[[second]]);
 });
+
+
+test('the latest explicitly accepted note survives another admission hold instead of reverting to the initial recovery note',async t=>{
+  for(const withFile of [false,true])for(const browser of [false,true])await t.test('file='+withFile+' browser='+browser,async sub=>{
+    const h=await fixture(sub),state=account(h,98),begin=h.engine.beginAccountExecution.bind(h.engine);let starts=0;
+    sub.mock.method(h.engine,'beginAccountExecution',async(runId:string,stageId:string,model?:string|null)=>{if(++starts===1)state.used=99;return begin(runId,stageId,model);});
+    const item=withFile?await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-note-override',draft:'synthetic-note-override',name:'context.txt',bytes:Buffer.from('Independent accepted note context.')},OWNER):undefined,input={...h.input,...(item?{attachmentIds:[item.id]}:{}),note:'INITIAL_OWNER_NOTE_A'};if(!browser)delete input.browserProjectRevision;
+    h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+    const first=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER),latest='LATEST_EXPLICIT_OWNER_NOTE_B';
+    await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-explicit-note-approval',note:latest,recoveryKey:first.recoveryKey,approveAccountStep:true,accountAssessmentKey:first.account!.key},OWNER);
+    await h.pump(()=>h.engine.run(h.run.id).stages[4].allowanceHold!==undefined&&h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');assert.equal(h.tasks.length,0);
+    const second=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER),held=h.engine.run(h.run.id).stages[4].attempts.at(-1)!;
+    await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:held.id,controlRevision:0,idempotencyKey:'synthetic-empty-note-approval',recoveryKey:second.recoveryKey,approveAccountStep:true,accountAssessmentKey:second.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);
+    assert.equal(h.tasks.length,1);assert.ok(h.tasks[0].input.prompt.includes(latest));assert.equal(h.store.get<{note:string}>('rework-guidance',h.run.id+':verify')?.note,latest);assert.deepEqual(h.tasks[0].input.attachments,item?[item]:undefined);
+    if(browser)assert.equal(h.engine.run(h.run.id).stages[4].attempts.at(-1)?.review?.note,latest);
+    assert.equal(h.engine.run(h.run.id).stages[4].attachmentHistory?.length,item?1:undefined);
+  });
+});
