@@ -25,6 +25,16 @@ The global summary is a lightweight read projection with no model work and no du
 
 Use project-qualified identities throughout. Preserve authoritative creation/continuation receipts when a refresh fails or an older observation arrives. A late mutation must not move a person away from a newer selection. A failed summary/detail read retains the last usable data with stale feedback, and never reports provider liveness from polling success alone. Changing filters or detail selection does not dispatch work.
 
+## Global connection status
+
+The upper-right header shows Multica connection health even before any project exists. Observe the existing sanitized `GET /api/platform` response after the local session is ready; project filters, request targets and selected work do not supply this status. Keep this observation independent from overview, summary, project-detail and team reads. It performs no task creation, model execution, team preparation or configuration changes.
+
+Distinguish checking, not configured, connected, connection failure, authentication failure and observation failure. A failed or malformed read must replace any earlier connected indication with an unknown/read-failed state. A later successful observation restores the actual state. Observe periodically while visible and on returning to the page, with no overlapping requests; cancel outstanding observation on teardown. Background refresh does not flash a checking state over a completed observation.
+
+Connection health means service availability and authentication only. It is not evidence of a working model, running task or accepted result. Use localized explanatory text rather than rendering raw backend errors or connection configuration. Keep the existing compact status style and accessible text at narrow widths. In the global shell the indicator is read-only and preserves the current selection; in a project it retains the existing Team navigation.
+
+The Team page keeps its independent observation and error recovery. A failed team read is labeled unavailable, not proof that the global service disconnected.
+
 ## Interface contract
 
 Keep one clear request area, a compact project filter, and work/attention/result sections. Omit redundant empty panels and prose. Surface the current outcome, stage or requested decision; raw audit events remain inside execution details. Reuse existing state-driven execution feedback and motion rules. Provide English and Simplified Chinese, keyboard operation, long-title wrapping and narrow-screen containment.
@@ -36,4 +46,5 @@ Keep one clear request area, a compact project filter, and work/attention/result
 - Verify active and attention items, owned-run deduplication, completed answers, failed/stopped states and expandable older results.
 - Verify project-scoped summary authorization, invalid/cross-project selection, stale observations, failed refresh after an acknowledged start, late receipts and draft preservation.
 - Exercise the rendered journey in both locales at desktop and narrow widths. Controlled/model-free execution is labeled separately from paid provider verification.
+- Verify the header with no projects, existing projects, global filters/details and project/global round trips. Exercise checking, unconfigured, connection/authentication failure, read failure after connected and recovery. Confirm connection observation issues only reads and keeps project Team navigation.
 - Preserve real project configuration, work and permissions. Keep fixtures, private configuration and captures local. Record independent findings and unresolved checks.
