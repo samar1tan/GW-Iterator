@@ -408,7 +408,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
   .pf-outcome-actions { justify-content: flex-end; }
 }
 @media (max-width: 760px) {
-  .pf-global-header { height: 54px; padding: 0 16px; gap: 10px; }
+  .pf-global-header { height: auto; min-height: 54px; padding: 8px 16px; gap: 8px 10px; flex-wrap: wrap; }
   .pf-header-actions { gap: 8px; flex-shrink: 0; }
   .pf-integration-status { white-space: nowrap; }
   .pf-platform .pf-project-switch { max-width: 190px; min-width: 0; width: 0; flex: 1; }
