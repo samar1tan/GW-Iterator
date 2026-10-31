@@ -137,3 +137,5 @@ Include the header-to-composer recovery shortcut, ordinary/advanced handoff, bot
 ## Retained browser continuation
 
 Opening the explicit current-browser choice retains the ordinary recovery instruction and selected files in their exact project/run/stage/attempt scope. Closing and reopening the dialog keeps that draft. A pending or failed upload blocks continuation; it does not block Stop or Cancel. The browser checkbox remains unchecked by default and is invalidated by a changed target or configuration. A returned-finding action consumes its review note and retained QA evidence only; explain and disable it while the continuation has unsent files.
+
+The selected-files control focuses and scrolls to its local attachment group. It must not replace the application hash route or leave the current project, goal or execution. Keyboard activation uses the same local focus action.
