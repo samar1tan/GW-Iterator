@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {mkdtemp,mkdir,writeFile,rm,realpath} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {setTimeout as delay} from 'node:timers/promises';
+import {Store} from '../src/store.ts';
+import {defaultRoles} from '../src/defaults.ts';
+import type {Pipeline,Project,Run} from '../src/contracts.ts';
+import type {DeliveryBundle} from '../src/delivery-review.ts';
+
+test('ordinary authenticated delivery endpoints retain scope, real human approval and PNG evidence boundaries',async t=>{
+  const temporary=await mkdtemp(path.join(tmpdir(),'gwi-delivery-http-')),directory=await realpath(temporary),data=path.join(directory,'state');await mkdir(data);
+  const store=new Store(data),at='2026-01-01T00:00:00Z',project:Project={id:'synthetic-project',revision:1,name:'Synthetic human handoff',description:'Independent model-free HTTP acceptance.',workspace:directory,repository:'',roles:defaultRoles(),knowledgeSources:[],createdAt:at,updatedAt:at};
+  const pipeline:Pipeline={id:'synthetic-flow',projectId:project.id,revision:1,name:'Synthetic external result',description:'No model worker is needed for this handoff.',roleId:'lead',policy:{},updatedAt:at,stages:[{id:'accept',name:'Inspect the external result',roleId:'lead',executor:'manual',ownerGate:true,dependsOn:[],review:false,prompt:'Record an actual external result.'}]};
+  const run:Run={id:'synthetic-run',projectId:project.id,pipelineId:pipeline.id,goal:'Inspect a synthetic external result.',baseline:'Synthetic independent input.',trigger:{kind:'human',actor:'Synthetic owner'},status:'waiting',iteration:1,mode:'once',createdAt:at,updatedAt:at,dependsOnRunIds:[],idempotencyKey:'synthetic-run',inputHash:'synthetic-input',snapshot:{project,pipeline,pipelines:[pipeline],knowledge:[]},stages:[{stageId:'accept',status:'waiting',attempts:[{id:'synthetic-attempt',number:1,iteration:1,status:'waiting',startedAt:at}]}]};
+  store.put('project',project);store.put('pipeline',pipeline);store.put('run',run);
+  const imageDirectory=path.join(data,'browser','session-synthetic');await mkdir(imageDirectory,{recursive:true});const image=path.join(imageDirectory,'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png'),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=','base64');await writeFile(image,png);
+  store.put('browser-session',{id:'synthetic-attempt',projectId:project.id,runId:run.id,stageId:'accept',workspace:directory,origins:[],status:'closed',cleanupConfirmed:true,operations:1,blockedRequests:0,updatedAt:at,screenshot:image});store.put('browser-session',{id:'foreign-attempt',projectId:'foreign-project',runId:'foreign-run',stageId:'accept',workspace:directory,origins:[],status:'closed',cleanupConfirmed:true,operations:1,blockedRequests:0,updatedAt:at,screenshot:image});store.close();
+  const reservation=createServer();await new Promise<void>(resolve=>reservation.listen(0,'127.0.0.1',resolve));const address=reservation.address();assert.ok(address&&typeof address!=='string');const port=address.port;await new Promise<void>(resolve=>reservation.close(()=>resolve()));
+  const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),child=spawn(process.execPath,['src/server.ts'],{cwd:root,env:{...process.env,GWI_DATA_DIR:data,GWI_PORT:String(port),GWI_MULTICA_CONNECTION:path.join(directory,'missing-platform-connection.json'),GWI_CODEX_BIN:path.join(directory,'no-model-executable')},stdio:'ignore'});
+  t.after(async()=>{child.kill('SIGTERM');await new Promise<void>(resolve=>child.exitCode!==null?resolve():child.once('exit',()=>resolve()));await rm(directory,{recursive:true,force:true});});
+  const origin='http://127.0.0.1:'+port;let session:Response|undefined;for(let i=0;i<100;i++){try{session=await fetch(origin+'/api/session');break;}catch{await delay(20);}}assert.ok(session?.ok,'The ordinary local server starts without model execution.');
+  const cookie=session.headers.get('set-cookie')!.split(';')[0],headers={Cookie:cookie,Origin:origin,'Content-Type':'application/json'},route=origin+'/api/runs/'+run.id+'/stages/accept/delivery';
+  assert.equal((await fetch(route)).status,401);
+  const bundle=await (await fetch(route,{headers})).json() as DeliveryBundle;assert.equal(bundle.source.status,'unavailable');assert.equal(bundle.sourceRequired,false);
+  const currentImage=await fetch(origin+'/api/runs/'+run.id+'/browser-evidence/synthetic-attempt',{headers});assert.equal(currentImage.status,200);assert.equal(currentImage.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await currentImage.arrayBuffer()),png);
+  assert.equal((await fetch(origin+'/api/runs/'+run.id+'/browser-evidence/foreign-attempt',{headers})).status,404);assert.equal((await fetch(origin+'/api/runs/'+run.id+'/browser-evidence/..%2F..%2Ftoken',{headers})).status,404);
+  const input={idempotencyKey:'synthetic-http-decision',bundleKey:bundle.key,attemptId:'synthetic-attempt',controlRevision:0,decision:'accept'};
+  const hostile=await fetch(route+'/decide',{method:'POST',headers:{...headers,Origin:'http://example.invalid'},body:JSON.stringify(input)});assert.equal(hostile.status,403);
+  const result=await fetch(route+'/decide',{method:'POST',headers,body:JSON.stringify(input)});assert.equal(result.status,200);const saved=await result.json() as Run;assert.equal(saved.status,'completed');
+  const repeated=await fetch(route+'/decide',{method:'POST',headers,body:JSON.stringify(input)});assert.equal(repeated.status,200);assert.deepEqual(await repeated.json(),saved);
+  assert.equal((await fetch(route+'/prepare',{method:'POST',headers,body:JSON.stringify({...input,idempotencyKey:'synthetic-after-accept'})})).status,409);
+});

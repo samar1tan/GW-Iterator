@@ -1,4 +1,6 @@
 export const en = {
+  deliveryReviewChanged:'The delivery evidence changed. Refresh it before deciding.',deliveryReviewSourceUnavailable:'The original prepared checkout is unavailable. Restore it before preparing review material.',deliveryReviewPreparationActive:'Review material is still being prepared or its execution has not ended. Open that execution before deciding.',deliveryReviewClosed:'This delivery is no longer awaiting a decision.',deliveryReviewFindingRequired:'Describe the concrete change that is needed.',
+
   invalidBrowserOrigins:'Enter exact HTTP origins with 127.0.0.1 or [::1] and a local port, without a path or trailing slash.',
 
   toolBrowserUse:'Test a local website in Chrome',browserOrigins:'Allowed browser test origins',browserOriginsRequired:'Set a local test origin before assigning browser work.',browserOriginsHelp:'One exact HTTP origin per line, for example http://127.0.0.1:4320. Use a separate test server; GWI and runtime control ports are blocked.',browserFutureRuns:'New runs use these origins. Chrome uses an isolated session; code permissions stay unchanged.',

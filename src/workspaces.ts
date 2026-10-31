@@ -2,7 +2,8 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
 import {constants} from 'node:fs';
-import {mkdir,readFile,stat,realpath,lstat,readlink,symlink,writeFile,chmod,rm,open} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,stat,realpath,lstat,readlink,symlink,writeFile,chmod,rm,open} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 import type {Project,WorkspaceReadiness} from './contracts.ts';
 import {Store} from './store.ts';
@@ -69,9 +70,26 @@ export class Workspaces {
   }
   async disposeVerification(attemptId:string){const record=this.verification(attemptId);if(record.disposedAt)return;await rm(record.path,{recursive:true,force:true});record.disposedAt=new Date().toISOString();this.store.put('verification-workspace',record);}
   async changes(runId:string){
-    const record=this.get(runId),options={timeout:10000,maxBuffer:1024*1024};
-    const [status,diff]=await Promise.all([execute('git',['-C',record.path,'status','--short'],options),execute('git',['-C',record.path,'diff','--no-ext-diff','--no-textconv','HEAD','--'],options)]);
-    return{sourceCommit:record.sourceCommit,status:status.stdout,diff:diff.stdout};
+    const record=this.get(runId),root=await realpath(record.path),options={...gitOptions,maxBuffer:2*1024*1024};
+    const preparedCommit=(await execute('git',['-C',record.path,'rev-parse','HEAD'],options)).stdout.trim(),manifest=await this.snapshot(record.path,preparedCommit);
+    // A fresh observation index cannot trust the candidate's hidden-file flags or stat cache.
+    const temporary=await mkdtemp(path.join(tmpdir(),'gwi-source-observation-'));
+    let status:string,diff:string;
+    try{
+      const observation={...options,env:{...options.env,GIT_INDEX_FILE:path.join(temporary,'index')}},[tree,index]=await Promise.all([execute('git',['-C',root,'ls-tree','-rz',preparedCommit],options),execute('git',['-C',root,'ls-files','--stage','-z'],options)]),entries=new Map<string,string>();
+      for(const row of tree.stdout.split('\0').filter(Boolean)){const tab=row.indexOf('\t'),[mode,,hash]=row.slice(0,tab).split(' '),relative=row.slice(tab+1);entries.set(relative,`${mode} ${hash} 0\t${relative}`);}
+      for(const row of index.stdout.split('\0').filter(Boolean)){const relative=row.slice(row.indexOf('\t')+1);if(!entries.has(relative))entries.set(relative,row);}
+      const build=execute('git',['-C',root,'update-index','-z','--index-info'],observation);build.child.stdin!.end([...entries.values()].join('\0')+'\0');await build;
+      const values=await Promise.all([execute('git',['-C',root,'-c','core.fsmonitor=false','status','--short'],observation),execute('git',['-C',root,'-c','core.fsmonitor=false','diff','--no-ext-diff','--no-textconv',record.sourceCommit,'--'],observation)]);status=values[0].stdout;diff=values[1].stdout;
+    }finally{await rm(temporary,{recursive:true,force:true});}
+    const untracked=[];let total=0;
+    for(const entry of manifest.entries.filter(entry=>!entry.tracked)){
+      let content:string|undefined;
+      if(entry.kind==='file'&&entry.size!<=512*1024&&total+entry.size!<=2*1024*1024){const bytes=await this.sourceBytes(root,entry.path);if(!bytes.includes(0)){content=bytes.toString('utf8');total+=bytes.length;}}
+      untracked.push({path:entry.path,kind:entry.kind,...(content!==undefined?{content}:{previewUnavailable:true})});
+    }
+    demand((await this.snapshot(record.path,preparedCommit)).sha256===manifest.sha256,'REVIEW_INPUT_CHANGED','Prepared source changed during inspection. Refresh before deciding.',409);
+    return{sourceCommit:record.sourceCommit,preparedCommit,manifestHash:manifest.sha256,status,diff,untracked};
   }
   async artifact(runId:string,relative:string){
     demand(relative.length>0&&!path.isAbsolute(relative)&&!relative.split(/[\\/]/).some(part=>part==='..'||part==='.git'||part==='.local'||part.startsWith('.env')),'INVALID_ARTIFACT_PATH','Choose an artifact inside this execution checkout.');

@@ -96,7 +96,7 @@ With a verified Multica connection, new agent stages and bounded goal decisions 
 | `POST /api/runs/:id/resume` | `{}` releases eligible queued stages without replaying accepted work. |
 | `GET /api/runs/:id/executions` | Recorded external task identities, usage, state and cleanup confirmation. |
 | `POST /api/runs/:id/stages/:stageId/reconcile` | Observe the existing assignment. A coordinator uses `supervise`; no replacement task is dispatched. |
-| `GET /api/runs/:id/changes` | Actual tracked diff/status and committed input revision from the isolated execution checkout. |
+| `GET /api/runs/:id/changes` | Actual diff against the frozen input commit, status, candidate commit/manifest and bounded eligible new-file previews from the execution checkout. Includes committed implementation changes and deletions. |
 | `GET /api/runs/:id/artifacts?path=RELATIVE_PATH` | Plain-text preview, up to 512 KiB, inside that execution checkout; private paths and symlink escapes are rejected. |
 | `POST /api/runs/:id/limits` | Deprecated compatibility route: `{expectedRevision,limits,note}` records valid historical policy metadata under owner/revision checks; no quota is enforced and no work starts. |
 
@@ -202,6 +202,21 @@ The response is `{status:"continued", run}` with a durable receipt, or `{status:
 `POST /api/runs/:id/cancel` accepts `declineRetry:true` for an explicit owner refusal after a failure as well as during a hold. It preserves attempts/results, records the refusal and stops the owning goal from dispatching replacement work. Completed work cannot be declined retroactively. Repeated refusal does not create another event or attempt.
 
 `POST /api/intakes/:id/resume` accepts an optional `note` of up to 2,000 characters. The recovery record retains it and delivers it to the failed step or resumed coordinator after termination checks. It does not widen permissions or model scope.
+## Delivery review evidence and decisions
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/runs/:id/stages/:stageId/delivery` | `DeliveryBundle` for a manual or review stage. Assembles evidence without model work. |
+| `POST /api/runs/:id/stages/:stageId/delivery/prepare` | `DeliveryRequest` → linked support `Run`; local-owner action through ordinary protected execution and account admission. |
+| `POST /api/runs/:id/stages/:stageId/delivery/decide` | `DeliveryRequest` plus `decision:"accept"|"revise"` → parent `Run`; revision requires a concrete finding. |
+| `GET /api/runs/:id/browser-evidence/:attemptId` | Authenticated recorded PNG for that run/project/attempt. No client filesystem path is accepted; unavailable, unsafe and out-of-scope files are rejected. |
+
+`DeliveryBundle` includes `key`, exact run/stage/attempt/control identity, `status`, `stageStatus`, `observedAt`, request, transitive upstream results and the current review subject. Its `source` is observed or unavailable, with `sourceRequired` for code delivery; `screenshots` use scoped local URLs. `publications` separate observed GitHub head/check facts from reported or unavailable links; only the bound repository is observed. A PR head does not establish that a dirty/different prepared candidate passed those checks. `preparations` retain linked outputs, current/stale basis and cleanup state. Missing evidence remains explicit in `gaps`.
+
+`DeliveryRequest` requires stable `idempotencyKey`, `bundleKey`, `attemptId` and `controlRevision`, with optional `note` up to 2,000 characters. Evidence, source manifest and current decision state are revalidated; stale requests fail with `REVIEW_CONFLICT`. Durable preparation/decision receipts deduplicate successful requests after restart. A preparation with unchanged evidence and instructions reuses its existing child even with another request key. Active or unconfirmed support blocks replacement preparation and decisions. Stop invalidates/cancels linked support; pausing prevents new preparation dispatch. A support result never advances its parent.
+
+The server-owned `Run.reviewSupport` pins parent stage/attempt/control, source manifest and retained upstream results before dispatch. It cannot be supplied through public `StartRunInput`. The fixed support stage and opt-in workflow `Stage.deliveryPreparation:true` require Codex protected review execution. Preparation narrows control tools and removes unrelated skills, MCP bindings and browser authority while retaining source-integrity checks. It does not claim native filesystem read or network isolation. Missing original source is a prerequisite failure, not permission to clone current project HEAD. New default change workflows prepare material before `ownerGate:true`; legacy frozen workflows remain unchanged. Owner gates require the actual local human session; agent technical conclusions remain distinct.
+
 ## Frozen task context and knowledge review
 
 New owner run/goal starts refresh only the already registered source set before capturing their basis. Capture records the checked project/source configuration, per-document hashes and capture interval; it is not a cross-filesystem atomic snapshot. Continuations reuse the earlier corpus unless an explicit configuration refresh creates a new basis. The corpus, selection and actual scoped tool reads remain private.

@@ -11,6 +11,7 @@ export const DEFAULT_EFFORT: Effort = 'max';
 export const EFFORT_LABELS: Record<Effort, string> = {low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra'};
 export type ControlTool = 'context.read' | 'knowledge.search' | 'knowledge.write' | 'pipeline.read' | 'pipeline.propose' | 'pipeline.write' | 'run.read' | 'run.start' | 'intake.route' | 'project.bootstrap' | 'browser.use';
 export const CONTROL_TOOLS: ControlTool[] = ['context.read','knowledge.search','knowledge.write','pipeline.read','pipeline.propose','pipeline.write','run.read','run.start','intake.route','project.bootstrap','browser.use'];
+export const DELIVERY_PREPARATION_TOOLS:readonly ControlTool[]=['context.read','knowledge.search','pipeline.read','run.read'];
 export type RoleProfile = {
   id: string; name: string; description: string; instructions: string;
   model: string | null; effort: Effort; sandbox: 'read-only' | 'workspace-write';
@@ -37,7 +38,7 @@ export type ProjectReadiness = {
 };
 export type Stage = {
   id: string; name: string; roleId: string; executor: Executor; dependsOn: string[]; prompt: string; review: boolean;
-  executionPurpose?: 'review'; ownerGate?: boolean;
+  executionPurpose?: 'review'; ownerGate?: boolean; deliveryPreparation?:boolean;
   reworkTo?: string;
   inputs?:string[]; outputs?:string[]; checks?:string[];
   condition?:{stageId:string;outcome:'done'|'no_change'|'revise'|'blocked'};
@@ -89,6 +90,7 @@ export type Run = {
   stages: StageRun[]; stopReason?: string; cancelRequested?: boolean;
   continuationDeclined?:{at:string;actor:string;note:string};
   recoveryOfRunId?:string;
+  reviewSupport?:{runId:string;stageId:string;attemptId:string;controlRevision:number;sourceManifestHash:string;upstream:{stageId:string;name:string;attemptId?:string;output?:TaskOutput}[]};
   selection?:WorkflowSelection;
   approvedPolicy?: RunPolicy;
   resourceMode?:'account'|'tokens';
@@ -109,6 +111,7 @@ export function pendingBrowserContinuation(run:Run,stageId:string):BrowserContin
 }
 export function attemptRole(run:Run,stageId:string,attempt?:Attempt):RoleProfile|undefined {
   const stage=run.snapshot.pipeline.stages.find(value=>value.id===stageId),role=run.snapshot.project.roles.find(value=>value.id===stage?.roleId);
+  if(role&&stage?.deliveryPreparation)return{...role,sandbox:'read-only',skills:[],tools:role.tools.filter(tool=>DELIVERY_PREPARATION_TOOLS.includes(tool)),browser:undefined,multica:role.multica?{...role.multica,skillIds:[],mcpServerIds:[]}:undefined};
   const binding=attempt?.browserContinuationId&&run.browserContinuations?.find(value=>value.id===attempt.browserContinuationId&&value.stageId===stageId&&value.roleId===role?.id);
   return role&&binding?{...role,tools:[...role.tools.filter(tool=>tool!=='browser.use'),'browser.use'],browser:structuredClone(binding.browser)}:role;
 }

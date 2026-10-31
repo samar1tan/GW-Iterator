@@ -21,6 +21,9 @@ import {loadPlatform} from './platform.ts';
 import {PlatformExecution} from './platform-execution.ts';
 import {ControlMcp} from './control-mcp.ts';
 import {BrowserRuntime} from './browser-runtime.ts';
+import type {BrowserObservation} from './browser-runtime.ts';
+import {DeliveryReviewService} from './delivery-review.ts';
+import type {DeliveryRequest} from './delivery-review.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
@@ -47,6 +50,7 @@ const controls=new ControlMcp(`http://127.0.0.1:${port}`);
 const platform=process.env.GWI_MULTICA_CONNECTION?await loadPlatform(engine,dataDirectory,process.env.GWI_MULTICA_CONNECTION,process.env.GWI_CODEX_MODEL??runtime.defaultModel):await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel)??await loadPlatform(engine,dataDirectory,path.join(root,'.local/multica-runtime/connection.json'),process.env.GWI_CODEX_MODEL??runtime.defaultModel);
 const browsers=new BrowserRuntime(path.join(dataDirectory,'browser'),[origin,...platform?.browserControlOrigins??[]]);
 const execution=platform?new PlatformExecution(platform,controls,browsers):undefined;
+const deliveryReviews=new DeliveryReviewService(engine,{...(platform?{changes:id=>platform.workspaces.changes(id)}:{}),...(engine.github.publication?{publication:(repository,url)=>engine.github.publication!(repository,url)}:{})});
 if(execution){engine.agentExecutor=execution.agent;engine.goalPlanner=execution.planner;engine.reconcileExternal=(runId,stageId,options)=>execution.reconcile(runId,stageId,options);}
 engine.accountModelResolver=async(project,role)=>platform?platform.effectiveRoleModel(project,role):role.model??process.env.GWI_CODEX_MODEL??runtime.defaultModel??(await engine.codex.info()).models.find(model=>model.isDefault)?.id??null;
 const intakeService=new IntakeService(engine);
@@ -164,6 +168,10 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   const intake=route.match(/^\/api\/intakes\/([^/]+)\/(cancel|retry|resume)$/);
   if(intake&&method==='POST'){const id=decodeURIComponent(intake[1]);json(response,intake[2]==='resume'?intakeService.continueWork(id,actor,input as WorkResumeInput):intake[2]==='retry'?await intakeService.retry(id,input as IntakeRetryInput,actor):intakeService.cancel(id,String(input.note??''),actor));return;}
   const run=route.match(/^\/api\/runs\/([^/]+)(?:\/(.*))?$/);
+  const delivery=run?.[2]?.match(/^stages\/([^/]+)\/delivery(?:\/(prepare|decide))?$/);
+  if(run&&delivery){const id=decodeURIComponent(run[1]),stageId=decodeURIComponent(delivery[1]);if(method==='GET'&&!delivery[2]){json(response,await deliveryReviews.bundle(id,stageId,actor));return;}if(method==='POST'&&delivery[2]==='prepare'){json(response,await deliveryReviews.prepare(id,stageId,input as DeliveryRequest,actor));return;}if(method==='POST'&&delivery[2]==='decide'){json(response,await deliveryReviews.decide(id,stageId,input as DeliveryRequest&{decision:'accept'|'revise'},actor));return;}}
+  const browserEvidence=run?.[2]?.match(/^browser-evidence\/([^/]+)$/);
+  if(run&&browserEvidence&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);const record=engine.store.get<BrowserObservation>('browser-session',decodeURIComponent(browserEvidence[1]));demand(record&&record.runId===id&&record.projectId===engine.run(id).projectId&&engine.run(id).stages.some(stage=>stage.stageId===record.stageId&&stage.attempts.some(attempt=>attempt.id===record.id)),'BROWSER_EVIDENCE_UNAVAILABLE','No screenshot belongs to this execution attempt.',404);const bytes=await browsers.recordedScreenshot(record);response.writeHead(200,{'content-type':'image/png','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'"});response.end(bytes);return;}
   if(run&&run[2]==='context'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);const stageId=url.searchParams.get('stage')??engine.run(id).snapshot.pipeline.stages[0]?.id??'';json(response,{context:engine.contextRecord(id,stageId,url.searchParams.get('attempt')??undefined)});return;}
   if(run&&run[2]==='context/read'&&method==='POST'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.contextRead(id,String(input.stageId??''),typeof input.attemptId==='string'?input.attemptId:undefined,input.locator as KnowledgeLocator));return;}
   if(run&&run[2]==='recovery'&&method==='GET'){const id=decodeURIComponent(run[1]);engine.detail(engine.run(id).projectId,actor);json(response,await engine.recoveryWithAccount(id,url.searchParams.get('stageId')??undefined,actor,url.searchParams.get('resourceMode')==='account'));return;}
