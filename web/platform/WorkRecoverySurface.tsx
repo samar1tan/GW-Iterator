@@ -8,10 +8,10 @@ import {useTextDraft} from './useTextDraft';
 import {requestEnterAction} from './requestKeys';
 import {useRef} from 'react';
 
-export function WorkRecoverySurface({goal,runs,id,error,observationFailed,onRefresh,onStep,onAdvanced,onRetry,onDecline,busy=false}:{goal:Intake;runs:Run[];id:string;error:unknown;observationFailed:boolean;onRefresh:()=>Promise<void>;onStep:(runId:string,stageId?:string)=>void;onAdvanced?:()=>void;onRetry?:(note?:string)=>Promise<void>;onDecline?:(note?:string)=>Promise<void>;busy?:boolean}) {
+export function WorkRecoverySurface({goal,runs,id,error,observationFailed,onRefresh,onStep,onAdvanced,onRetry,onDecline,busy=false}:{goal:Intake;runs:Run[];id:string;error:unknown;observationFailed:boolean;onRefresh:()=>Promise<void>;onStep:(runId:string,stageId?:string)=>void;onAdvanced?:()=>void;onRetry?:(note?:string)=>Promise<void|boolean>;onDecline?:(note?:string)=>Promise<void>;busy?:boolean}) {
   const{p,number}=useCopy(),record=currentWorkRecovery(goal),target=recoveryTarget(goal,runs),pending=workRecoveryPending(goal);
   const [note,setNote,clearNote]=useTextDraft(`recovery-note:${goal.id}:${goal.routerRunId}`),composing=useRef(false);
-  const submit=async()=>{if(busy||pending||!onRetry)return;const submitted=note;await onRetry(note.trim()||undefined);clearNote(submitted);};
+  const submit=async()=>{if(busy||pending||!onRetry)return;const submitted=note;const accepted=await onRetry(note.trim()||undefined);if(accepted!==false)clearNote(submitted);};
   const now=Date.now(),[,setClock]=useState(0);
   useEffect(()=>{if(!pending)return;const timer=setInterval(()=>setClock(value=>value+1),1000);return()=>clearInterval(timer);},[pending]);
   const timing=record?workRecoveryTiming(record,now):undefined;
