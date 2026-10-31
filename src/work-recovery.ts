@@ -64,8 +64,8 @@ export class WorkRecovery {
     if(this.closed)return;
     for(const stored of this.context.all()){
       let goal=stored;
-      const held=currentWorkRecovery(goal),heldAttempt=held?.browserContinuation&&this.context.engine.run(held.runId).stages.find(stage=>stage.stageId===held.stageId)?.attempts.at(-1);
-      if(held?.phase==='needs_input'&&held.code.startsWith('ACCOUNT_')&&heldAttempt?.browserContinuationId===held.browserContinuation?.id&&heldAttempt?.id!==held.attemptId&&heldAttempt?.admissionHeld!==true&&!['stopped','completed'].includes(goal.status)&&held.controlRevision===(goal.controlRevision??0)&&held.routerRunId===goal.routerRunId){held.phase='retrying';held.code='RETRYING_STEP';held.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');}
+      const held=currentWorkRecovery(goal),heldRun=held?.phase==='needs_input'&&held.code.startsWith('ACCOUNT_')?this.context.engine.store.get<Run>('run',held.runId):undefined,heldAttempt=heldRun?.stages.find(stage=>stage.stageId===held?.stageId)?.attempts.at(-1);
+      if(held?.phase==='needs_input'&&held.code.startsWith('ACCOUNT_')&&heldRun&&!heldRun.cancelRequested&&(heldRun.controlRevision??0)===(held.runControlRevision??0)&&heldAttempt&&(!held.browserContinuation||heldAttempt.browserContinuationId===held.browserContinuation.id)&&heldAttempt.id!==held.attemptId&&heldAttempt.admissionHeld!==true&&!['stopped','completed'].includes(goal.status)&&held.controlRevision===(goal.controlRevision??0)&&held.routerRunId===goal.routerRunId){held.phase='retrying';held.code='RETRYING_STEP';held.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');}
       if(!workRecoveryPending(goal)&&goal.status==='dispatched'&&goal.policy.smartRetry===true&&this.transient(goal)){
         const previous=currentWorkRecovery(goal);
         if(previous?.phase==='needs_input'||previous?.phase==='cancelled')continue;

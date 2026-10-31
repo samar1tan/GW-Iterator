@@ -184,3 +184,10 @@ test('failed-goal cleanup rechecks expose an explicit changed browser choice wit
   assert.equal(needsRetainedBrowserChoice({...goal,workRecoveryHistory:[record]},[run],project),false);assert.equal(needsRetainedBrowserChoice(goal,[{...run,status:'running'}],project),false);
   assert.equal(needsRetainedBrowserChoice(goal,[run],{...project,id:'synthetic-foreign-project'}),false);assert.equal(needsRetainedBrowserChoice(goal,[run],{...project,roles:project.roles.map(role=>({...role,retired:true}))}),false);assert.deepEqual(run,before);
 });
+
+test('an exact retained account hold exposes stage approval even when the last coordination round has no targets',async t=>{
+  const{goal,run,record,detail}=fixtures();goal.rounds=[{number:1,routerRunId:goal.routerRunId,targetRunIds:[]}];goal.workRecoveryHistory=[{...record,phase:'needs_input',code:'ACCOUNT_ALLOWANCE_CAUTION'}];
+  const role={...defaultRoles().find(role=>role.id==='qa')!,id:'owner'};run.snapshot.project.roles=[role];detail.project={...detail.project,roles:[{...role,tools:[...role.tools,'browser.use'],browser:{origins:['http://127.0.0.1:4567']}}]};assert.equal(needsRetainedBrowserChoice(goal,[run],detail.project),true);
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());const{I18nContext,makeI18n}=await vite.ssrLoadModule('/web/i18n.tsx'),{GoalWorkspace}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx');
+  for(const locale of ['en','zh-CN']){const html=renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n(locale)},createElement(GoalWorkspace,{goal,detail,models:[],onRun(){},onBack(){},onChanged:async()=>{}})));assert.ok(html.includes('pf-goal-step-resolution'));assert.ok(html.includes('pf-recovery pf-resolution'));assert.ok(!html.includes('class="pf-work-recovery"'));assert.ok(html.includes(locale==='en'?'Do not retry':'不再重试'));}
+});

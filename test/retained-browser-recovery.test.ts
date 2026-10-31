@@ -177,3 +177,11 @@ test('ambiguous, foreign and unconfirmed historical preparation evidence still b
     let checks=0;h.engine.reconcileExternal=async()=>{checks++;return{status:'unknown',cleanupConfirmed:false};};h.intake.continueWork(h.goal.id,OWNER,h.input);await h.pump(()=>checks===1);assert.equal(h.tasks.length,0);assert.equal(h.coordinatorStarts(),0);assert.deepEqual(h.engine.run(h.run.id),h.run);
   });
 });
+
+test('declining the optional browser binding leaves the ordinary account approval path usable',async t=>{
+  const h=await fixture(t);account(h);const input={...h.input};delete input.browserProjectRevision;h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');assert.match(h.get().workRecoveryHistory!.at(-1)!.code,/^ACCOUNT_/);assert.equal(h.engine.run(h.run.id).browserContinuations,undefined);assert.equal(h.tasks.length,0);
+  const heldCode=h.get().workRecoveryHistory!.at(-1)!.code;for(let index=0;index<3;index++)await h.engine.tick();assert.equal(h.get().workRecoveryHistory!.at(-1)!.phase,'needs_input');assert.equal(h.get().workRecoveryHistory!.at(-1)!.code,heldCode);assert.equal(h.tasks.length,0);
+  const recovery=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER);assert.equal(recovery.action,'approve');const run=h.engine.run(h.run.id);
+  await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:run.stages[4].attempts.at(-1)!.id,controlRevision:0,idempotencyKey:'synthetic-unchanged-browser-account-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);assert.equal(h.tasks[0].input.role.browser,undefined);
+  await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='retrying');h.tasks[0].resolve({output:done});await h.pump(()=>!!h.engine.run(h.run.id).stages[5].allowanceHold);assert.equal(h.tasks.length,1,'The later maintenance step still needs its own account decision.');assert.equal(h.engine.run(h.run.id).stages[4].status,'completed');
+});
