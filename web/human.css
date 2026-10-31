@@ -36,7 +36,7 @@
 body { min-width: 320px; }
 button, input, select, textarea { font: inherit; }
 a { color: var(--blue); }
-button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex="0"]:focus-visible {
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex="0"]:focus-visible, .pf-attachments:focus-visible {
   outline: 2px solid var(--blue); outline-offset: 3px;
 }
 input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
@@ -627,6 +627,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outl
 .pf-resolution textarea { min-height:68px; max-height:180px; resize:vertical; }
 .pf-resolution-actions { align-items:center; flex-wrap:wrap; }
 .pf-resolution-actions .hint { font-size:12px; color:var(--muted); }
+.pf-platform .pf-attachment-summary { font-size:12px; white-space:normal; max-width:100%; text-align:left; }
+.pf-attachments { scroll-margin-block-start:76px; }
 .pf-resolution-reason { font-size:13px; color:var(--muted); line-height:1.5; }
 .pf-resolution-observation { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
 .pf-resolution-observation details { width:100%; }

@@ -24,6 +24,11 @@ export function useGoalAttachments(projectId:string,scope:string){
   return{value,...attachmentSelection(value),add:(files:File[],replace?:string)=>drafts.add(projectId,scope,files,replace),retry:(key:string)=>drafts.retry(projectId,scope,key),remove:(key:string)=>drafts.remove(scope,key),clear:(expected:AttachmentDraft)=>drafts.clear(scope,expected),hasBytes:drafts.hasBytes};
 }
 export type GoalAttachmentDraft=ReturnType<typeof useGoalAttachments>;
+export function AttachmentSummary({draft,controlsId}:{draft:GoalAttachmentDraft;controlsId:string}){
+  const{p}=useCopy();
+  if(!draft.value.items.length)return null;
+  return <Button tone="quiet" className="pf-attachment-summary" aria-controls={controlsId} onClick={()=>{const controls=document.getElementById(controlsId);controls?.focus({preventScroll:true});controls?.scrollIntoView({block:'start'});}}>{p(draft.blocked?'attachmentBlocked':'attachmentSelected',{count:draft.value.items.length})}</Button>;
+}
 function fileURL(item:GoalAttachment,kind:'preview'|'content'){return base(item.projectId)+encodeURIComponent(item.id)+'/'+kind;}
 function Preview({item}:{item:GoalAttachment}){const{p}=useCopy(),[failed,setFailed]=useState(false);return item.preview.kind==='image'&&!failed?<img className="pf-attachment-thumb" src={fileURL(item,'preview')} alt={item.name} onError={()=>setFailed(true)}/>:item.preview.kind==='text'?<details className="pf-attachment-text"><summary>{p('attachmentTextPreview')}</summary><pre>{item.preview.excerpt||p('attachmentEmpty')}</pre>{item.preview.truncated&&<span>{p('attachmentTruncated')}</span>}</details>:<span className="hint">{p('attachmentPreviewUnavailable')}</span>;}
 
