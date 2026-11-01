@@ -28,6 +28,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError,demand,isObject} from './validation.ts';
 import type {Actor,WorkResumeInput,ContinueRunInput,IntegrationInfo,IntakeRetryInput,LessonLifecycleInput,Pipeline,Project,ResolveRunInput,Run,StartRunInput,TaskOutput} from './contracts.ts';
+import {ATTACHMENT_FILE_LIMIT} from './attachment-types.ts';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dataDirectory=path.resolve(process.env.GWI_DATA_DIR??path.join(root,'.local/state'));
@@ -92,7 +93,30 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   demand(!request.headers.origin||request.headers.origin===origin||request.headers.origin===`http://localhost:${port}`,'INVALID_ORIGIN','Unexpected request origin.',403);
   if(route==='/mcp/control'){await controls.handle(request,response);return;}
   if(route==='/api/session'&&method==='GET'){response.setHeader('set-cookie',`${sessionCookie}=${token}; Path=/; HttpOnly; SameSite=Strict`);json(response,{authenticated:true});return;}
-  const actor=actorFor(request),input=method==='GET'?{}:await body(request);
+  const actor=actorFor(request);
+  const attachment=route.match(/^\/api\/projects\/([^/]+)\/attachments\/(?:uploads\/([^/]+)|([^/]+)(?:\/(preview|content))?)$/);
+  if(attachment){
+    const projectId=decodeURIComponent(attachment[1]);engine.detail(projectId,actor);
+    if(attachment[2]){
+      const key=decodeURIComponent(attachment[2]);
+      if(method==='GET'){json(response,engine.attachments.receipt(projectId,key,actor));return;}
+      if(method==='PUT'){
+        demand(!actor.projectId,'OWNER_REQUIRED','Only the local owner may upload private input.',403);
+        demand(request.headers['content-type']==='application/octet-stream','INVALID_ATTACHMENT','Send raw file bytes.');
+        const chunks:Buffer[]=[];let length=0;
+        for await(const chunk of request){const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);length+=bytes.length;demand(length<=ATTACHMENT_FILE_LIMIT,'ATTACHMENT_TOO_LARGE','This file exceeds 10 MiB.',413);chunks.push(bytes);}
+        const selected=url.searchParams.getAll('selected');
+        json(response,await engine.attachments.upload(projectId,{key,draft:url.searchParams.get('draft')??'',name:url.searchParams.get('name')??'',bytes:Buffer.concat(chunks),selectedIds:selected},actor),201);return;
+      }
+    }else if(method==='GET'){
+      const id=decodeURIComponent(attachment[3]),item=engine.attachments.get(projectId,id,actor);
+      if(!attachment[4]){engine.attachments.content(projectId,id,actor);json(response,item);return;}
+      const preview=attachment[4]==='preview',bytes=preview?engine.attachments.preview(projectId,id,actor):engine.attachments.content(projectId,id,actor);
+      response.writeHead(200,{'content-type':preview?'image/png':'application/octet-stream','content-length':bytes.length,'cache-control':'private, no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox",'content-disposition':preview?'inline':`attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(item.name).replaceAll("'",'%27')}`});response.end(bytes);return;
+    }
+    throw new AppError('NOT_FOUND','Attachment route not found.',404);
+  }
+  const input=method==='GET'?{}:await body(request);
   if(route==='/api/account-allowance'&&(method==='GET'||method==='POST')){
     const context=method==='GET'?Object.fromEntries(url.searchParams):input,target=await accountTarget(context,actor);
     json(response,await engine.accountAllowances!.assess(target,{refresh:method==='POST'&&input.refresh===true}));return;
@@ -148,7 +172,7 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
     const lessonLifecycle=resource.match(/^knowledge\/lessons\/([^/]+)$/);if(lessonLifecycle&&method==='PATCH'){json(response,engine.setLessonLifecycle(id,decodeURIComponent(lessonLifecycle[1]),input as LessonLifecycleInput,actor));return;}
     if(resource==='revisions'&&method==='GET'){engine.project(id);json(response,{project:engine.store.list<{id:string;projectId:string}>('project-revision').filter(item=>item.projectId===id),pipelines:engine.store.list<{id:string;projectId:string}>('pipeline-revision').filter(item=>item.projectId===id)});return;}
     if(resource==='intakes'&&method==='GET'){json(response,engine.store.withReadView(()=>({intakes:intakeService.list(id)})));return;}
-    if(resource==='intakes'&&method==='POST'){engine.detail(id,actor);await engine.ensureExecutionReady(engine.project(id));json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
+    if(resource==='intakes'&&method==='POST'){engine.detail(id,actor);if(intakeService.list(id).some(value=>value.idempotencyKey===input.idempotencyKey)){json(response,intakeService.create(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}await engine.ensureExecutionReady(engine.project(id));json(response,await intakeService.createWithAccount(id,input as Parameters<IntakeService['create']>[1],actor),201);return;}
   }
   if(route==='/api/pipelines'&&method==='POST'){json(response,engine.createPipeline(input as {projectId:string;roleId:string;name?:string;description?:string;template?:string},actor),201);return;}
   const pipeline=route.match(/^\/api\/pipelines\/([^/]+)(?:\/(proposals))?$/);
@@ -157,6 +181,8 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
   if(route==='/api/runs'&&method==='POST'){
     const project=engine.detail(String(input.projectId),actor).project;
     const selected=engine.pipeline(String(input.pipelineId));demand(selected.projectId===project.id,'PROJECT_SCOPE','Choose a pipeline in this project.',403);
+    const previous=engine.store.list<Run>('run').find(run=>run.projectId===project.id&&run.idempotencyKey===input.idempotencyKey);
+    if(previous){if(typeof input.baseline!=='string'||!input.baseline.trim())input.baseline=previous.baseline;json(response,engine.startRun(input as StartRunInput,actor),201);return;}
     if(pipelineNeedsModel(selected,engine.detail(project.id,actor).pipelines))await engine.ensureExecutionReady(project);
     if(typeof input.baseline!=='string'||!input.baseline.trim()){
       let revision='';try{revision=(await promisify(execFile)('git',['-C',project.workspace,'rev-parse','HEAD'],{timeout:5000})).stdout.trim();}catch{}
@@ -188,16 +214,16 @@ async function api(request:IncomingMessage,response:ServerResponse,url:URL):Prom
 
 const development=process.argv.includes('--dev');
 const brandAsset=path.join(root,'public/brand/gwi-mark.svg');
-const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,watch:{ignored:['**/.local/**','**/.git/**']},fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'node_modules'),brandAsset],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
+const vite=development?await(await import('vite')).createServer({root,server:{middlewareMode:true,hmr:false,watch:{ignored:['**/.local/**','**/.git/**']},fs:{strict:true,allow:[path.join(root,'web'),path.join(root,'src/contracts.ts'),path.join(root,'src/attachment-types.ts'),path.join(root,'node_modules'),brandAsset],deny:['**/.local/**','**/.git/**','**/private/**','**/runtime/**','**/config/**','**/configs/**','**/.env*','**/*.{crt,pem,key,p12,sqlite,sqlite3,db}',path.join(dataDirectory,'**')]}},appType:'spa'}):null;
 async function publicDevelopmentPath(url:URL):Promise<boolean>{
   let decoded=url.pathname;for(let count=0;count<3;count++){try{const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}catch{return false;}}
   decoded=decoded.replaceAll('\\','/');
   if(decoded==='/'||decoded==='/index.html'||decoded==='/@vite/client')return true;
   const filename=decoded==='/brand/gwi-mark.svg'?brandAsset:decoded.startsWith('/@fs/')?path.resolve(decoded.slice('/@fs/'.length)):path.resolve(root,'.'+decoded);
   const allowed=[path.join(root,'web'),path.join(root,'node_modules')];
-  if(filename!==brandAsset&&filename!==path.join(root,'src/contracts.ts')&&!allowed.some(directory=>filename.startsWith(directory+path.sep)))return false;
+  if(filename!==brandAsset&&filename!==path.join(root,'src/contracts.ts')&&filename!==path.join(root,'src/attachment-types.ts')&&!allowed.some(directory=>filename.startsWith(directory+path.sep)))return false;
   const actual=await realpath(filename).catch(()=>filename);
-  return actual!==dataDirectory&&!actual.startsWith(dataDirectory+path.sep)&&(actual===brandAsset||actual===path.join(root,'src/contracts.ts')||allowed.some(directory=>actual.startsWith(directory+path.sep)));
+  return actual!==dataDirectory&&!actual.startsWith(dataDirectory+path.sep)&&(actual===brandAsset||actual===path.join(root,'src/contracts.ts')||actual===path.join(root,'src/attachment-types.ts')||allowed.some(directory=>actual.startsWith(directory+path.sep)));
 }
 const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2','.png':'image/png'};
 const server=createServer(async(request,response)=>{

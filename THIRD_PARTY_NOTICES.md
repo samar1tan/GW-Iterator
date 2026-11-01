@@ -26,7 +26,11 @@ The npm lockfile pins direct and transitive packages. Installed packages retain 
 | remark-parse | 11.0.0 | MIT | [remark](https://github.com/remarkjs/remark/tree/main/packages/remark-parse) |
 | remark-gfm | 4.0.1 | MIT | [remark-gfm](https://github.com/remarkjs/remark-gfm) |
 | rehype-slug | 6.0.0 | MIT | [rehype-slug](https://github.com/rehypejs/rehype-slug) |
+| sharp | 0.35.5 | Apache-2.0 | [sharp](https://github.com/lovell/sharp) |
+| @img/sharp-libvips platform binaries | 1.3.4 (libvips 8.18.7) | LGPL-3.0-or-later; bundled libraries retain their individual notices | [sharp-libvips](https://github.com/lovell/sharp-libvips) |
 
 The MCP SDK implements the control-tool transport. It does not grant additional project or filesystem permissions.
 
 Playwright Core provides the maintained host-browser API. Its package license and notices remain with the installed dependency. GWI does not bundle or relicense Google Chrome; hosted browser verification uses a separately installed browser in a private isolated session.
+
+Sharp decodes signature-matched private PNG/JPEG/GIF/WebP input into inert thumbnails. Its optional platform packages and libvips are separate dependencies, not original GWI source. Preserve the installed sharp license and each selected `@img/sharp-libvips-*` package's README licensing table when redistributing binaries. That table covers libvips and its bundled libraries, including LGPL, MPL and permissive components; the GWI Apache-2.0 license does not replace those terms. No dependency binaries or private image material are committed here.

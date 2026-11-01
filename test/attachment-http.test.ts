@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {createServer} from 'node:net';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import {attachmentDigest} from '../src/attachments.ts';
+
+test('loopback attachment transport keeps authenticated uploads, previews, downloads and run manifests private',{timeout:20000},async t=>{
+  const directory=await mkdtemp(path.join(tmpdir(),'gwi-attachment-http-')),workspace=path.join(directory,'workspace');await mkdir(workspace);
+  const reservation=createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const address=reservation.address();assert.ok(address&&typeof address!=='string');await new Promise<void>(resolve=>reservation.close(()=>resolve()));
+  const port=address.port,origin=`http://127.0.0.1:${port}`,native=path.join(directory,'synthetic-native');await writeFile(native,'#!/bin/sh\nexit 1\n',{mode:0o700});
+  const child=spawn(process.execPath,['src/server.ts'],{env:{...process.env,GWI_PORT:String(port),GWI_DATA_DIR:path.join(directory,'state'),GWI_MULTICA_CONNECTION:path.join(directory,'absent-connection.json'),GWI_CODEX_BIN:native},stdio:['ignore','pipe','pipe']});
+  let errors='';child.stderr.on('data',chunk=>{errors+=String(chunk);});
+  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await rm(directory,{recursive:true,force:true});});
+  await new Promise<void>((resolve,reject)=>{const deadline=setTimeout(()=>reject(new Error('Synthetic service readiness deadline. '+errors)),8000);child.stdout.on('data',chunk=>{if(String(chunk).includes('GW-Iterator listening')){clearTimeout(deadline);resolve();}});child.once('exit',()=>{clearTimeout(deadline);reject(new Error('Synthetic service exited. '+errors));});});
+  const session=await fetch(origin+'/api/session'),cookie=session.headers.get('set-cookie')!.split(';')[0];
+  const request=(route:string,method='GET',body?:unknown)=>fetch(origin+route,{method,headers:{cookie,origin,...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  const createProject=async(name:string)=>{const response=await request('/api/projects','POST',{name,workspace});assert.equal(response.status,201);return response.json();};
+  const project=await createProject('Synthetic HTTP attachment project'),other=await createProject('Other synthetic project'),base=`/api/projects/${project.id}/attachments/`,key='synthetic-upload-key',query=new URLSearchParams({draft:'synthetic-http-draft',name:'中文 <script>.html'}),bytes=Buffer.from('<html><script>syntheticUnsafe()</script></html>');
+  const send=(uploadBytes:Buffer,headers:Record<string,string>={cookie,origin})=>fetch(origin+base+'uploads/'+key+'?'+query,{method:'PUT',headers:{...headers,'content-type':'application/octet-stream'},body:new Uint8Array(uploadBytes)});
+  assert.equal((await send(bytes,{})).status,401);assert.equal((await send(bytes,{cookie,origin:'http://untrusted.invalid'})).status,403);
+  const first=await send(bytes);assert.equal(first.status,201);const item=await first.json();assert.equal(item.sha256,attachmentDigest(bytes));assert.equal(item.preview.kind,'text');assert.equal(item.name,query.get('name'));
+  assert.deepEqual(await (await send(bytes)).json(),item);assert.equal((await send(Buffer.from('Changed.'))).status,409);
+  assert.deepEqual(await (await request(base+'uploads/'+key)).json(),item);
+  assert.equal((await fetch(origin+base+item.id)).status,401);assert.equal((await request(`/api/projects/${other.id}/attachments/${item.id}`)).status,404);
+  const download=await request(base+item.id+'/content');assert.equal(download.headers.get('content-type'),'application/octet-stream');assert.match(download.headers.get('content-disposition')!,/^attachment;/);assert.equal(download.headers.get('cache-control'),'private, no-store');assert.equal(await download.text(),bytes.toString());assert.equal((await request(base+item.id+'/preview')).status,404);
+  const detail=await (await request('/api/projects/'+project.id)).json(),initial=detail.pipelines[0],definition={...initial,stages:[{id:'inspect',name:'Manual input inspection',roleId:project.roles[0].id,executor:'manual',dependsOn:[],prompt:'Read the authored input.',review:false}]};
+  assert.equal((await request('/api/pipelines/'+initial.id,'PUT',{expectedRevision:initial.revision,definition})).status,200);
+  const input={projectId:project.id,pipelineId:initial.id,goal:'Inspect the uploaded synthetic input.',baseline:'Authored model-free HTTP fixture.',idempotencyKey:'synthetic-http-run',attachmentIds:[item.id]},started=await request('/api/runs','POST',input);assert.equal(started.status,201);const run=await started.json();assert.deepEqual(run.snapshot.attachments,[item]);assert.equal((await (await request('/api/runs','POST',input)).json()).id,run.id);assert.equal((await request('/api/runs','POST',{...input,attachmentIds:[]})).status,409);
+  const pathAttempt=await fetch(origin+'/.local/state/attachments/'+project.id+'/'+item.id+'/original');assert.notEqual(pathAttempt.status,200);
+});

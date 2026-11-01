@@ -6,6 +6,8 @@ A role authorized to verify a local web journey must be able to operate Chrome w
 
 The owner enables the tool on a project role and supplies exact local HTTP origins in `role.browser.origins`. These choices are part of the frozen role revision. Existing roles, runs and attempts gain no capability automatically. Missing browser configuration or an unavailable host browser is an actionable prerequisite failure, never a successful verification. A separate follow-up execution may verify earlier prepared work; it must retain the earlier attempt and its unverified checks. Alternatively, explicit failed-step continuation can pin the current same-role browser binding for one subsequent executed attempt while preserving its old native permissions and the run's frozen basis. See the [retained-work continuation contract](work-resolution-prd.md). Pre-dispatch account holds retain this pending authority until the real approved execution; they cannot bypass an account decision.
 
+Every native and connected worker receives the same browser boundary guidance, including roles without `browser.use`: use the hosted tool when authorized; otherwise complete permitted checks and report the browser gap to QA or the owner. Do not attempt a native Chrome/Chromium launch or install a replacement. This guidance does not grant a tool or change the command sandbox; the actual tool/runtime and origin checks remain authoritative.
+
 ## Authority and lifecycle
 
 - Each browser belongs to one project, run, stage, attempt and execution workspace. The model cannot select another identity, browser profile, executable or output directory.

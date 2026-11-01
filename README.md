@@ -56,6 +56,8 @@ The [setup guide](docs/multica-setup.md) covers prerequisites, native permission
 - **Knowledge** selects positioned evidence from registered documents, artifacts, memory sections and reviewed lessons. Inspect the actual frozen sources used by each execution.
 - **Settings** holds project bindings and deliberate configuration changes.
 
+Use the file button, file paste or file drop to [attach material to a request](docs/operating-guide.md#attach-material-to-a-request), saved-pipeline task or continuation instruction. Images have thumbnails, text has literal excerpts, and other files have information cards. Submitted files stay with the request and attempt history. See the [bounded verification record](docs/acceptance/human-journey-review.md#goal-attachment-inputs) for the checked scope and delivery status.
+
 Starts and continuations use Codex account availability and recent comparable task trends, without asking for a token estimate. Shared-account observations are ranges, not exact task charges; absent history stays explicit.
 
 GWI waits for human and CI results without repeatedly invoking the model. Execution and outcome completion remain separate. A prepared change does not establish publication: a delivery step must perform and record the required integration or release.

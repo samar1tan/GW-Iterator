@@ -18,3 +18,5 @@ export const BROWSER_TOOL_DEFINITION={
   properties:{action:{type:'string',enum:['open','snapshot','click','fill','press','resize','upload','drop','paste','screenshot','close']},url:{type:'string'},selector:{type:'string'},text:{type:'string'},key:{type:'string'},width:{type:'integer'},height:{type:'integer'},files:{type:'array',items:{type:'string'}}},
   required:['action'],
 };
+
+export const BROWSER_EXECUTION_GUIDANCE="Browser verification uses the hosted gwi_browser_use tool only when it is included in this task's allowed tools. Do not launch Chrome, Chromium or Playwright browser binaries through native command tools or install a replacement. If the tool is absent, complete permitted checks and report the browser capability gap for the configured QA or owner; never request broader native permissions.";

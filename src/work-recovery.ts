@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {Engine} from './engine.ts';
-import type {BrowserContinuation,Intake,Run,WorkRecoveryRecord,WorkResumeInput} from './contracts.ts';
+import type {BrowserContinuation,Intake,Run,WorkRecoveryRecord,WorkResumeInput,GoalAttachment} from './contracts.ts';
 import {isNativeCapacityFailure} from './execution-failures.ts';
 import {AppError,demand} from './validation.ts';
 import {executionFailureIdentity} from './execution-evidence.ts';
@@ -39,7 +39,7 @@ export class WorkRecovery {
     if(!run.executionKind&&run.snapshot.pipeline.stages.find(item=>item.id===stage.stageId)?.executor!=='codex')return false;
     return attempt.failureCode==='STAGE_TIMEOUT'||isNativeCapacityFailure(attempt.error??goal.lastFailure?.message);
   }
-  begin(id:string,trigger:'manual'|'automatic',note?:string,options:{target?:WorkResumeInput['target'];browserContinuation?:BrowserContinuation;idempotencyKey?:string;inputHash?:string}={}):Intake{
+  begin(id:string,trigger:'manual'|'automatic',note?:string,options:{target?:WorkResumeInput['target'];browserContinuation?:BrowserContinuation;idempotencyKey?:string;inputHash?:string;attachments?:GoalAttachment[]}={}):Intake{
     demand(note===undefined||typeof note==='string'&&note.trim().length>0&&note.length<=2000,'INVALID_RECOVERY_NOTE','Keep additional recovery instructions within 2,000 characters.');
     const goal=this.context.get(id);if(workRecoveryPending(goal)){demand(!options.idempotencyKey||currentWorkRecovery(goal)?.idempotencyKey===options.idempotencyKey,'RECOVERY_IN_PROGRESS','Another recovery is already being checked.',409);return goal;}
     demand(goal.status!=='completed','GOAL_COMPLETED','This task is already complete.',409);
@@ -58,6 +58,7 @@ export class WorkRecovery {
     const now=Date.now(),record:WorkRecoveryRecord={id:randomUUID(),trigger,phase:'checking',runId:run.id,stageId:stage.stageId,attemptId:stage.attempts.at(-1)?.id,runControlRevision:run.controlRevision??0,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision??0,startedAt:new Date(now).toISOString(),deadlineAt:new Date(now+60000).toISOString(),nextAt:new Date(now).toISOString(),checks:0,code:'CONFIRMING_TERMINATION'};
     if(options.browserContinuation)record.browserContinuation=structuredClone(options.browserContinuation);
     if(options.idempotencyKey){record.idempotencyKey=options.idempotencyKey;record.inputHash=options.inputHash;}
+    if(options.attachments?.length)record.attachments=structuredClone(options.attachments);
     if(note)record.note=note.trim();goal.workRecoveryHistory??=[];goal.workRecoveryHistory.push(record);this.context.save(goal,'work.recovery_checking');return goal;
   }
   trackRework(goal:Intake,run:Run,stageId:string,note:string):void{
@@ -156,7 +157,7 @@ export class WorkRecovery {
     if(fresh?.attempts.at(-1)?.id!==record.attemptId||!['failed','interrupted','cancelled'].includes(fresh?.status??'')){record.phase='cancelled';record.code='RECOVERY_TARGET_CHANGED';record.endedAt=new Date().toISOString();this.context.save(goal,'work.recovery_cancelled');return;}
     if(this.cleanup(goal)){this.finish(goal,'TERMINATION_UNCONFIRMED');return;}
     record.phase='retrying';record.code='RETRYING_STEP';record.retriedAt=new Date().toISOString();this.context.save(goal,'work.recovery_retrying');
-    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step from retained work and prior findings; preserve accepted upstream work and current boundaries.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',...(record.trigger==='automatic'?{projectId:goal.projectId}:{})},{...(record.browserContinuation?{browserContinuation:record.browserContinuation}:{})});}
+    try{this.context.engine.retry(run.id,stage.stageId,record.note??'Retry only this failed step from retained work and prior findings; preserve accepted upstream work and current boundaries.',{name:record.trigger==='automatic'?'smart-recovery':'local-owner-recovery',kind:record.trigger==='automatic'?'agent':'human',...(record.trigger==='automatic'?{projectId:goal.projectId}:{})},{attachmentIds:record.attachments?.map(item=>item.id),...(record.browserContinuation?{browserContinuation:record.browserContinuation}:{})});}
     catch(error){this.finish(this.context.get(id),error instanceof Error&&'code'in error?String(error.code):'RETRY_FAILED',error instanceof Error?error.message:String(error));}
   }
   private async complete(goal:Intake,record:WorkRecoveryRecord){

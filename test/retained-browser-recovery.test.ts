@@ -185,3 +185,86 @@ test('declining the optional browser binding leaves the ordinary account approva
   await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:run.stages[4].attempts.at(-1)!.id,controlRevision:0,idempotencyKey:'synthetic-unchanged-browser-account-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);assert.equal(h.tasks[0].input.role.browser,undefined);
   await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='retrying');h.tasks[0].resolve({output:done});await h.pump(()=>!!h.engine.run(h.run.id).stages[5].allowanceHold);assert.equal(h.tasks.length,1,'The later maintenance step still needs its own account decision.');assert.equal(h.engine.run(h.run.id).stages[4].status,'completed');
 });
+
+
+test('attachment continuation and current-browser authority share one durable receipt while frozen history stays intact',async t=>{
+  const h=await fixture(t),before=structuredClone(h.run),bytes=Buffer.from('An independently authored retained QA supplement.');
+  const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-browser-attachment',draft:'synthetic-retained-instruction',name:'supplement.txt',bytes},OWNER),input={...h.input,attachmentIds:[item.id]};
+  const receipt=h.intake.continueWork(h.goal.id,OWNER,input);
+  assert.deepEqual(h.intake.continueWork(h.goal.id,OWNER,input),receipt);
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,{...input,attachmentIds:[]}),code('IDEMPOTENCY_CONFLICT'));
+  const withoutBrowser={...input};delete withoutBrowser.browserProjectRevision;
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,withoutBrowser),code('IDEMPOTENCY_CONFLICT'));
+  await h.pump(()=>h.tasks.length===1);
+  const retried=h.engine.run(h.run.id),attempt=retried.stages[4].attempts.at(-1)!;
+  assert.deepEqual(retried.snapshot,before.snapshot);assert.deepEqual(retried.stages.slice(0,4),before.stages.slice(0,4));assert.deepEqual(retried.stages[4].attempts[0],before.stages[4].attempts[0]);
+  assert.deepEqual(attempt.attachments,[item]);assert.equal(h.tasks[0].input.role.sandbox,'read-only');assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),true);
+  const manifest=JSON.parse(h.tasks[0].input.prompt.split('Attached input manifest:\n')[1]);assert.deepEqual(await readFile(manifest[0].path),bytes);
+  const original=path.join(h.store.directory,'attachments',h.run.projectId,item.id,'original');await rm(original);
+  assert.deepEqual(h.intake.continueWork(h.goal.id,OWNER,input),receipt,'A lost response reconciles its accepted manifest without requiring the original to be uploaded again.');
+  assert.equal(h.tasks.length,1);assert.equal(h.coordinatorStarts(),0);assert.equal(h.get().workRecoveryHistory?.length,1);
+});
+
+
+test('accepted attachment instructions survive account preflight and dispatch holds with or without browser authority',async t=>{
+  for(const mode of ['preflight','dispatch'] as const)for(const browser of [false,true])await t.test(mode+' browser='+browser,async sub=>{
+    const h=await fixture(sub),state=account(h,mode==='preflight'?98:20),begin=h.engine.beginAccountExecution.bind(h.engine);
+    if(mode==='dispatch')sub.mock.method(h.engine,'beginAccountExecution',async(runId:string,stageId:string,model?:string|null)=>{state.used=98;return begin(runId,stageId,model);});
+    const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-account-supplement',draft:'synthetic-accepted-recovery',name:'account-note.txt',bytes:Buffer.from('Accepted synthetic context across account approval.')},OWNER),input={...h.input,attachmentIds:[item.id],note:'Keep the exact accepted note across '+mode+' browser='+browser};if(!browser)delete input.browserProjectRevision;
+    const receipt=h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+    assert.equal(h.tasks.length,0);assert.deepEqual(receipt.workRecoveryHistory?.at(-1)?.attachments,[item]);
+    const recovery=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER),held=h.engine.run(h.run.id).stages[4].attempts.at(-1)!;
+    await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:held.id,controlRevision:0,idempotencyKey:'synthetic-matrix-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);
+    const run=h.engine.run(h.run.id),stage=run.stages[4],attempt=stage.attempts.at(-1)!;
+    assert.equal(h.tasks.length,1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),browser);assert.deepEqual(attempt.attachments,[item]);assert.deepEqual(h.tasks[0].input.attachments,[item]);assert.match(h.tasks[0].input.prompt,/Attached input manifest:/);assert.ok(h.tasks[0].input.prompt.includes(input.note));
+    assert.equal(h.store.get<{note:string}>('rework-guidance',h.run.id+':verify')?.note,input.note);assert.deepEqual(stage.attachmentHistory?.map(row=>row.attachments),[[item]]);assert.deepEqual(run.snapshot,h.run.snapshot);assert.deepEqual(run.stages.slice(0,4),h.run.stages.slice(0,4));
+  });
+});
+
+test('account approval retains accepted file instructions without needing a browser grant',async t=>{
+  const h=await fixture(t);account(h,98);const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-plain-supplement',draft:'synthetic-plain-recovery',name:'facts.txt',bytes:Buffer.from('Only independently authored facts.')},OWNER),input={...h.input,attachmentIds:[item.id],note:'Keep this exact accepted file instruction.'};delete input.browserProjectRevision;
+  h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+  const recovery=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER);
+  await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-plain-account-approval',recoveryKey:recovery.recoveryKey,approveAccountStep:true,accountAssessmentKey:recovery.account!.key},OWNER);
+  await h.pump(()=>h.tasks.length===1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);assert.deepEqual(h.tasks[0].input.attachments,[item]);assert.ok(h.tasks[0].input.prompt.includes(input.note));
+});
+
+
+test('a superseding recovery does not borrow an older unconsumed file instruction at account approval',async t=>{
+  const h=await fixture(t);account(h,98);const item=await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-superseded-file',draft:'synthetic-first-instruction',name:'older.txt',bytes:Buffer.from('Earlier independently authored context.')},OWNER);
+  h.intake.continueWork(h.goal.id,OWNER,{...h.input,attachmentIds:[item.id]});await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+  const input={...h.input,idempotencyKey:'synthetic-replacement-instruction',controlRevision:h.get().controlRevision,note:'Use only this fresh instruction; no earlier pending file.'};
+  h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');await approve(h);
+  assert.equal(h.tasks.length,1);assert.deepEqual(h.engine.run(h.run.id).stages[4].attempts.at(-1)?.attachments,undefined);assert.equal(h.tasks[0].input.prompt.includes('Attached input manifest:'),false);
+  assert.deepEqual(h.get().workRecoveryHistory?.[0].attachments,[item]);assert.equal(h.engine.run(h.run.id).stages[4].attachmentHistory,undefined);
+});
+
+
+test('a superseding accepted instruction invalidates an account approval already awaiting its source',async t=>{
+  const h=await fixture(t);account(h,98);const upload=(key:string)=>h.engine.attachments.upload(h.run.projectId,{key,draft:key,name:key+'.txt',bytes:Buffer.from('Independent '+key+' context.')},OWNER),first=await upload('first-instruction'),second=await upload('second-instruction'),input={...h.input,attachmentIds:[first.id],note:'Only the first accepted instruction.'};delete input.browserProjectRevision;
+  h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+  const original=h.engine.approveAccountStep.bind(h.engine);let entered!:()=>void,release!:()=>void;const entering=new Promise<void>(resolve=>{entered=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+  t.mock.method(h.engine,'approveAccountStep',async(...args:Parameters<Engine['approveAccountStep']>)=>{entered();await gate;return original(...args);});
+  const decision=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER),old=h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-old-approval',recoveryKey:decision.recoveryKey,approveAccountStep:true,accountAssessmentKey:decision.account!.key},OWNER);
+  await entering;const next={...input,idempotencyKey:'synthetic-new-recovery',controlRevision:h.get().controlRevision,attachmentIds:[second.id],note:'Only the second accepted instruction.'};h.intake.continueWork(h.goal.id,OWNER,next);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');release();await assert.rejects(old,code('RECOVERY_CONFLICT'));assert.equal(h.tasks.length,0);t.mock.restoreAll();
+  const current=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER);await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-new-approval',recoveryKey:current.recoveryKey,approveAccountStep:true,accountAssessmentKey:current.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);
+  assert.deepEqual(h.tasks[0].input.attachments,[second]);assert.ok(h.tasks[0].input.prompt.includes(next.note));assert.equal(h.tasks[0].input.prompt.includes(input.note),false);assert.deepEqual(h.engine.run(h.run.id).stages[4].attachmentHistory?.map(row=>row.attachments),[[second]]);
+});
+
+
+test('the latest explicitly accepted note survives another admission hold instead of reverting to the initial recovery note',async t=>{
+  for(const withFile of [false,true])for(const browser of [false,true])await t.test('file='+withFile+' browser='+browser,async sub=>{
+    const h=await fixture(sub),state=account(h,98),begin=h.engine.beginAccountExecution.bind(h.engine);let starts=0;
+    sub.mock.method(h.engine,'beginAccountExecution',async(runId:string,stageId:string,model?:string|null)=>{if(++starts===1)state.used=99;return begin(runId,stageId,model);});
+    const item=withFile?await h.engine.attachments.upload(h.run.projectId,{key:'synthetic-note-override',draft:'synthetic-note-override',name:'context.txt',bytes:Buffer.from('Independent accepted note context.')},OWNER):undefined,input={...h.input,...(item?{attachmentIds:[item.id]}:{}),note:'INITIAL_OWNER_NOTE_A'};if(!browser)delete input.browserProjectRevision;
+    h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');
+    const first=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER),latest='LATEST_EXPLICIT_OWNER_NOTE_B';
+    await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:'synthetic-verify',controlRevision:0,idempotencyKey:'synthetic-explicit-note-approval',note:latest,recoveryKey:first.recoveryKey,approveAccountStep:true,accountAssessmentKey:first.account!.key},OWNER);
+    await h.pump(()=>h.engine.run(h.run.id).stages[4].allowanceHold!==undefined&&h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');assert.equal(h.tasks.length,0);
+    const second=await h.engine.recoveryWithAccount(h.run.id,'verify',OWNER),held=h.engine.run(h.run.id).stages[4].attempts.at(-1)!;
+    await h.engine.resolveWaiting(h.run.id,{stageId:'verify',attemptId:held.id,controlRevision:0,idempotencyKey:'synthetic-empty-note-approval',recoveryKey:second.recoveryKey,approveAccountStep:true,accountAssessmentKey:second.account!.key},OWNER);await h.pump(()=>h.tasks.length===1);
+    assert.equal(h.tasks.length,1);assert.ok(h.tasks[0].input.prompt.includes(latest));assert.equal(h.store.get<{note:string}>('rework-guidance',h.run.id+':verify')?.note,latest);assert.deepEqual(h.tasks[0].input.attachments,item?[item]:undefined);
+    if(browser)assert.equal(h.engine.run(h.run.id).stages[4].attempts.at(-1)?.review?.note,latest);
+    assert.equal(h.engine.run(h.run.id).stages[4].attachmentHistory?.length,item?1:undefined);
+  });
+});

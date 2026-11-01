@@ -6,6 +6,8 @@ Current allowance revision: [Account-aware execution allowance](account-allowanc
 
 Current interaction revision: [Human workbench](human-workbench-prd.md), extended by the [global workbench](global-workbench-prd.md). It supersedes the earlier default-canvas, exposed-configuration and separate manual-top-up interactions. Historical execution/configuration bases remain intact.
 
+The implemented [goal attachment increment](goal-attachments-prd.md) covers all goal and executable continuation inputs. Its [bounded verification record](acceptance/human-journey-review.md#goal-attachment-inputs) distinguishes upstream browser/provider evidence from documentation checks and pending publication.
+
 Status: product baseline with implemented local browser workflows and connected runtime integration. Complete-product acceptance remains open. The experience refinement below aligns existing entry points and feedback; it does not declare the full requested product complete.
 
 ## Purpose and ordinary use

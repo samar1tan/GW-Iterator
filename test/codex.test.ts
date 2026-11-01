@@ -220,6 +220,7 @@ test('applies role settings and actual skills, streams progress, and completes w
   assert.equal(thread.approvalPolicy, 'never');
   assert.equal(thread.serviceTier, 'default');
   assert.match(thread.developerInstructions, /Review the synthetic artifact/);
+  assert.match(thread.developerInstructions, /Do not launch Chrome, Chromium or Playwright browser binaries through native command tools/);
   assert.deepEqual(thread.dynamicTools.map((tool: any) => tool.name), ['gwi_context_read', 'gwi_knowledge_search']);
   assert.equal(turn.model, 'synthetic-model');
   assert.equal(turn.effort, 'medium');

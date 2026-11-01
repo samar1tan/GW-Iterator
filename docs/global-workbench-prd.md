@@ -4,6 +4,8 @@
 
 A person can supervise ordinary work across connected projects from the top-level Projects page. They can see what is progressing or needs their input, submit work, inspect a result, reply or review, and continue without entering a project's dedicated workspace.
 
+The implemented [goal attachment increment](goal-attachments-prd.md) applies to the global request, follow-up, clarification and recovery entries. Files follow the explicitly selected target and existing project boundaries. See the [bounded verification record](acceptance/human-journey-review.md#goal-attachment-inputs) for evidence and remaining delivery work.
+
 ## Scope and relationships
 
 - Projects remains the top-level destination and includes the global workbench. Keep project workspaces as optional focused destinations.
