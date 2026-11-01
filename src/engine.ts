@@ -409,6 +409,7 @@ export class Engine {
     if(run.executionKind)return finish('blocked','GOAL_RECOVERY_REQUIRED','Continue the supervising outcome instead of replaying one coordinator turn.');
     if(run.status==='completed')return finish('none','RUN_COMPLETED','This pipeline is already complete.');
     if(goal?.status==='completed'||goal?.status==='stopped')return finish('blocked','GOAL_CLOSED','The supervising task is closed. Continue that task explicitly before retrying its earlier work.',{scope:{kind:'goal',id:goal.id}});
+    if(goal?.status==='clarification')return finish('blocked','CLARIFICATION_REPLY_REQUIRED','Answer the supervising question or explicitly continue its retained failed step.',{scope:{kind:'goal',id:goal.id}});
     if(run.cancelRequested||run.status==='cancelled')return finish('none','RUN_CANCELLED','Further work in this pipeline was stopped.');
     if(run.pausedAt||run.status==='paused')return finish('wait','RUN_PAUSED','Resume this paused pipeline before continuing a failed step.');
     if([...this.active.values()].some(item=>item.runId===id)||run.stages.some(stage=>stage.status==='running'))return finish('wait','EXECUTION_ACTIVE','Wait for current work to end.');
@@ -653,6 +654,7 @@ export class Engine {
     let attachments=this.attachments.pin(run.projectId,options.attachmentIds);
     const goal=this.intake?.allowance?.(id);
     demand(goal?.status!=='completed'&&goal?.status!=='stopped','GOAL_CLOSED','The supervising task is closed. Continue that task explicitly before retrying its earlier work.',409);
+    demand(goal?.status!=='clarification','CLARIFICATION_REPLY_REQUIRED','Answer the supervising question through an explicit retained-step continuation before retrying.',409);
     demand(!run.cancelRequested&&run.status!=='cancelled','RECOVERY_CANCELLED','Further work in this pipeline was stopped.',409);
     demand(!run.pausedAt&&run.status!=='paused','RUN_PAUSED','Resume this paused pipeline before retrying its failed step.',409);
     demand(!run.executionKind,'NATIVE_GOAL_RETRY','Inspect the recorded goal and submit a new scoped goal; do not replay one turn.',409);

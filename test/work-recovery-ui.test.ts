@@ -204,3 +204,37 @@ test('failed verification exposes its frozen repair destination through the same
     const reworking=render(WorkRecoverySurface,{goal:{...goal,workRecoveryHistory:[{...record,stageId:'build',phase:'retrying',code:'REWORKING_STEP'}]},runs:[run],id:'synthetic-rework',error:null,observationFailed:false,onRefresh:async()=>{},onStep(){}});assert.ok(reworking.includes(locale==='en'?'Findings returned to the responsible stage':'已将问题退回负责步骤'));assert.ok(!reworking.includes(locale==='en'?'Only the failed step is being retried':'仅重试失败步骤'));
   }
 });
+
+test('clarification retains failed-step recovery after an empty-target decision and run inspection provides the same choice',async t=>{
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{I18nContext,makeI18n}=await vite.ssrLoadModule('/web/i18n.tsx'),{GoalWorkspace}=await vite.ssrLoadModule('/web/platform/GoalWorkspace.tsx'),{RunWorkspace}=await vite.ssrLoadModule('/web/platform/RunWorkspace.tsx'),{ResumeFailedWork}=await vite.ssrLoadModule('/web/platform/ResumeFailedWork.tsx');
+  const{goal,run,detail}=fixtures(),role={...defaultRoles().find(role=>role.id==='qa')!,id:'owner'};run.snapshot.project.roles=[role];detail.project={...detail.project,revision:2,roles:[{...role,tools:[...role.tools,'browser.use'],browser:{origins:['http://127.0.0.1:4567']}}]};
+  goal.status='clarification';goal.question='Is the retained browser now configured?';goal.canRetry=true;goal.recoveryKey='synthetic-current-question';goal.rounds=[{number:1,routerRunId:goal.routerRunId,targetRunIds:[]}];
+  assert.equal(needsRetainedBrowserChoice(goal,[run],detail.project),true);
+  const elements=(value:any):any[]=>!value||typeof value!=='object'?[]:[value,...[value.props?.children].flat(Infinity).flatMap(elements)];
+  for(const locale of ['en','zh-CN']){
+    const wrap=(element:any)=>createElement(I18nContext.Provider,{value:makeI18n(locale)},element);
+    const html=renderToStaticMarkup(wrap(createElement(GoalWorkspace,{goal,detail,models:[],onRun(){},onBack(){},onChanged:async()=>{}})));
+    assert.ok(html.includes('pf-goal-step-resolution'));assert.ok(html.includes(locale==='en'?'Retry this step':'重试此步骤'));assert.ok(html.includes(goal.question));
+    let context:any;
+    function RunProbe(){const tree=RunWorkspace({run,recoveryContext:{detail,onContinued(){assert.fail('Inspection must not continue work.');}},events:[],onSelect(){},onRun(){},onBack(){},onChanged:async()=>{}});context=elements(tree).find(value=>value.props?.stage?.id==='inspect')?.props;return tree;}
+    renderToStaticMarkup(wrap(createElement(RunProbe)));assert.equal(typeof context?.onChooseBrowser,'function');assert.equal(context.requiresReply,true);
+    const modal=renderToStaticMarkup(wrap(createElement(ResumeFailedWork,{goal,run,stageId:'inspect',project:detail.project,onAccepted(){},onChanged:async()=>{},onObservationError(){},onClose(){}})));
+    assert.ok(modal.includes(goal.question));assert.match(modal,/<textarea required=""/);assert.match(modal,/<input type="checkbox"\/>/);assert.ok(modal.includes('http://127.0.0.1:4567'));assert.match(modal,/<button type="submit"[^>]*disabled=""/);
+    const before=structuredClone(detail);context.onChooseBrowser();assert.deepEqual(detail,before,'Opening the exact-step choice cannot mutate the source or goal.');
+  }
+  const general={...goal,targetRunIds:[],rounds:[]};assert.equal(needsRetainedBrowserChoice(general,[],detail.project),false);
+});
+
+test('clarification Retry opens confirmation before any resolve, even when the stage has an account hold',async t=>{
+  const vite=await createServer({server:{middlewareMode:true,hmr:false,ws:false},appType:'custom'});t.after(()=>vite.close());
+  const{I18nContext,makeI18n}=await vite.ssrLoadModule('/web/i18n.tsx'),{StageRecovery}=await vite.ssrLoadModule('/web/platform/StageRecovery.tsx'),{Button}=await vite.ssrLoadModule('/web/components.tsx');
+  const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});let writes=0;globalThis.fetch=async()=>{writes++;throw new Error('Confirmation must not resolve work.');};
+  const elements=(value:any):any[]=>!value||typeof value!=='object'?[]:[value,...[value.props?.children].flat(Infinity).flatMap(elements)];
+  for(const held of [false,true]){
+    const{run}=fixtures();if(held)run.stages[0].allowanceHold={code:'ACCOUNT_ALLOWANCE_CAUTION',message:'Synthetic owner decision needed.'} as any;
+    let activate:(()=>void)|undefined,choices=0;
+    function Probe(){const tree=StageRecovery({run,stageId:'inspect',requiresReply:true,onChooseBrowser:()=>{choices++;},onChanged:async()=>{}});activate=elements(tree).find(value=>value.type===Button&&value.props.tone==='primary')?.props.onClick;return tree;}
+    renderToStaticMarkup(createElement(I18nContext.Provider,{value:makeI18n('en')},createElement(Probe)));assert.ok(activate);activate!();await Promise.resolve();assert.equal(choices,1);assert.equal(writes,0);
+  }
+});

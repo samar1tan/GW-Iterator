@@ -226,6 +226,8 @@ The same endpoint accepts `WorkResumeInput`: `{note?,attachmentIds?,recoveryKey?
 
 New Intake policies set `smartRetry:true`; absence on an older stored policy does not opt it into unattended work. Confirmation and retry share the backend path and preserve source/account/permission checks. Pending recovery can be cancelled through Stop. Repeated unchanged failure or an oscillating result requires new guidance or actual changed evidence; no numeric extension is needed.
 
+For a goal in `clarification`, exact retained-step work recovery requires the actual local human, a nonempty reply and a failed delegated Codex target. The request must include the current recovery key and exact goal/run controls. The receipt retains the server-owned question as `WorkRecoveryRecord.replyToQuestion`, transitions into tracked recovery, and carries that question/reply to later coordination. General clarification replies continue to use `/retry`; an empty or untargeted `/resume` cannot bypass them.
+
 ### Direct continuation and refusal
 
 `POST /api/runs/:id/resolve` accepts `stageId`, a stable `idempotencyKey`, optional `attemptId`/`controlRevision`, `note` (up to 20,000 characters) and ordered `attachmentIds`. It checks current recovery, performs an exact external termination check when supported (5-second check, 15-second request deadline), and retries only the failed step when its scope, account and permission boundaries permit it. These technical observation deadlines do not cap model execution or establish unconfirmed termination.
