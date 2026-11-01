@@ -44,12 +44,19 @@ export function recoveryTarget(goal:Intake,runs:Run[]) {
   return{run,stage,definition:run?.snapshot.pipeline.stages.find(item=>item.id===stage?.stageId)};
 }
 
+export function goalRuns(goal:Intake,runs:Run[]):Run[] {
+  const ids=new Set([goal.routerRunId,...(goal.supervisorRunIds??[]),...goal.targetRunIds]);
+  let expanded=true;while(expanded){expanded=false;for(const run of runs)if(run.projectId===goal.projectId&&run.parentRunId&&ids.has(run.parentRunId)&&!ids.has(run.id)){ids.add(run.id);expanded=true;}}
+  return runs.filter(run=>run.projectId===goal.projectId&&ids.has(run.id));
+}
+
 export function canRequestWorkRecovery(goal:Intake,runs:Run[]):boolean {
-  if(goal.status==='completed'||goal.status==='clarification'||workRecoveryPending(goal))return false;
+  if(goal.status==='completed'||workRecoveryPending(goal))return false;
   if(currentWorkRecovery(goal)?.code==='EXTERNAL_REVIEW_REQUIRED')return false;
-  if(!['failed','stopped','dispatched'].includes(goal.status))return false;
+  if(!['failed','stopped','dispatched','clarification'].includes(goal.status))return false;
   if(runs.some(run=>!['completed','failed','interrupted','cancelled','skipped'].includes(run.status)))return false;
   const {stage,run}=recoveryTarget(goal,runs);
+  if(goal.status==='clarification')return !!goal.question&&!!run&&!run.executionKind&&!!stage&&['failed','interrupted'].includes(stage.status)&&run.snapshot.pipeline.stages.find(value=>value.id===stage.stageId)?.executor==='codex';
   return !!stage&&(['failed','interrupted','cancelled'].includes(stage.status)||!!run?.executionKind&&stage.status==='completed');
 }
 

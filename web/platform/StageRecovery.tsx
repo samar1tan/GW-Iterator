@@ -36,7 +36,7 @@ export function pendingStageResolution(observed:Run,receipt:Run|null):Run|null {
   return receipt;
 }
 
-export function StageRecovery({run:observedRun,stageId,onChanged,onGoal,onChooseBrowser,noteScope}:{run:Run;stageId:string;onChanged:()=>Promise<void>;onGoal?:(id:string)=>void;onChooseBrowser?:()=>void;noteScope?:string}) {
+export function StageRecovery({run:observedRun,stageId,onChanged,onGoal,onChooseBrowser,requiresReply=false,noteScope}:{run:Run;stageId:string;onChanged:()=>Promise<void>;onGoal?:(id:string)=>void;onChooseBrowser?:()=>void;requiresReply?:boolean;noteScope?:string}) {
   const {p,number}=useCopy();const [resumed,setResumed]=useState<Run|null>(null);
   const run=resumed&&!stageResolutionObserved(observedRun,resumed)?resumed:observedRun,state=run.stages.find(item=>item.stageId===stageId),attempt=state?.attempts.at(-1);
   useEffect(()=>{if(resumed&&stageResolutionObserved(observedRun,resumed))setResumed(null);},[observedRun,resumed]);
@@ -63,7 +63,7 @@ export function StageRecovery({run:observedRun,stageId,onChanged,onGoal,onChoose
   const refreshAccount=async()=>{await api('/api/account-allowance',{method:'POST',body:{refresh:true,projectId:run.projectId,runId:run.id,stageId}});setRead(value=>value+1);};
   const refreshObservation=async()=>{setObservationError(null);try{await onChanged();setRead(value=>value+1);}catch(error){if(mounted.current)setObservationError(error);}};
   const submit=async()=>{
-    if(attachments.blocked||control.current.blocked||pendingReceipt||run.cancelRequested||run.status==='cancelled')return;if(onChooseBrowser&&!needsApproval&&!waiting){onChooseBrowser();return;}const id=control.current.begin();if(id===undefined)return;setBusy('continue');setError(null);setObservationError(null);
+    if(attachments.blocked||control.current.blocked||pendingReceipt||run.cancelRequested||run.status==='cancelled')return;if(onChooseBrowser&&(requiresReply||!needsApproval&&!waiting)){onChooseBrowser();return;}const id=control.current.begin();if(id===undefined)return;setBusy('continue');setError(null);setObservationError(null);
     const intent=JSON.stringify({attachmentIds:attachments.ids,note:note.trim(),attemptId:attempt?.id,recoveryKey:needsApproval?value?.recoveryKey:undefined}),submission=submittedDraftKey(intent,storedKey,uid);setStoredKey(JSON.stringify(submission));const attachmentSnapshot=attachments.value;
     const input:ResolveRunInput={attachmentIds:attachments.ids,stageId,attemptId:attempt?.id,controlRevision:run.controlRevision??0,idempotencyKey:submission.key,...(note.trim()?{note:note.trim()}:{}),...(needsApproval?{recoveryKey:value?.recoveryKey,...accountStepAuthorization(account,accountApproval)}:{})};
     try{

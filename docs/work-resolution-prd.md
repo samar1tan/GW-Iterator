@@ -1,5 +1,15 @@
 # Resolve interrupted and waiting work
 
+## Retained failed work while answering a question
+
+When a coordinator asks for missing configuration after delegated work fails, the goal remains a clarification and its completed stages remain useful. Project/global goal and goal-owned execution inspection must offer the same exact-step continuation; a normal Retry must not silently miss a changed browser binding.
+
+A local human may answer the current question and continue an explicitly selected failed delegated Codex step. This path requires a nonempty reply, stable request identity, current goal/router/recovery and run/stage/attempt controls, no active family work, and authoritative cleanup. The question is captured from current server state with the recovery receipt and remains associated with the reply through account waits and subsequent coordination. General clarifications without a retained failed step still use their ordinary reply. Automatic recovery and project agents cannot answer a question through this exception.
+
+Show the question in the continuation form. Browser authority remains an unchecked, exact-origin/project-revision choice for the next executed attempt; answering a question never grants it implicitly. Preserve frozen configuration, completed stages, prior attempts, files and artifacts. Record the new recovery before observation, keep Stop available, and reject changed questions, routers, controls, attempts or browser selections rather than borrowing stale authority.
+
+Acceptance covers project/global goal and owned execution entries, earlier delegated runs after an empty-target clarification round, required replies, unchecked/checked browser choices, no dispatch before confirmation, question provenance in the eventual coordinator, account waits, stale input, Stop, missing cleanup and unrelated clarifications. A live UI walk-through must retain its initial failure evidence and finish QA, maintenance, prepared review material and the owner gate without API/database edits or manual artifact transplantation.
+
 ## User outcome
 
 A person sees what blocks work and can continue from that location. They do not have to refresh an external status, interpret a technical recovery recommendation, find another page and then retry. Routine account-reading expiry is background observation, not a demand for attention.

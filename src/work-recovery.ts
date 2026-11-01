@@ -43,7 +43,8 @@ export class WorkRecovery {
     demand(note===undefined||typeof note==='string'&&note.trim().length>0&&note.length<=2000,'INVALID_RECOVERY_NOTE','Keep additional recovery instructions within 2,000 characters.');
     const goal=this.context.get(id);if(workRecoveryPending(goal)){demand(!options.idempotencyKey||currentWorkRecovery(goal)?.idempotencyKey===options.idempotencyKey,'RECOVERY_IN_PROGRESS','Another recovery is already being checked.',409);return goal;}
     demand(goal.status!=='completed','GOAL_COMPLETED','This task is already complete.',409);
-    demand(goal.status!=='clarification','CLARIFICATION_REPLY_REQUIRED','Reply to the current question before continuing.',409);
+    const answering=goal.status==='clarification';
+    demand(!answering||trigger==='manual'&&!!options.target&&!!note?.trim()&&!!goal.question,'CLARIFICATION_REPLY_REQUIRED','Reply to the current question and choose its retained failed step before continuing.',409);
     demand(!this.context.active(id)||goal.status==='dispatched','EXECUTION_ACTIVE','Wait for the current decision to finish.',409);
     demand(this.context.family(goal).every(ended),'GOAL_WORK_ACTIVE','Wait for active work to finish before retrying.',409);
     const selected=options.target&&this.context.family(goal).find(run=>run.id===options.target!.runId);
@@ -52,10 +53,12 @@ export class WorkRecovery {
     demand(!options.target||stage?.attempts.at(-1)?.id===options.target.attemptId&&(run.controlRevision??0)===options.target.runControlRevision,'RECOVERY_CONFLICT','The failed step changed before continuation.',409);
     demand(run.executionKind||!run.cancelRequested&&run.status!=='cancelled','RECOVERY_CANCELLED','Further work in this execution was stopped.',409);
     demand(stage&&(['failed','interrupted','cancelled'].includes(stage.status)||run.executionKind&&stage.status==='completed'),'NO_FAILED_STAGE','There is no failed step ready to retry.',409);
+    demand(!answering||!run.executionKind&&run.snapshot.pipeline.stages.find(value=>value.id===stage.stageId)?.executor==='codex'&&['failed','interrupted'].includes(stage.status),'CLARIFICATION_REPLY_REQUIRED','Answer general clarification through the normal reply; retained recovery requires a failed agent step.',409);
     demand(!options.browserContinuation||trigger==='manual'&&!!options.target,'OWNER_REQUIRED','Browser continuation requires an explicit owner target.',403);
     if(trigger==='manual')goal.controlRevision=(goal.controlRevision??0)+1;
     if(goal.status==='stopped'&&trigger==='manual')goal.status='failed';
     const now=Date.now(),record:WorkRecoveryRecord={id:randomUUID(),trigger,phase:'checking',runId:run.id,stageId:stage.stageId,attemptId:stage.attempts.at(-1)?.id,runControlRevision:run.controlRevision??0,routerRunId:goal.routerRunId,controlRevision:goal.controlRevision??0,startedAt:new Date(now).toISOString(),deadlineAt:new Date(now+60000).toISOString(),nextAt:new Date(now).toISOString(),checks:0,code:'CONFIRMING_TERMINATION'};
+    if(answering){record.replyToQuestion=goal.question;goal.status='failed';delete goal.question;}
     if(options.browserContinuation)record.browserContinuation=structuredClone(options.browserContinuation);
     if(options.idempotencyKey){record.idempotencyKey=options.idempotencyKey;record.inputHash=options.inputHash;}
     if(options.attachments?.length)record.attachments=structuredClone(options.attachments);

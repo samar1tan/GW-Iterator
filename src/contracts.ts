@@ -173,6 +173,7 @@ export type Intake = {
 export type WorkRecoveryRecord = {
   attachments?:GoalAttachment[];
   note?:string;
+  replyToQuestion?:string;
   idempotencyKey?:string;inputHash?:string;browserContinuation?:BrowserContinuation;
   id:string;trigger:'manual'|'automatic';phase:'checking'|'backoff'|'retrying'|'resuming'|'completed'|'needs_input'|'cancelled';
   runId:string;stageId:string;attemptId?:string;routerRunId:string;controlRevision:number;runControlRevision?:number;

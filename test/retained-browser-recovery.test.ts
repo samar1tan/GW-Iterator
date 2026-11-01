@@ -12,6 +12,7 @@ import {defaultRoles} from '../src/defaults.ts';
 import {attemptRole} from '../src/contracts.ts';
 import {AccountAllowanceService,normalizeAccountObservation} from '../src/account-allowance.ts';
 import type {Intake,Pipeline,Project,Run,TaskOutput,WorkResumeInput} from '../src/contracts.ts';
+import type {GoalPlannerInput} from '../src/goal-planner.ts';
 import type {CodexAdapter,CodexExecutionInput,GithubAdapter} from '../src/adapters/types.ts';
 
 const OWNER={name:'Synthetic retained-work owner',kind:'human' as const},at='2026-01-01T00:00:00Z';
@@ -266,5 +267,62 @@ test('the latest explicitly accepted note survives another admission hold instea
     assert.equal(h.tasks.length,1);assert.ok(h.tasks[0].input.prompt.includes(latest));assert.equal(h.store.get<{note:string}>('rework-guidance',h.run.id+':verify')?.note,latest);assert.deepEqual(h.tasks[0].input.attachments,item?[item]:undefined);
     if(browser)assert.equal(h.engine.run(h.run.id).stages[4].attempts.at(-1)?.review?.note,latest);
     assert.equal(h.engine.run(h.run.id).stages[4].attachmentHistory?.length,item?1:undefined);
+  });
+});
+
+function clarify(h:Awaited<ReturnType<typeof fixture>>){
+  const goal={...h.goal,status:'clarification' as const,question:'Is the hosted browser configured for the retained verification?'};
+  h.store.put('intake',goal);return{...h.input,recoveryKey:h.get().recoveryKey,note:'The browser is now configured. Continue only the retained verification.'};
+}
+
+test('a human clarification reply resumes the exact retained QA and carries question provenance into later coordination',async t=>{
+  const h=await fixture(t),input=clarify(h),before=structuredClone(h.run),question=h.get().question,plannerInputs:GoalPlannerInput[]=[];
+  h.engine.goalPlanner={start:async input=>{plannerInputs.push(input);return{ref:{issueId:'synthetic-resumed-planner'},completion:new Promise((resolve,reject)=>input.signal.addEventListener('abort',()=>reject(new Error('Synthetic planner stopped.')),{once:true}))};}};
+  const receipt=h.intake.continueWork(h.goal.id,OWNER,input),record=receipt.workRecoveryHistory!.at(-1)!;
+  assert.equal(receipt.status,'failed');assert.equal(receipt.question,undefined);assert.equal(record.replyToQuestion,question);assert.equal(record.note,input.note);assert.equal(record.routerRunId,h.goal.routerRunId);
+  assert.equal(h.intake.continueWork(h.goal.id,OWNER,input).workRecoveryHistory!.length,1);
+  await h.pump(()=>h.tasks.length===1);assert.equal(h.coordinatorStarts(),0);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),true);
+  assert.deepEqual(h.engine.run(h.run.id).snapshot,before.snapshot);assert.deepEqual(h.engine.run(h.run.id).stages.slice(0,4),before.stages.slice(0,4));assert.equal(await readFile(path.join(h.directory,'artifact.txt'),'utf8'),'Retained synthetic implementation.\n');
+  h.tasks[0].resolve({output:done});await h.pump(()=>h.tasks.length===2);h.tasks[1].resolve({output:done});await h.pump(()=>h.engine.run(h.run.id).stages[5].status==='review');
+  h.engine.review(h.run.id,'maintain','accept','Accepted synthetic maintenance after actual checks.',OWNER);
+  await h.pump(()=>plannerInputs.length===1||h.get().status==='failed'&&!!h.get().recoveryHistory?.length);
+  assert.equal(plannerInputs.length,1,JSON.stringify(h.get().recoveryHistory));
+  assert.equal(h.get().recoveryHistory!.at(-1)!.replyToQuestion,question);assert.equal(h.get().recoveryHistory!.at(-1)!.note,input.note);
+  assert.equal(plannerInputs[0].continuation?.question,question);assert.equal(plannerInputs[0].continuation?.note,input.note);assert.equal(h.get().workRecoveryHistory!.at(-1)!.phase,'completed');
+});
+
+test('general clarification, missing reply, nonhuman and nondelegated targets cannot use retained recovery',async t=>{
+  const h=await fixture(t),input=clarify(h);
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,{}),code('CLARIFICATION_REPLY_REQUIRED'));
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,{...input,note:undefined}),code('CLARIFICATION_REPLY_REQUIRED'));
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,{...input,recoveryKey:undefined}),code('CLARIFICATION_REPLY_REQUIRED'));
+  const ordinary={...input};delete ordinary.browserProjectRevision;
+  assert.throws(()=>h.intake.continueWork(h.goal.id,{name:'Synthetic global agent',kind:'agent'},ordinary),code('OWNER_REQUIRED'));
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,{...ordinary,target:{runId:h.goal.routerRunId,stageId:'supervise',attemptId:'synthetic-decision',runControlRevision:0}}),code('CLARIFICATION_REPLY_REQUIRED'));
+  assert.equal(h.engine.recovery(h.run.id,'verify').code,'CLARIFICATION_REPLY_REQUIRED');
+  assert.throws(()=>h.engine.retry(h.run.id,'verify','Do not bypass the question.',OWNER),code('CLARIFICATION_REPLY_REQUIRED'));
+  assert.equal(h.tasks.length,0);assert.equal(h.get().status,'clarification');assert.equal(h.get().workRecoveryHistory,undefined);
+});
+
+test('a changed question or coordinator invalidates the old clarification recovery key without changing its controls',async t=>{
+  const h=await fixture(t),input=clarify(h),question=h.get().question;
+  h.store.put('intake',{...h.goal,status:'clarification',question:'A different consequential question.'});
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,input),code('RECOVERY_CONFLICT'));
+  const coordinator=h.engine.run(h.goal.routerRunId);h.store.put('run',{...coordinator,id:'synthetic-new-coordinator'});h.store.put('intake',{...h.goal,status:'clarification',question,routerRunId:'synthetic-new-coordinator',supervisorRunIds:[h.goal.routerRunId,'synthetic-new-coordinator']});
+  assert.throws(()=>h.intake.continueWork(h.goal.id,OWNER,input),code('RECOVERY_CONFLICT'));assert.equal(h.tasks.length,0);
+});
+
+test('clarification reply does not grant a browser unless selected, and Stop retains the answered question in history',async t=>{
+  const h=await fixture(t),input=clarify(h),question=h.get().question;delete input.browserProjectRevision;
+  h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.tasks.length===1);assert.equal(h.tasks[0].input.role.tools.includes('browser.use'),false);
+  h.intake.cancel(h.goal.id,'Stop the synthetic recovery.',OWNER);assert.equal(h.get().status,'stopped');assert.equal(h.get().workRecoveryHistory!.at(-1)!.replyToQuestion,question);assert.equal(h.get().workRecoveryHistory!.at(-1)!.phase,'cancelled');
+});
+
+test('clarification recovery preserves its question through both account admission holds',async t=>{
+  for(const dispatch of [false,true])await t.test(dispatch?'dispatch':'preflight',async sub=>{
+    const h=await fixture(sub);account(h,dispatch?10:98);const input=clarify(h),question=h.get().question,begin=h.engine.beginAccountExecution.bind(h.engine);
+    if(dispatch)sub.mock.method(h.engine,'beginAccountExecution',async(runId:string,stageId:string,model?:string|null)=>{sub.mock.restoreAll();account(h,98);return begin(runId,stageId,model);});
+    h.intake.continueWork(h.goal.id,OWNER,input);await h.pump(()=>h.get().workRecoveryHistory?.at(-1)?.phase==='needs_input');assert.equal(h.get().workRecoveryHistory!.at(-1)!.replyToQuestion,question);assert.equal(h.tasks.length,0);
+    await approve(h);assert.equal(h.get().workRecoveryHistory!.at(-1)!.replyToQuestion,question);assert.ok(h.tasks[0].input.prompt.includes(input.note));
   });
 });
