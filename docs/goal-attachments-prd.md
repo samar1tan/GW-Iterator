@@ -1,6 +1,6 @@
 # Attachments in goal inputs
 
-Status: implemented candidate; independent review, browser acceptance, real provider reading and publication remain separate pending stages. Read with the [interaction contract](goal-attachments-ued.md), [human workbench](human-workbench-prd.md) and [quality loop](quality-loop.md). Requirements are not completion evidence.
+Status: implemented candidate with an independent verification handoff. The [bounded verification record](acceptance/human-journey-review.md#goal-attachment-inputs) identifies retained G1–G8/provider evidence, the completed stage-summary browser regression and pending publication. Read with the [interaction contract](goal-attachments-ued.md), [human workbench](human-workbench-prd.md) and [quality loop](quality-loop.md). Requirements are not completion evidence.
 
 ## Bounded implementation contract
 
@@ -88,11 +88,11 @@ Retained browser continuation uses the same unsent text and attachment selection
 
 The candidate carries attachment references through Intake create, follow-up, retry/resume, direct Run create and stage resolve/continue paths used by G1–G8, including frozen execution context and durable receipts. Records without attachments preserve their contracts. See [the implemented transport](API.md#private-goal-attachments), `src/attachment-types.ts` and the independently authored synthetic cases in `test/attachments.test.ts`, `test/attachment-http.test.ts`, `test/attachment-drafts.test.ts` and `test/platform.test.ts`. A completed subordinate handoff cannot consume supplements by silently reusing its accepted child: the API returns an explicit handoff blocker and directs the owner to the affected subordinate work.
 
-The design owner applies the shared UED to every inventory row. The implementation owner supplies source/API checks and a reviewable candidate; an independent QA owner reviews that candidate and operates the acceptance cases below. Operations updates API, usage and delivery guidance to actual behavior. GWI assigns concrete owners/reviewers in their stages. Publication is a separate reviewed step with exact paths, privacy/dependency checks and any created PR linked to the task. This product stage neither publishes nor establishes later acceptance.
+The design owner applies the shared UED to every inventory row. The implementation owner supplies source/API checks and a reviewable candidate; an independent QA owner reviews that candidate and operates the acceptance cases below. Operations updates API, usage and delivery guidance to actual behavior. GWI assigns concrete owners/reviewers in their stages. Publication is a separate reviewed step with exact paths, privacy/dependency checks and any created PR linked to the task. The contracts here do not establish acceptance or publication; consult the bounded verification record for actual evidence.
 
 ## Acceptance examples
 
-These are required checks, all pending for this increment. Use authored synthetic files in isolated private state and retain observations privately. For each G1–G8 row, exercise the file button, a browser-exposed clipboard file and file drop individually, then preview, remove and submit. Test both project/global shells where listed, both launch origins and both advanced continuation branches. Shared-component tests do not replace operating each journey.
+These are regression acceptance contracts; the bounded verification record identifies completed checks and their limits. Use authored synthetic files in isolated private state and retain detailed observations privately. For each G1–G8 row, exercise the file button, a browser-exposed clipboard file and file drop individually, then preview, remove and submit. Test both project/global shells where listed, both launch origins and both advanced continuation branches. Shared-component tests do not replace operating each journey.
 
 | Case | Expected result and evidence |
 | --- | --- |
@@ -115,4 +115,4 @@ These are required checks, all pending for this increment. Use authored syntheti
 
 The runtime transport and permitted file interpretation still depend on actual configured capabilities. Implementation must prove a usable handoff or report that boundary; this specification supplies no runtime permission. A request to add excluded behavior or an unavailable authorized handoff is consequential scope evidence for GWI/owner resolution, rather than a reason to silently broaden the feature.
 
-This stage exits with input coverage, supported behavior, exclusions and acceptance examples specified. Later implementation, independent acceptance, real runtime access and publication retain separate status. Repair only the responsible boundary when a later check fails; retain accepted work and stop on an unchanged blocker or a genuine owner decision.
+Input coverage, supported behavior, exclusions and acceptance contracts remain defined here. Implementation, independent acceptance, real runtime access and publication retain separate evidence and status. Repair only the responsible boundary when a later check fails; retain accepted work and stop on an unchanged blocker or a genuine owner decision.

@@ -4,7 +4,7 @@ Allowance revision: [Account allowance interaction](account-allowance-ued.md) de
 
 Status: shared visual and interaction contract for the implemented workbench and current experience refinement. Operational acceptance remains separate. This replaces the earlier default live canvas and configuration-heavy ordinary paths.
 
-Specified attachment increment: apply the [goal attachment interaction](goal-attachments-ued.md) across all [inventoried inputs](goal-attachments-prd.md#existing-inputs-and-coverage). Attachment implementation and rendered acceptance remain pending.
+Apply the implemented [goal attachment interaction](goal-attachments-ued.md) across all [inventoried inputs](goal-attachments-prd.md#existing-inputs-and-coverage). The [bounded verification record](acceptance/human-journey-review.md#goal-attachment-inputs) identifies browser coverage and remaining delivery work.
 
 ## Visual contract
 

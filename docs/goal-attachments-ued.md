@@ -1,6 +1,6 @@
 # Goal attachment interaction
 
-Status: implemented candidate; independent browser acceptance remains pending. Apply the [attachment PRD](goal-attachments-prd.md) and existing [human workbench UED](human-workbench-ued.md). This adds file input to existing goals and executable continuation notes, without another navigation destination. Shared rendered-source checks do not establish OS clipboard, input-method or narrow-screen behavior.
+Status: implemented candidate with an independent browser verification handoff; see the [bounded verification record](acceptance/human-journey-review.md#goal-attachment-inputs) for coverage and remaining delivery work. Apply the [attachment PRD](goal-attachments-prd.md) and existing [human workbench UED](human-workbench-ued.md). This adds file input to existing goals and executable continuation notes, without another navigation destination. Shared rendered-source checks alone do not establish OS clipboard, input-method or narrow-screen behavior.
 
 ## Journey and entry placement
 

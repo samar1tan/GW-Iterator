@@ -4,7 +4,7 @@ Allowance revision: [Account-aware execution allowance](account-allowance-prd.md
 
 Status: implemented workbench baseline with an authorized experience-refinement pass. Implementation and observed acceptance must be recorded separately. Read with the core [PRD](PRD.md) and [interaction design](human-workbench-ued.md).
 
-Specified next increment: [Attachments in goal inputs](goal-attachments-prd.md), with [attachment interaction](goal-attachments-ued.md). It covers project/global entry, follow-ups, replies, saved-pipeline launch and executable recovery notes; it is not evidence of implemented or accepted attachment support.
+The implemented [goal attachment increment](goal-attachments-prd.md), with [attachment interaction](goal-attachments-ued.md), covers project/global entry, follow-ups, replies, saved-pipeline launch and executable recovery notes. See the [bounded verification record](acceptance/human-journey-review.md#goal-attachment-inputs) for evidence and remaining delivery work.
 
 ## User outcome
 
